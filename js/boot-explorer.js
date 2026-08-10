@@ -10,6 +10,14 @@ let fullViewerImportDueAt = 0;
 window.__l3MainImportState = window.__l3MainImportState || 'idle';
 window.__l3MainImportError = null;
 
+const bootScriptVersion = (() => {
+    try {
+        return new URL(import.meta.url).searchParams.get('v') || String(Date.now());
+    } catch (_) {
+        return String(Date.now());
+    }
+})();
+
 const bootUrlParams = new URLSearchParams(window.location.search);
 const bootInitialAuth = {
     samlSuccess: bootUrlParams.get('saml_success') === 'true',
@@ -69,7 +77,7 @@ function startFullViewerImport() {
     if (!fullViewerImportPromise) {
         primeMainPrefetch();
         window.__l3MainImportState = 'loading';
-        fullViewerImportPromise = import('./main.js').catch((error) => {
+        fullViewerImportPromise = import(`./main.js?v=${encodeURIComponent(bootScriptVersion)}`).catch((error) => {
             window.__l3MainImportState = 'failed';
             window.__l3MainImportError = String(error?.stack || error?.message || error);
             console.error('[boot-explorer] failed to import main viewer', error);

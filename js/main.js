@@ -855,7 +855,13 @@ class WaferMapViewer {
 
     // 🚀 Lazy module loaders (코드 스플리팅)
     _getJsVersionTag() {
-        return document.querySelector('script[src*="main.js"]')?.src?.match(/[?&]v=([^&]*)/)?.[1] || Date.now();
+        const scriptVersion = document.querySelector('script[src*="main.js"]')?.src?.match(/[?&]v=([^&]*)/)?.[1];
+        if (scriptVersion) return scriptVersion;
+        try {
+            const moduleVersion = new URL(import.meta.url).searchParams.get('v');
+            if (moduleVersion) return moduleVersion;
+        } catch (_) {}
+        return Date.now();
     }
     _loadDeferredScript(src, globalName) {
         if (globalName && typeof window[globalName] !== 'undefined') {
