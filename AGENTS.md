@@ -7,6 +7,7 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
 
 - Absolute rule: when a response needs to report one or more local paths, do not place paths inline in the body.
 - Put all reported paths on the final response line only, using absolute paths in one line: `Paths: D:/project/mapviewer/file-a, D:/project/mapviewer/file-b`.
+- Never split a path, filename, or the `Paths:` line across multiple physical lines. Do not insert a newline inside a long filename; keep the full absolute path intact on one line even when it is long.
 
 ## Server Completion Rule
 
