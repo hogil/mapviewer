@@ -2201,6 +2201,7 @@ const { createRunner } = require('./e2e_playwright_session');
       const shotBoundaryGroups = Array.from(v.chipAnnotator?.shotBoundaryGroups?.entries?.() || [])
         .map(([shotId, group]) => ({
           shotId,
+          displayShotId: group.shotId,
           chipCount: group.chips.length,
           rect: v.chipAnnotator?._getShotBoundaryRect(group),
           firstChipRect: group.chips[0]?.rect || null,
@@ -2208,7 +2209,9 @@ const { createRunner } = require('./e2e_playwright_session');
         }));
       const singleChipBoundary = shotBoundaryGroups.find((group) => group.chipCount === 1);
       const partialGroups = shotBoundaryGroups.filter((group) => group.chipCount < 24);
-      const boundaryMatchesChipUnion = shotBoundaryGroups.every((group) => {
+      const fullBoundaryMatchesChipUnion = shotBoundaryGroups
+        .filter((group) => group.chipCount === 24)
+        .every((group) => {
         if (!group.rect || !group.chipRects.length) return false;
         const minX = Math.min(...group.chipRects.map((rect) => Number(rect.x0)));
         const minY = Math.min(...group.chipRects.map((rect) => Number(rect.y0)));
@@ -2219,6 +2222,14 @@ const { createRunner } = require('./e2e_playwright_session');
           Math.abs(group.rect.maxX - maxX) < 1e-6 &&
           Math.abs(group.rect.maxY - maxY) < 1e-6;
       });
+      const geometry = v.chipAnnotator?._getShotGridGeometry?.();
+      const expectedShotWidth = Number(geometry?.shape?.cols) * Number(geometry?.referenceCellSize?.width);
+      const expectedShotHeight = Number(geometry?.shape?.rows) * Number(geometry?.referenceCellSize?.height);
+      const partialBoundaryFullSize = Number.isFinite(expectedShotWidth) && Number.isFinite(expectedShotHeight) &&
+        expectedShotWidth > 0 && expectedShotHeight > 0 &&
+        partialGroups.every((group) => group.rect &&
+          Math.abs(group.rect.width - expectedShotWidth) < 1e-6 &&
+          Math.abs(group.rect.height - expectedShotHeight) < 1e-6);
       const layoutRequest = performance.getEntriesByType('resource').some((entry) => {
         try {
           const url = new URL(entry.name, location.href);
@@ -2235,7 +2246,11 @@ const { createRunner } = require('./e2e_playwright_session');
         shotBoundaryChipCount: shotBoundaryGroups.reduce((sum, group) => sum + group.chipCount, 0),
         partialShotCount: partialGroups.length,
         partialBoundaryMissingCount: partialGroups.filter((group) => !group.rect || group.rect.width <= 0 || group.rect.height <= 0).length,
-        boundaryMatchesChipUnion,
+        fullBoundaryMatchesChipUnion,
+        partialBoundaryFullSize,
+        shotShape: geometry?.shape || null,
+        referenceGroupKey: geometry?.referenceGroupKey || null,
+        referenceCellSize: geometry?.referenceCellSize || null,
         shotBoundaryPixelsBefore: boundaryBefore.shotBoundaryPixels,
         shotBoundaryPixels: boundaryOn.shotBoundaryPixels,
         shotBoundaryPixelsAfter: boundaryAfter.shotBoundaryPixels,
@@ -2275,9 +2290,10 @@ const { createRunner } = require('./e2e_playwright_session');
       `circle zone columns=${JSON.stringify(data)}`);
     expect(data.shotBoundaryGroupCount === 43 && data.shotBoundaryChipCount === 833,
       `shot boundaries=${JSON.stringify(data)}`);
-    expect(data.partialShotCount > 0 && data.boundaryMatchesChipUnion &&
+    expect(data.partialShotCount > 0 && data.fullBoundaryMatchesChipUnion &&
+      data.partialBoundaryFullSize && data.referenceGroupKey === 'xy:0:0' &&
       data.partialBoundaryMissingCount === 0,
-      `shot boundary should match the loaded chip rect union=${JSON.stringify(data)}`);
+      `shot boundary should use 0,0 full-shot geometry=${JSON.stringify(data)}`);
     expect(!data.shotBoundaryVisibleBefore && data.shotBoundaryVisibleOn && !data.shotBoundaryVisibleAfter,
       `shot toggle=${JSON.stringify(data)}`);
     expect(data.shotToggleTiming.ok && data.shotToggleTiming.firstOnMs < 10 &&
