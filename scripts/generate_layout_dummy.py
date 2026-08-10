@@ -151,9 +151,9 @@ def _build_rows(
         zone_id, zone_type = _circle_zone(radius)
 
         full_shot_type = (
-            "FULL"
+            "WHOLE"
             if grouped[(shot_column, shot_row)] == shot["expected_chip_count"]
-            else "PARTIAL"
+            else "FRAGMENT"
         )
         rows.append(
             {

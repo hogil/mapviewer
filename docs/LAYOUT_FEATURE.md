@@ -77,7 +77,7 @@ process_id,shot_id,chip_id,shot_x_pos,shot_y_pos,full_shot_type,chip_x_pos,chip_
 - `process_id`: four-character process key, such as `P001`
 - `shot_id`, `chip_id`: integer dummy identifiers
 - `shot_x_pos`, `shot_y_pos`: signed integer shot order positions
-- `full_shot_type`: `FULL` or `PARTIAL`
+- `full_shot_type`: `WHOLE` or `FRAGMENT`
 - `chip_x_pos`, `chip_y_pos`: integer chip coordinates matching
   the positions JSON `x_abs`, `y_abs` values used by the viewer
 - `chip_center_x_pos`, `chip_center_y_pos`: real millimetre coordinates used

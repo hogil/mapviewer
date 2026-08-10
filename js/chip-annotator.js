@@ -168,6 +168,17 @@ export class ChipAnnotator {
         return Number.isFinite(number) ? String(number) : '';
     }
 
+    _normalizeFullShotType(value) {
+        const normalized = String(value ?? '').trim().toUpperCase();
+        if (normalized === 'WHOLE' || normalized === 'FULL') return 'FULL';
+        if (normalized === 'FRAGMENT' || normalized === 'PARTIAL') return 'PARTIAL';
+        return normalized;
+    }
+
+    _isFullShotType(value) {
+        return this._normalizeFullShotType(value) === 'FULL';
+    }
+
     _getLayoutGeometrySignature(row) {
         return [
             this._layoutSignatureNumber(row?.shot_x_pos),
@@ -175,7 +186,7 @@ export class ChipAnnotator {
             this._layoutSignatureNumber(row?.chip_id),
             this._layoutSignatureNumber(row?.chip_center_x_pos),
             this._layoutSignatureNumber(row?.chip_center_y_pos),
-            String(row?.full_shot_type ?? '').trim(),
+            this._normalizeFullShotType(row?.full_shot_type),
         ].join('|');
     }
 
@@ -549,7 +560,7 @@ export class ChipAnnotator {
             }
             group.xs.push(x);
             group.ys.push(y);
-            if (String(row?.full_shot_type || '').trim().toUpperCase() === 'FULL') {
+            if (this._isFullShotType(row?.full_shot_type)) {
                 group.isFull = true;
             }
         });

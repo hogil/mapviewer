@@ -143,7 +143,7 @@ function buildProduct(spec, index) {
       chip_id: chipId,
       shot_x_pos: shotX,
       shot_y_pos: shotY,
-      full_shot_type: groupCounts.get(groupKey) === spec.cols * spec.rows ? 'FULL' : 'PARTIAL',
+      full_shot_type: groupCounts.get(groupKey) === spec.cols * spec.rows ? 'WHOLE' : 'FRAGMENT',
       chip_x_pos: x,
       chip_y_pos: y,
       chip_center_x_pos: (x - spec.xStart) * 5,
