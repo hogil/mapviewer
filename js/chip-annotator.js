@@ -793,11 +793,14 @@ export class ChipAnnotator {
         if (width <= 0 || height <= 0) return null;
         let boundary = { minX, minY, maxX, maxY, width, height };
 
-        const shape = this.getShotCompositeGridShape?.() || this.getShotGridShape?.();
-        const cols = Math.max(1, Number(shape?.cols) || 0);
-        const rows = Math.max(1, Number(shape?.rows) || 0);
-        const fullSlotCount = cols * rows;
-        if (cols > 0 && rows > 0 && group.chips.length < fullSlotCount) {
+        const rawShape = this.getShotCompositeGridShape?.() || this.getShotGridShape?.();
+        const displayShape = this.getShotGridShape?.() || rawShape;
+        const rawCols = Math.max(1, Number(rawShape?.cols) || 0);
+        const rawRows = Math.max(1, Number(rawShape?.rows) || 0);
+        const displayCols = Math.max(1, Number(displayShape?.cols) || rawCols || 0);
+        const displayRows = Math.max(1, Number(displayShape?.rows) || rawRows || 0);
+        const fullSlotCount = rawCols * rawRows;
+        if (displayCols > 0 && displayRows > 0 && group.chips.length < fullSlotCount) {
             const geometry = this._getShotGridGeometry?.();
             const cellSize = geometry?.referenceCellSize || this._getMedianChipRectSize(this.chips) || this._getMedianChipRectSize(group.chips);
             const originsX = [];
@@ -806,7 +809,7 @@ export class ChipAnnotator {
                 group.chips.forEach((chip) => {
                     const rect = chip?.rect;
                     const center = this._getChipScreenCenter(chip);
-                    const slot = this._getShotRawGridSlotInfo(chip, this.getShotCompositeGridShape?.() || { cols, rows });
+                    const slot = this._getShotGridSlotInfo(chip, displayShape || { cols: displayCols, rows: displayRows });
                     if (!rect || !center || !slot) return;
                     originsX.push(center.x - (slot.slotX + 0.5) * cellSize.width);
                     originsY.push(center.y - (slot.slotY + 0.5) * cellSize.height);
@@ -818,10 +821,10 @@ export class ChipAnnotator {
                 const nominal = {
                     minX: originX,
                     minY: originY,
-                    maxX: originX + cols * cellSize.width,
-                    maxY: originY + rows * cellSize.height,
-                    width: cols * cellSize.width,
-                    height: rows * cellSize.height,
+                    maxX: originX + displayCols * cellSize.width,
+                    maxY: originY + displayRows * cellSize.height,
+                    width: displayCols * cellSize.width,
+                    height: displayRows * cellSize.height,
                 };
                 const eps = Math.max(1, Math.min(cellSize.width, cellSize.height) * 0.2);
                 if (nominal.minX <= minX + eps && nominal.minY <= minY + eps &&
