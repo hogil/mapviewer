@@ -533,6 +533,64 @@ export class ChipAnnotator {
         };
     }
 
+    _getCanonicalShotGridShapeFromLayout() {
+        const rows = [...this.layoutByChip.values()];
+        if (rows.length === 0) return null;
+        const groups = new Map();
+        rows.forEach((row) => {
+            const key = this._getShotGroupKeyForLayout(row);
+            const x = Number(row?.chip_x_pos);
+            const y = Number(row?.chip_y_pos);
+            if (!key || !Number.isInteger(x) || !Number.isInteger(y)) return;
+            let group = groups.get(key);
+            if (!group) {
+                group = { xs: [], ys: [], isFull: false };
+                groups.set(key, group);
+            }
+            group.xs.push(x);
+            group.ys.push(y);
+            if (String(row?.full_shot_type || '').trim().toUpperCase() === 'FULL') {
+                group.isFull = true;
+            }
+        });
+
+        const candidates = [...groups.values()].map((group) => {
+            const minX = Math.min(...group.xs);
+            const minY = Math.min(...group.ys);
+            const cols = Math.max(...group.xs) - minX + 1;
+            const rows = Math.max(...group.ys) - minY + 1;
+            const count = group.xs.length;
+            const area = cols * rows;
+            return {
+                cols,
+                rows,
+                count,
+                area,
+                isFull: group.isFull,
+                minX,
+                minY,
+            };
+        }).filter((group) => group.cols > 0 && group.rows > 0 && group.count > 0);
+        if (candidates.length === 0) return null;
+
+        const fullCandidates = candidates.filter((group) => group.isFull);
+        const pool = fullCandidates.length ? fullCandidates : candidates;
+        const best = [...pool].sort((left, right) =>
+            right.count - left.count ||
+            right.area - left.area ||
+            left.cols - right.cols ||
+            left.rows - right.rows
+        )[0];
+        if (!best) return null;
+        const positiveModulo = (value, size) => ((value % size) + size) % size;
+        return {
+            cols: best.cols,
+            rows: best.rows,
+            slotOriginX: positiveModulo(best.minX, best.cols),
+            slotOriginY: positiveModulo(best.minY, best.rows),
+        };
+    }
+
     _getShotGridGeometry() {
         if (this._shotGridGeometry) return this._shotGridGeometry;
 
@@ -598,20 +656,26 @@ export class ChipAnnotator {
         const maxShotY = shotYValues.length ? Math.max(...shotYValues) : null;
         const xDirection = this._inferShotAxisDirection(groups, 'shotX', 'avgX', 1);
         const yDirection = this._inferShotAxisDirection(groups, 'shotY', 'avgY', -1);
+        const canonicalShape = this._getCanonicalShotGridShapeFromLayout();
 
         const orderByReferencePriority = (left, right) => {
+            const leftFull = canonicalShape &&
+                left.gridCols >= canonicalShape.cols && left.gridRows >= canonicalShape.rows ? 0 : 1;
+            const rightFull = canonicalShape &&
+                right.gridCols >= canonicalShape.cols && right.gridRows >= canonicalShape.rows ? 0 : 1;
             const leftOrigin = left.shotX === 0 && left.shotY === 0 ? 0 : 1;
             const rightOrigin = right.shotX === 0 && right.shotY === 0 ? 0 : 1;
             const leftDistance = Math.abs(Number(left.shotX) || 0) + Math.abs(Number(left.shotY) || 0);
             const rightDistance = Math.abs(Number(right.shotX) || 0) + Math.abs(Number(right.shotY) || 0);
-            return leftOrigin - rightOrigin ||
+            return leftFull - rightFull ||
                 right.chipCount - left.chipCount ||
                 right.gridCols * right.gridRows - left.gridCols * left.gridRows ||
+                leftOrigin - rightOrigin ||
                 leftDistance - rightDistance;
         };
         const referenceGroup = [...groups].sort(orderByReferencePriority)[0] || null;
-        const gridCols = Math.max(1, Number(referenceGroup?.gridCols) || maxGridCols);
-        const gridRows = Math.max(1, Number(referenceGroup?.gridRows) || maxGridRows);
+        const gridCols = Math.max(1, Number(canonicalShape?.cols) || Number(referenceGroup?.gridCols) || maxGridCols);
+        const gridRows = Math.max(1, Number(canonicalShape?.rows) || Number(referenceGroup?.gridRows) || maxGridRows);
         let originX = null;
         let originY = null;
         if (referenceGroup && minShotX !== null && maxShotX !== null && minShotY !== null && maxShotY !== null) {
@@ -651,8 +715,12 @@ export class ChipAnnotator {
         const referenceXs = referenceEntries.map((entry) => Number(entry.x)).filter(Number.isFinite);
         const referenceYs = referenceEntries.map((entry) => Number(entry.y)).filter(Number.isFinite);
         const positiveModulo = (value, size) => ((value % size) + size) % size;
-        const slotOriginX = referenceXs.length ? positiveModulo(Math.min(...referenceXs), gridCols) : 0;
-        const slotOriginY = referenceYs.length ? positiveModulo(Math.min(...referenceYs), gridRows) : 0;
+        const slotOriginX = Number.isFinite(Number(canonicalShape?.slotOriginX))
+            ? Number(canonicalShape.slotOriginX)
+            : referenceXs.length ? positiveModulo(Math.min(...referenceXs), gridCols) : 0;
+        const slotOriginY = Number.isFinite(Number(canonicalShape?.slotOriginY))
+            ? Number(canonicalShape.slotOriginY)
+            : referenceYs.length ? positiveModulo(Math.min(...referenceYs), gridRows) : 0;
         const screenTransform = this._inferGridScreenTransform(referenceEntries);
         const shape = this._getDisplayShotShape(gridShape, screenTransform);
         const referenceCellSize = this._getMedianChipRectSize(
