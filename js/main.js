@@ -32915,8 +32915,8 @@ class WaferMapViewer {
             const selectedShotGroups = selectedMode === 'shot'
                 ? [...(this.chipAnnotator?.getSelectedShotGroupSelections?.() || this.chipAnnotator?._getSelectedShotGroups?.() || [])]
                     .map((group) => {
-                        const shotShape = this.chipAnnotator?.getShotCompositeGridShape?.() ||
-                            this.chipAnnotator?.getShotGridShape?.();
+                        const shotShape = this.chipAnnotator?.getShotGridShape?.() ||
+                            this.chipAnnotator?.getShotCompositeGridShape?.();
                         const groupChips = Array.isArray(group?.selectedChips) ? group.selectedChips : group?.chips;
                         return {
                             shot_id: String(group?.shotId ?? '').trim(),
@@ -32924,8 +32924,8 @@ class WaferMapViewer {
                                 .map((chip) => {
                                     const x = Number(chip?.x_abs);
                                     const y = Number(chip?.y_abs);
-                                    const slotInfo = this.chipAnnotator?._getShotRawGridSlotInfo?.(chip, shotShape) ||
-                                        this.chipAnnotator?._getShotGridSlotInfo?.(chip, shotShape);
+                                    const slotInfo = this.chipAnnotator?._getShotGridSlotInfo?.(chip, shotShape) ||
+                                        this.chipAnnotator?._getShotRawGridSlotInfo?.(chip, shotShape);
                                     return {
                                         x_abs: x,
                                         y_abs: y,

@@ -3762,10 +3762,10 @@ export class ChipAnnotator {
                 this.dragStartChip = chip;
                 this.render();
             } else {
-                // 🔥 칩이 없는 곳 Ctrl+클릭: 선택 해제
-                this.selectedChips.clear();
-                this.selectedChipsOrder = []; // 🔥 선택 순서도 초기화
-                this.updateSelectedChipsList(); // 🔥 Selection 패널 즉시 업데이트
+                // Ctrl+blank click is an additive selection no-op. Plain clicks clear selection.
+                this.ctrlClickStartPos = null;
+                this.ctrlClickStartTime = null;
+                this.dragStartChip = null;
                 this.render();
             }
             return;
@@ -3898,10 +3898,7 @@ export class ChipAnnotator {
                 this.updateSelectedChipsList();
                 console.log('🖱️ [SHIFT+DRAG] 범위 선택 추가:', selected.length, '개 (신규:', toAdd.length, ')');
             } else {
-                // 드래그 없음: 선택 해제
-                this.selectedChips.clear();
-                this.selectedChipsOrder = []; // 🔥 선택 순서도 초기화
-                console.log('🖱️ [SHIFT+CLICK] 선택 해제 (드래그 없음)');
+                console.log('🖱️ [SHIFT+CLICK] 빈 선택 동작 - 기존 선택 유지');
             }
             this.shiftClickPos = null;
             this._tempDragSelection = null;
