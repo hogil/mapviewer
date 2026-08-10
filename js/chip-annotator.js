@@ -130,6 +130,7 @@ export class ChipAnnotator {
         this.shotBoundaryGroups = new Map();
         this._shotGridGeometry = null;
         this._shotBoundaryCache = new Map();
+        this._shotMedianCellSize = null;
         this.shotBoundaryVisible = false;
         this.shotBoundaryColor = 'rgba(170, 85, 210, 0.95)';
 
@@ -300,6 +301,7 @@ export class ChipAnnotator {
     _invalidateShotGeometry() {
         this._shotGridGeometry = null;
         this._shotBoundaryCache.clear();
+        this._shotMedianCellSize = null;
     }
 
     setSelectionMode(mode) {
@@ -557,9 +559,73 @@ export class ChipAnnotator {
         const width = maxX - minX;
         const height = maxY - minY;
         if (width <= 0 || height <= 0) return null;
-        const boundary = { minX, minY, maxX, maxY, width, height };
+        let boundary = { minX, minY, maxX, maxY, width, height };
+
+        const shape = this.getShotGridShape?.();
+        const cols = Math.max(1, Number(shape?.cols) || 0);
+        const rows = Math.max(1, Number(shape?.rows) || 0);
+        const fullSlotCount = cols * rows;
+        if (cols > 0 && rows > 0 && group.chips.length < fullSlotCount) {
+            const cellSize = this._getMedianChipRectSize(group.chips) || this._getMedianChipRectSize(this.chips);
+            const originsX = [];
+            const originsY = [];
+            if (cellSize) {
+                group.chips.forEach((chip) => {
+                    const rect = chip?.rect;
+                    const slot = this._getShotGridSlotInfo(chip, { cols, rows });
+                    if (!rect || !slot) return;
+                    originsX.push(Number(rect.x0) - slot.slotX * cellSize.width);
+                    originsY.push(Number(rect.y0) - slot.slotY * cellSize.height);
+                });
+            }
+            const originX = this._medianNumber(originsX);
+            const originY = this._medianNumber(originsY);
+            if (cellSize && Number.isFinite(originX) && Number.isFinite(originY)) {
+                const nominal = {
+                    minX: originX,
+                    minY: originY,
+                    maxX: originX + cols * cellSize.width,
+                    maxY: originY + rows * cellSize.height,
+                    width: cols * cellSize.width,
+                    height: rows * cellSize.height,
+                };
+                const eps = Math.max(1, Math.min(cellSize.width, cellSize.height) * 0.2);
+                if (nominal.minX <= minX + eps && nominal.minY <= minY + eps &&
+                    nominal.maxX >= maxX - eps && nominal.maxY >= maxY - eps &&
+                    nominal.width > 0 && nominal.height > 0) {
+                    boundary = nominal;
+                }
+            }
+        }
         if (cacheKey) this._shotBoundaryCache.set(cacheKey, boundary);
         return boundary;
+    }
+
+    _medianNumber(values) {
+        const finite = (Array.isArray(values) ? values : []).map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+        if (!finite.length) return null;
+        const mid = Math.floor(finite.length / 2);
+        return finite.length % 2 ? finite[mid] : (finite[mid - 1] + finite[mid]) / 2;
+    }
+
+    _getMedianChipRectSize(sourceChips = this.chips) {
+        const chips = Array.isArray(sourceChips) ? sourceChips : [];
+        if (chips === this.chips && this._shotMedianCellSize) return this._shotMedianCellSize;
+        const widths = [];
+        const heights = [];
+        chips.forEach((chip) => {
+            const rect = chip?.rect;
+            if (!rect) return;
+            const width = Number(rect.x1) - Number(rect.x0);
+            const height = Number(rect.y1) - Number(rect.y0);
+            if (Number.isFinite(width) && width > 0) widths.push(width);
+            if (Number.isFinite(height) && height > 0) heights.push(height);
+        });
+        const size = widths.length && heights.length
+            ? { width: this._medianNumber(widths), height: this._medianNumber(heights) }
+            : null;
+        if (chips === this.chips) this._shotMedianCellSize = size;
+        return size;
     }
 
     _getLayoutCanvasPhysicalTransform() {
@@ -758,7 +824,7 @@ export class ChipAnnotator {
         }).filter((group) => group.selectedChips.length > 0);
     }
 
-    _getShotGridSlot(chip, shape = this.getShotGridShape?.()) {
+    _getShotGridSlotInfo(chip, shape = this.getShotGridShape?.()) {
         const x = Number(chip?.x_abs);
         const y = Number(chip?.y_abs);
         const cols = Math.max(1, Number(shape?.cols) || 4);
@@ -777,11 +843,16 @@ export class ChipAnnotator {
             const slotX = x - baseX;
             const slotY = y - baseY;
             if (slotX >= 0 && slotX < cols && slotY >= 0 && slotY < rows) {
-                return `${slotX}:${slotY}`;
+                return { slotX, slotY, cols, rows };
             }
         }
         const positiveModulo = (value, size) => ((value % size) + size) % size;
-        return `${positiveModulo(x, cols)}:${positiveModulo(y, rows)}`;
+        return { slotX: positiveModulo(x, cols), slotY: positiveModulo(y, rows), cols, rows };
+    }
+
+    _getShotGridSlot(chip, shape = this.getShotGridShape?.()) {
+        const slot = this._getShotGridSlotInfo(chip, shape);
+        return slot ? `${slot.slotX}:${slot.slotY}` : null;
     }
 
     getShotPositionForChip(chip, shape = this.getShotGridShape?.()) {

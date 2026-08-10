@@ -10,6 +10,33 @@ let fullViewerImportDueAt = 0;
 window.__l3MainImportState = window.__l3MainImportState || 'idle';
 window.__l3MainImportError = null;
 
+const bootUrlParams = new URLSearchParams(window.location.search);
+const bootInitialAuth = {
+    samlSuccess: bootUrlParams.get('saml_success') === 'true',
+    devSuccess: bootUrlParams.get('dev_success') === 'true',
+    LoginId: bootUrlParams.get('LoginId') || '',
+    Username: bootUrlParams.get('Username') || '',
+    DeptName: bootUrlParams.get('DeptName') || '',
+};
+if (bootInitialAuth.samlSuccess || bootInitialAuth.devSuccess) {
+    window.__l3InitialAuth = bootInitialAuth;
+    const userInfo = document.getElementById('user-info');
+    if (userInfo && bootInitialAuth.LoginId) {
+        const username = bootInitialAuth.Username || bootInitialAuth.LoginId;
+        const nameLine = document.createElement('div');
+        nameLine.style.fontWeight = '600';
+        nameLine.textContent = `${bootInitialAuth.LoginId}(${username})`;
+        const deptLine = document.createElement('div');
+        deptLine.style.fontSize = '10px';
+        deptLine.style.color = '#666';
+        deptLine.textContent = bootInitialAuth.DeptName || 'Anonymous';
+        userInfo.replaceChildren(nameLine, deptLine);
+    }
+    if (window.history?.replaceState) {
+        window.history.replaceState({}, '', window.location.pathname + window.location.hash);
+    }
+}
+
 function ensureBootPrefetch(key, url) {
     window.__prefetch = window.__prefetch || {};
     if (!window.__prefetch[key]) {
@@ -24,6 +51,13 @@ function primeMainPrefetch() {
     ensureBootPrefetch('rootFolder', '/api/root-folder');
     ensureBootPrefetch('currentFolder', '/api/current-folder');
     ensureBootPrefetch('browseFolders', '/api/browse-folders?path=&force_root=true');
+    ensureBootPrefetch('colorLegends', `/logs/color-legends.json?_t=${Date.now()}`);
+    const loginId = window.__l3InitialAuth?.LoginId || '';
+    const authUrl = loginId
+        ? `/api/auth/user?LoginId=${encodeURIComponent(loginId)}`
+        : '/api/auth/user';
+    ensureBootPrefetch('authUser', authUrl);
+    ensureBootPrefetch('classListWafer', '/api/classes?mode=wafer');
 }
 
 function startFullViewerImport() {

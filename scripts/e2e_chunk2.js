@@ -3574,7 +3574,8 @@ const { createRunner } = require('./e2e_playwright_session');
       Array.isArray(uiShotRequestBody.selected_shot_groups) &&
       uiShotRequestBody.selected_shot_groups.length === 2 &&
       uiShotRequestBody.selected_shot_groups.every((group) => group.chip_coords?.length === 24 &&
-        group.shot_shape?.cols === 4 && group.shot_shape?.rows === 6),
+        group.shot_shape?.cols === 4 && group.shot_shape?.rows === 6 &&
+        group.chip_coords.every((chip) => Number.isInteger(chip.slot_x) && Number.isInteger(chip.slot_y))),
       `UI shot payload=${JSON.stringify(uiShotRequestBody)}`);
     expect(uiShotRequestUrl.searchParams.get('LoginId') === uiLoginId,
       `UI shot LoginId=${uiShotRequestUrl.searchParams.get('LoginId')}`);
@@ -3627,10 +3628,14 @@ const { createRunner } = require('./e2e_playwright_session');
           x: (Number(outsideChip.rect.x0) + Number(outsideChip.rect.x1)) / 2,
           y: (Number(outsideChip.rect.y0) + Number(outsideChip.rect.y1)) / 2,
         } : null,
-        shotCoords: group.chips.map((item) => ({
-          x_abs: Number(item.x_abs),
-          y_abs: Number(item.y_abs),
-        })),
+        shotCoords: group.chips.map((item) => {
+          const slot = annotator._getShotGridSlotInfo?.(item, annotator.getShotGridShape?.() || { cols: 4, rows: 6 });
+          return {
+            x_abs: Number(item.x_abs),
+            y_abs: Number(item.y_abs),
+            ...(slot ? { slot_x: slot.slotX, slot_y: slot.slotY } : {}),
+          };
+        }),
         shotId: String(group.shotId),
       };
     });
@@ -3857,7 +3862,11 @@ const { createRunner } = require('./e2e_playwright_session');
       shotResult.result.selected_chip_count === selectionTarget.shotCoords.length &&
       shotResult.result.selected_shot_count === 1 &&
       shotResult.result.selected_shot_shape?.cols === 4 &&
-      shotResult.result.selected_shot_shape?.rows === 6,
+      shotResult.result.selected_shot_shape?.rows === 6 &&
+      Array.isArray(shotResult.result.selection_grade_pixel_counts) &&
+      shotResult.result.selection_grade_pixel_counts.length === 8 &&
+      Array.isArray(shotResult.result.selection_top_grades) &&
+      shotResult.result.selection_top_grades.length > 0,
       `shot result metadata=${JSON.stringify({ selectionTarget, shotResult })}`);
     expect(shotResult.positionsChipCount === selectionTarget.shotCoords.length &&
       shotResult.result.width === 800 &&
@@ -3868,21 +3877,19 @@ const { createRunner } = require('./e2e_playwright_session');
       `shot positions=${JSON.stringify({ selectionTarget, shotResult })}`);
 
     const partialShotResult = await page.evaluate(async ({ imagePath }) => {
-      const layoutResponse = await fetch('/api/layout?process_id=P001', { cache: 'no-store' });
-      if (!layoutResponse.ok) throw new Error(`layout status=${layoutResponse.status}`);
-      const layout = await layoutResponse.json();
-      const shotRows = (layout.rows || []).filter((candidate) => String(candidate.shot_id) === '8');
-      const row = shotRows[0];
-      if (!row) throw new Error('single-chip partial Shot fixture missing');
-      const originX = Number(row.chip_x_pos) - ((Number(row.chip_x_pos) % 4 + 4) % 4);
-      const originY = Number(row.chip_y_pos) - ((Number(row.chip_y_pos) % 6 + 6) % 6);
-      const shotCoords = [];
-      for (let y = 0; y < 6; y += 1) {
-        for (let x = 0; x < 4; x += 1) {
-          shotCoords.push({ x_abs: originX + x, y_abs: originY + y });
-        }
-      }
-      const availableCoords = new Set(shotRows.map((candidate) => `${candidate.chip_x_pos}:${candidate.chip_y_pos}`));
+      const annotator = window.viewer?.chipAnnotator;
+      const group = [...(annotator?.shotBoundaryGroups?.values?.() || [])].find((candidate) => String(candidate.shotId) === '8');
+      if (!group) throw new Error('single-chip partial Shot fixture missing');
+      const shape = annotator.getShotGridShape?.() || { cols: 4, rows: 6 };
+      const shotCoords = group.chips.map((chip) => {
+        const slot = annotator._getShotGridSlotInfo?.(chip, shape);
+        return {
+          x_abs: Number(chip.x_abs),
+          y_abs: Number(chip.y_abs),
+          ...(slot ? { slot_x: slot.slotX, slot_y: slot.slotY } : {}),
+        };
+      });
+      const availableCoords = new Set(shotCoords.map((candidate) => `${candidate.x_abs}:${candidate.y_abs}`));
       await fetch('/api/composite-cleanup', { method: 'POST', cache: 'no-store' });
       const startResponse = await fetch('/api/composite-map', {
         method: 'POST',
@@ -3953,6 +3960,9 @@ const { createRunner } = require('./e2e_playwright_session');
           selected_missing_chip_count: result.selected_missing_chip_count,
           selected_shot_count: result.selected_shot_count,
           selected_shot_shape: result.selected_shot_shape,
+          selection_grade_pixel_counts: result.selection_grade_pixel_counts,
+          selection_top_grades: result.selection_top_grades,
+          selection_chip_inner_pixels: result.selection_chip_inner_pixels,
         },
         imageSize,
         positionsChipCount: Array.isArray(positions?.chips) ? positions.chips.length : 0,
@@ -3967,6 +3977,8 @@ const { createRunner } = require('./e2e_playwright_session');
       partialShotResult.result.selected_shot_count === 1 &&
       partialShotResult.result.selected_shot_shape?.cols === 4 &&
       partialShotResult.result.selected_shot_shape?.rows === 6 &&
+      Array.isArray(partialShotResult.result.selection_grade_pixel_counts) &&
+      partialShotResult.result.selection_grade_pixel_counts.length === 8 &&
       partialShotResult.imageSize?.width === shotResult.imageInfo?.width &&
       partialShotResult.imageSize?.height === shotResult.imageInfo?.height &&
       partialShotResult.positionsChipCount === 1 &&
@@ -4048,16 +4060,23 @@ const { createRunner } = require('./e2e_playwright_session');
       `multi-chip result=${JSON.stringify(multiChipResult)}`);
 
     const multiShotResult = await page.evaluate(async ({ imagePath }) => {
-      const layoutResponse = await fetch('/api/layout?process_id=P001', { cache: 'no-store' });
-      if (!layoutResponse.ok) throw new Error(`layout status=${layoutResponse.status}`);
-      const layout = await layoutResponse.json();
-      const groups = ['4', '5'].map((shotId) => ({
-        shot_id: shotId,
-        chip_coords: (layout.rows || [])
-          .filter((row) => String(row.shot_id) === shotId)
-          .map((row) => ({ x_abs: Number(row.chip_x_pos), y_abs: Number(row.chip_y_pos) })),
-        shot_shape: { cols: 4, rows: 6 },
-      }));
+      const annotator = window.viewer?.chipAnnotator;
+      const shape = annotator?.getShotGridShape?.() || { cols: 4, rows: 6 };
+      const groups = ['4', '5'].map((shotId) => {
+        const group = [...(annotator?.shotBoundaryGroups?.values?.() || [])].find((candidate) => String(candidate.shotId) === shotId);
+        return {
+          shot_id: shotId,
+          chip_coords: (group?.chips || []).map((chip) => {
+            const slot = annotator._getShotGridSlotInfo?.(chip, shape);
+            return {
+              x_abs: Number(chip.x_abs),
+              y_abs: Number(chip.y_abs),
+              ...(slot ? { slot_x: slot.slotX, slot_y: slot.slotY } : {}),
+            };
+          }),
+          shot_shape: { cols: 4, rows: 6 },
+        };
+      });
       if (groups.some((group) => group.chip_coords.length !== 24)) {
         throw new Error(`full shot fixture changed=${JSON.stringify(groups.map((group) => [group.shot_id, group.chip_coords.length]))}`);
       }
@@ -4115,6 +4134,10 @@ const { createRunner } = require('./e2e_playwright_session');
       multiShotResult.result.selected_chip_count === 24 &&
       multiShotResult.result.selected_shot_shape?.cols === 4 &&
       multiShotResult.result.selected_shot_shape?.rows === 6 &&
+      Array.isArray(multiShotResult.result.selection_grade_pixel_counts) &&
+      multiShotResult.result.selection_grade_pixel_counts.length === 8 &&
+      Array.isArray(multiShotResult.result.selection_top_grades) &&
+      multiShotResult.result.selection_top_grades.length > 0 &&
       multiShotResult.result.composite_sample_count === 2 &&
       multiShotResult.result.width === shotResult.result.width &&
       multiShotResult.result.height === shotResult.result.height &&

@@ -487,9 +487,32 @@ def _normalize_selected_shot_groups(
         if not isinstance(group, dict):
             continue
         shot_id = str(group.get("shot_id") or "").strip()
-        coords = _normalize_selected_chip_coords(
-            group.get("chip_coords") or group.get("selected_chip_coords")
-        )
+        coords: set[Tuple[int, int]] = set()
+        slots: Dict[Tuple[int, int], Tuple[int, int]] = {}
+        for coord in group.get("chip_coords") or group.get("selected_chip_coords") or []:
+            try:
+                if isinstance(coord, dict):
+                    x_abs = int(coord.get("x_abs", coord.get("xAbs")))
+                    y_abs = int(coord.get("y_abs", coord.get("yAbs")))
+                    slot_x_raw = coord.get("slot_x", coord.get("slotX"))
+                    slot_y_raw = coord.get("slot_y", coord.get("slotY"))
+                else:
+                    x_abs, y_abs = coord[:2]
+                    x_abs = int(x_abs)
+                    y_abs = int(y_abs)
+                    slot_x_raw = None
+                    slot_y_raw = None
+            except (TypeError, ValueError):
+                continue
+            key = (x_abs, y_abs)
+            coords.add(key)
+            try:
+                slot_x = int(slot_x_raw)
+                slot_y = int(slot_y_raw)
+                if slot_x >= 0 and slot_y >= 0:
+                    slots[key] = (slot_x, slot_y)
+            except (TypeError, ValueError):
+                pass
         raw_shape = group.get("shot_shape") or group.get("shape")
         shot_shape = None
         if isinstance(raw_shape, dict):
@@ -501,7 +524,12 @@ def _normalize_selected_shot_groups(
             except (TypeError, ValueError):
                 shot_shape = None
         if shot_id and coords:
-            normalized.append({"shot_id": shot_id, "coords": coords, "shot_shape": shot_shape})
+            normalized.append({
+                "shot_id": shot_id,
+                "coords": coords,
+                "slot_map": slots,
+                "shot_shape": shot_shape,
+            })
     return normalized or None
 
 
@@ -612,11 +640,20 @@ def _build_selected_shot_geometry(
                     )
 
         source_rects = []
+        slot_map = group.get("slot_map") if isinstance(group.get("slot_map"), dict) else {}
         for coord, chip in group_chips:
             rect = _chip_pixel_rect_from_positions(chip, positions_data, width, height)
             if rect is None:
                 continue
-            source_rects.append((coord, chip, rect))
+            slot = None
+            try:
+                raw_slot = slot_map.get(coord)
+                if raw_slot is not None:
+                    slot_x, slot_y = raw_slot
+                    slot = (int(slot_x), int(slot_y))
+            except (TypeError, ValueError):
+                slot = None
+            source_rects.append((coord, chip, rect, slot))
         size_rects = [entry[2] for entry in source_rects] or fallback_rects
         if not size_rects:
             continue
@@ -661,9 +698,12 @@ def _build_selected_shot_geometry(
         origin_y = group["min_y"] - (group["min_y"] % rows)
         placements = []
         target_keys = set()
-        for coord, chip, rect in group["source_rects"]:
-            local_x = coord[0] - origin_x
-            local_y = coord[1] - origin_y
+        for coord, chip, rect, slot in group["source_rects"]:
+            if slot is not None and 0 <= slot[0] < cols and 0 <= slot[1] < rows:
+                local_x, local_y = slot
+            else:
+                local_x = coord[0] - origin_x
+                local_y = coord[1] - origin_y
             if not (0 <= local_x < cols and 0 <= local_y < rows):
                 raise ValueError("선택한 Shot chip 좌표가 canonical Shot 범위를 벗어났습니다.")
             target_key = (local_x, local_y)
@@ -2972,6 +3012,21 @@ def create_composite_heatmaps(
             m &= ~invalid_mask_bool
         m &= chip_inner_mask
         _heatmap_masks.append(m)
+    selection_chip_inner_pixels = int(np.count_nonzero(chip_inner_mask))
+    selection_grade_pixel_counts = [int(np.count_nonzero(mask)) for mask in _heatmap_masks]
+    selection_top_grades = [
+        {
+            "grade": idx,
+            "pixel_count": count,
+            "percentage": round(count / selection_chip_inner_pixels * 100, 3) if selection_chip_inner_pixels else 0.0,
+        }
+        for idx, count in sorted(
+            enumerate(selection_grade_pixel_counts),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        if count > 0
+    ]
 
     def _save_heatmap_task(idx: int) -> Optional[Dict[str, Any]]:
         t_hm = time.perf_counter()
@@ -3113,6 +3168,9 @@ def create_composite_heatmaps(
     if selected_coord_set is not None:
         result["selected_chip_count"] = selected_chip_count_result or len(selected_coord_set)
         result["selection_crop"] = selection_crop
+        result["selection_chip_inner_pixels"] = selection_chip_inner_pixels
+        result["selection_grade_pixel_counts"] = selection_grade_pixel_counts
+        result["selection_top_grades"] = selection_top_grades
     if shot_geometry:
         result["selected_shot_count"] = shot_geometry["shot_count"]
         result["selected_source_chip_count"] = shot_geometry["source_chip_count"]

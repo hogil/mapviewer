@@ -8998,6 +8998,8 @@ class BatchClassifyRequest(BaseModel):
 class ChipCoord(BaseModel):
     x_abs: int
     y_abs: int
+    slot_x: Optional[int] = Field(None, ge=0, le=255)
+    slot_y: Optional[int] = Field(None, ge=0, le=255)
 
 class CompositeShotShape(BaseModel):
     cols: int = Field(..., ge=1, le=256)
@@ -11211,7 +11213,11 @@ async def create_composite_map_endpoint(
                     continue
                 seen_coords.add(key)
                 grouped_coords.add(key)
-                coords.append({"x_abs": key[0], "y_abs": key[1]})
+                item = {"x_abs": key[0], "y_abs": key[1]}
+                if coord.slot_x is not None and coord.slot_y is not None:
+                    item["slot_x"] = int(coord.slot_x)
+                    item["slot_y"] = int(coord.slot_y)
+                coords.append(item)
             if not coords:
                 raise HTTPException(status_code=400, detail=f"Shot {shot_id}에 유효한 chip이 없습니다.")
             selected_shot_groups.append({
@@ -11356,6 +11362,9 @@ async def create_composite_map_endpoint(
                         "selected_source_chip_count",
                         "selected_missing_chip_count",
                         "selected_shot_shape",
+                        "selection_grade_pixel_counts",
+                        "selection_top_grades",
+                        "selection_chip_inner_pixels",
                         "composite_sample_count",
                     ):
                         if key in result:

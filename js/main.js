@@ -46,11 +46,15 @@ const MINIMAP_ZOOM_PROTECTION_MS = 200;  // 미니맵 줌 중 패널 보호 시�
 const PANEL_MIN_DY = -20;                 // 상단 패널이 숨지 않도록 하는 최소 dy 값
 
 const initialUrlParams = new URLSearchParams(window.location.search);
-const initialSamlSuccess = initialUrlParams.get('saml_success') === 'true';
-const initialDevSuccess = initialUrlParams.get('dev_success') === 'true';
-const initialLoginIdFromUrl = initialUrlParams.get('LoginId');
-const initialUsernameFromUrl = initialUrlParams.get('Username');
-const initialDeptNameFromUrl = initialUrlParams.get('DeptName');
+const initialAuthFromBoot = window.__l3InitialAuth || {};
+const initialSamlSuccess = initialUrlParams.get('saml_success') === 'true' || initialAuthFromBoot.samlSuccess === true;
+const initialDevSuccess = initialUrlParams.get('dev_success') === 'true' || initialAuthFromBoot.devSuccess === true;
+const initialLoginIdFromUrl = initialUrlParams.get('LoginId') || initialAuthFromBoot.LoginId || '';
+const initialUsernameFromUrl = initialUrlParams.get('Username') || initialAuthFromBoot.Username || '';
+const initialDeptNameFromUrl = initialUrlParams.get('DeptName') || initialAuthFromBoot.DeptName || '';
+if ((initialSamlSuccess || initialDevSuccess) && window.history?.replaceState) {
+    window.history.replaceState({}, '', window.location.pathname + window.location.hash);
+}
 
 async function decodeBitmapSmart(source, options) {
     const decodeSource = source;
@@ -7289,9 +7293,10 @@ class WaferMapViewer {
 
             this.showInitialState();
 
-            // 첫 화면 first paint 이후, 비핵심 패널은 파일 탐색기와 병렬로 초기화한다.
+            // 첫 화면 first paint 이후 Label Explorer skeleton은 즉시 구성한다.
+            // Folder browser는 뒤로 미뤄서 상단/라벨 체감 표시를 막지 않는다.
             const classificationInitTask = this.initClassification().catch(err => console.error('[INIT] Classification 초기화 실패:', err));
-            const bootstrapNonCriticalPanels = () => {
+            const bootstrapLabelExplorer = () => {
                 void (async () => {
                     try {
                         await classificationInitTask;
@@ -7301,7 +7306,9 @@ class WaferMapViewer {
                         console.error('[INIT] Label Explorer 초기화 실패:', err);
                     }
                 })();
+            };
 
+            const bootstrapFolderBrowser = () => {
                 void (async () => {
                     try {
                         await this.updateSubfolderList();
@@ -7316,14 +7323,15 @@ class WaferMapViewer {
                     }
                 })();
             };
-            const scheduleNonCriticalPanelsBootstrap = () => {
+            const scheduleFolderBrowserBootstrap = () => {
                 if (typeof requestIdleCallback === 'function') {
-                    requestIdleCallback(() => { void bootstrapNonCriticalPanels(); }, { timeout: 200 });
+                    requestIdleCallback(() => { void bootstrapFolderBrowser(); }, { timeout: 600 });
                 } else {
-                    setTimeout(() => { void bootstrapNonCriticalPanels(); }, 0);
+                    setTimeout(() => { void bootstrapFolderBrowser(); }, 50);
                 }
             };
-            setTimeout(scheduleNonCriticalPanelsBootstrap, 0);
+            setTimeout(bootstrapLabelExplorer, 0);
+            setTimeout(scheduleFolderBrowserBootstrap, 0);
 
             const startAncillaryBootstrap = () => {
                 Promise.allSettled([
@@ -7502,9 +7510,12 @@ class WaferMapViewer {
                 this.username = initialUsernameFromUrl;
                 this.deptName = initialDeptNameFromUrl;
                 
-                // colorLegends 확인
+                // 상단 사용자 표시는 색상 JSON을 기다리지 않는다. 색상은 init 병렬 작업이 채운다.
                 if (!this.colorLegends) {
-                    await this.loadColorLegends();
+                    void this.loadColorLegends().then(() => {
+                        this.renderColorLegends();
+                        this.showColorLegends();
+                    }).catch(() => {});
                 }
                 
                 // 디버그 로그 제거
@@ -7528,9 +7539,12 @@ class WaferMapViewer {
                 this.username = initialUsernameFromUrl;
                 this.deptName = initialDeptNameFromUrl;
                 
-                // colorLegends 확인
+                // 상단 사용자 표시는 색상 JSON을 기다리지 않는다. 색상은 init 병렬 작업이 채운다.
                 if (!this.colorLegends) {
-                    await this.loadColorLegends();
+                    void this.loadColorLegends().then(() => {
+                        this.renderColorLegends();
+                        this.showColorLegends();
+                    }).catch(() => {});
                 }
                 
                 // 디버그 로그 제거
@@ -7558,7 +7572,7 @@ class WaferMapViewer {
                 this.currentUser = this.normalizeLoginId(this.currentUser);
                 this.renderColorLegends(); // init에서도 호출됨
                 // 🔥 로그인 후 사용자 설정 로드 (gridCols 등)
-                await this._loadUserPrefs();
+                void this._loadUserPrefs().catch(() => {});
                 return;
             }
             
@@ -12250,7 +12264,14 @@ class WaferMapViewer {
                                 .map((chip) => {
                                     const x = Number(chip.x_abs ?? chip.xAbs);
                                     const y = Number(chip.y_abs ?? chip.yAbs);
-                                    return [`${x}:${y}`, { x_abs: x, y_abs: y }];
+                                    const slotX = Number(chip.slot_x ?? chip.slotX);
+                                    const slotY = Number(chip.slot_y ?? chip.slotY);
+                                    const coord = { x_abs: x, y_abs: y };
+                                    if (Number.isInteger(slotX) && Number.isInteger(slotY)) {
+                                        coord.slot_x = slotX;
+                                        coord.slot_y = slotY;
+                                    }
+                                    return [`${x}:${y}`, coord];
                                 })
                         ).values()]
                         : [];
@@ -19204,6 +19225,24 @@ class WaferMapViewer {
         }
         if (!force && this.classListPromise && this.classListPromiseVersion === version && this.classListPromiseMode === mode) {
             return this.classListPromise;
+        }
+
+        if (!force && version === 0 && !this.currentFolderPrefix && mode === 'wafer' && window.__prefetch?.classListWafer) {
+            try {
+                const data = await window.__prefetch.classListWafer;
+                window.__prefetch.classListWafer = null;
+                const classes = Array.isArray(data?.classes)
+                    ? data.classes.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
+                    : [];
+                if (this.currentFolderVersion === version && this.classMode === mode) {
+                    this.cachedClassList = classes;
+                    this.cachedClassListVersion = version;
+                    this.cachedClassListMode = mode;
+                    return classes;
+                }
+            } catch (error) {
+                window.__prefetch.classListWafer = null;
+            }
         }
 
         const apiUrl = this.buildClassApiUrl('/api/classes');
@@ -32787,10 +32826,16 @@ class WaferMapViewer {
                         return {
                             shot_id: String(group?.shotId ?? '').trim(),
                             chip_coords: (Array.isArray(groupChips) ? groupChips : [])
-                                .map((chip) => ({
-                                    x_abs: Number(chip?.x_abs),
-                                    y_abs: Number(chip?.y_abs),
-                                }))
+                                .map((chip) => {
+                                    const x = Number(chip?.x_abs);
+                                    const y = Number(chip?.y_abs);
+                                    const slotInfo = this.chipAnnotator?._getShotGridSlotInfo?.(chip, shotShape);
+                                    return {
+                                        x_abs: x,
+                                        y_abs: y,
+                                        ...(slotInfo ? { slot_x: slotInfo.slotX, slot_y: slotInfo.slotY } : {}),
+                                    };
+                                })
                                 .filter((chip) => Number.isFinite(chip.x_abs) && Number.isFinite(chip.y_abs)),
                             ...(shotShape ? { shot_shape: shotShape } : {}),
                         };

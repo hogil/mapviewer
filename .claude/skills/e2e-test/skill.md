@@ -6508,14 +6508,14 @@ return {
 **파일**: `scripts/e2e_chunk1.js`, `api/full_app.py`
 
 #### BUG-24: 다중 Shot/Chip Composite와 export 정합성 회귀 (2026-08-07)
-- `scripts/e2e_chunk2.js`의 `selected-region-composite`는 실제 P001 fixture에서 단일 Shot, 다중 Chip, 동일 형상 Shot 4/5 두 개, chip 1개인 partial Shot 8을 검사한다. Partial Shot Composite 결과는 canonical `4×6` canvas와 동일한 chip cell 크기를 유지해야 하며, 보이는 chip 수만 positions에 남겨야 한다.
-- `layout-chip-coordinates`는 단일 보기 좌표 box가 `Chip(Grid)`, `Chip(Pos)`, `Radious`, `Shot(Grid)` 순서이고 Pos/Radius가 소수 1자리인지 확인한다. TSV export는 `CHIP_COORD_X(mm)`, `CHIP_COORD_Y(mm)`를 별도 컬럼으로 확인한다. Shot 버튼의 화면 경계는 실제 로드된 chip rect 중 같은 layout Shot으로 묶인 칩들의 union과 일치해야 하며, chip이 없는 영역 밖으로 확장해 그리지 않는다.
+- `scripts/e2e_chunk2.js`의 `selected-region-composite`는 실제 P001 fixture에서 단일 Shot, 다중 Chip, 동일 형상 Shot 4/5 두 개, chip 1개인 partial Shot 8을 검사한다. UI `selected_shot_groups` payload는 각 chip에 `slot_x/slot_y`를 포함해야 한다. Partial Shot Composite 결과는 canonical `4×6` canvas와 동일한 chip cell 크기를 유지해야 하며, 보이는 chip 수만 positions에 남겨야 한다. 결과에는 `selection_grade_pixel_counts`, `selection_top_grades`, `selection_chip_inner_pixels`가 있어 상위 grade가 실제로 존재하는지 확인 가능해야 한다.
+- `layout-chip-coordinates`는 단일 보기 좌표 box가 `Chip(Grid)`, `Chip(Pos)`, `Radious`, `Shot(Grid)` 순서이고 Pos/Radius가 소수 1자리인지 확인한다. TSV export는 `CHIP_COORD_X(mm)`, `CHIP_COORD_Y(mm)`를 별도 컬럼으로 확인한다. Shot 버튼의 화면 경계는 실제 로드된 chip rect union을 덮어야 하며, partial/edge Shot은 보이는 chip을 기준으로 full Shot 외곽 크기를 유지해야 한다.
 - 두 Shot 결과는 단일 Shot 결과와 `width`, `height`, canonical chip 격자 `4×6`이 같아야 한다. positions chip 수는 canonical 첫 Shot의 24개, `selected_source_chip_count`는 두 Shot 합계 48개, `composite_sample_count`는 source image 수×Shot 수여야 한다.
 - `selected_shot_groups`가 없는 기존 Chip 요청도 유지해야 하며, positions가 결과 output canvas로 비동기 복사된 뒤 `/api/chip-positions`에서 chip rect/canvas를 다시 확인한다.
 - `selected-region-export`는 Chip/Shot context menu를 실제로 열고, Shot 이미지 PNG 다운로드, Shot TSV 다운로드, clipboard TSV header의 `CHIP_COORD_X(mm)`, `CHIP_COORD_Y(mm)`, `RADIUS(mm)`, `SHOT_ID`, `SHOT_X`, `SHOT_Y`를 확인한다. `SHOT` 튜플 컬럼은 없어야 하며, 세 mm 값은 소수 셋째 자리까지 기록되어야 한다. Chip export도 같은 schema와 선택 행 수를 확인한다.
 - 선택 Chip/Shot export에는 선택 집합 기준 `GROUP_CHIP_COUNT`, `GROUP_GOOD`, `GROUP_BAD`, `GROUP_YIELD(%)`, `GROUP_YIELD_SOURCE`가 있어야 한다. Per-chip `yld`가 없으면 BIN 기준 Good/Bad 수율을 사용하고, Wafer-level `yield`만 있는 fixture 값을 chip별 yld로 복제하면 FAIL이다. 단일보기 선택 리스트에도 같은 선택 summary가 보여야 한다.
 - 선택 Chip/Shot context menu에는 선택 crop을 MY LOT pendingPaths와 Label modal로 넘기는 항목이 있어야 한다. Shot crop은 브라우저 다운로드만 검증하면 부족하며, 서버 저장 경로(`/api/selection-crops`)를 기존 MY LOT/Label 흐름에 연결해야 한다.
-- UI 상태 플래그만으로 PASS 처리하지 않는다. API request body의 `selected_shot_groups`, output image dimensions, positions count, 다운로드 suggested filename을 모두 기록한다.
+- UI 상태 플래그만으로 PASS 처리하지 않는다. API request body의 `selected_shot_groups`/`slot_x`/`slot_y`, output image dimensions, positions count, 선택 영역 grade 진단, 다운로드 suggested filename을 모두 기록한다.
 - Chip Composite는 선택 Chip 3개를 한 Chip 크기의 canonical canvas에 누적해야 한다. 선택 Chip을 원래 Shot 위치에 여러 개 배치한 결과가 나오면 FAIL이다. output image와 positions canvas는 첫 Chip 크기, positions chip 수는 1, `selected_chip_count=3`, `composite_sample_count=3`이어야 한다.
 
 #### BUG-25: Composite 요청의 SAML LoginId 전달
