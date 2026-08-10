@@ -953,7 +953,7 @@ export class ChipAnnotator {
             ctx.rect(x, y, width, height);
             ctx.clip();
 
-            const selectedIndices = (group.indices || []).filter((index) => this.selectedChips.has(index));
+            const selectedIndices = this._filterSelectableIndices(group.indices || []);
             selectedIndices.forEach((index) => {
                 const chip = this.chips[index];
                 const rect = chip?.rect;
@@ -981,7 +981,7 @@ export class ChipAnnotator {
     getSelectedShotGroupSelections() {
         if (this.selectionMode !== 'shot') return [];
         return [...this._getSelectedShotGroups()].map((group) => {
-            const selectedIndices = (group.indices || []).filter((index) => this.selectedChips.has(index));
+            const selectedIndices = this._filterSelectableIndices(group.indices || []);
             return {
                 ...group,
                 selectedIndices,
