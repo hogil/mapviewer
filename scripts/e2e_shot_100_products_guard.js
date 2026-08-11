@@ -233,6 +233,8 @@ function buildProduct(spec, index) {
     let checkedGroups = 0;
     let partialGroups = 0;
     let selectedChecks = 0;
+    let compositeChecks = 0;
+    let compositeSlotChecks = 0;
     for (const group of annotator.shotBoundaryGroups.values()) {
       checkedGroups += 1;
       const chips = group.chips || [];
@@ -256,6 +258,18 @@ function buildProduct(spec, index) {
         });
         break;
       }
+      const compositeShape = annotator.getShotGridShape?.() || annotator.getShotCompositeGridShape?.();
+      if (!compositeShape || compositeShape.cols !== displayShape.cols || compositeShape.rows !== displayShape.rows) {
+        productFailures.push({
+          reason: 'composite-shape',
+          shotId: group.shotId,
+          expected: displayShape,
+          got: compositeShape,
+        });
+        break;
+      }
+      const compositeSlots = new Set();
+      compositeChecks += 1;
       for (const chip of chips) {
         const rawSlot = annotator._getShotRawGridSlotInfo(chip, shape);
         const expectedRaw = {
@@ -271,6 +285,35 @@ function buildProduct(spec, index) {
           });
           break;
         }
+        const compositeSlot = annotator._getShotGridSlotInfo(chip, compositeShape) ||
+          annotator._getShotRawGridSlotInfo(chip, compositeShape);
+        if (!compositeSlot ||
+            !Number.isInteger(compositeSlot.slotX) ||
+            !Number.isInteger(compositeSlot.slotY) ||
+            compositeSlot.slotX < 0 ||
+            compositeSlot.slotY < 0 ||
+            compositeSlot.slotX >= compositeShape.cols ||
+            compositeSlot.slotY >= compositeShape.rows) {
+          productFailures.push({
+            reason: 'composite-slot-range',
+            shotId: group.shotId,
+            xy: [chip.x_abs, chip.y_abs],
+            compositeShape,
+            got: compositeSlot,
+          });
+          break;
+        }
+        const compositeSlotKey = `${compositeSlot.slotX}:${compositeSlot.slotY}`;
+        if (compositeSlots.has(compositeSlotKey)) {
+          productFailures.push({
+            reason: 'composite-slot-duplicate',
+            shotId: group.shotId,
+            xy: [chip.x_abs, chip.y_abs],
+            slot: compositeSlot,
+          });
+          break;
+        }
+        compositeSlots.add(compositeSlotKey);
         const chipCenter = center(chip);
         const eps = Math.max(1, Math.min(cell?.width || 1, cell?.height || 1) * 0.25);
         if (chipCenter.x < boundary.minX - eps || chipCenter.x > boundary.maxX + eps ||
@@ -284,6 +327,26 @@ function buildProduct(spec, index) {
           });
           break;
         }
+        const expectedCompositeCenter = {
+          x: boundary.minX + (compositeSlot.slotX + 0.5) * cell.width,
+          y: boundary.minY + (compositeSlot.slotY + 0.5) * cell.height,
+        };
+        if (Math.abs(chipCenter.x - expectedCompositeCenter.x) > eps ||
+            Math.abs(chipCenter.y - expectedCompositeCenter.y) > eps) {
+          productFailures.push({
+            reason: 'composite-display-slot',
+            shotId: group.shotId,
+            xy: [chip.x_abs, chip.y_abs],
+            compositeShape,
+            slot: compositeSlot,
+            center: chipCenter,
+            expectedCenter: expectedCompositeCenter,
+            boundary,
+            transform: geometry?.screenTransform,
+          });
+          break;
+        }
+        compositeSlotChecks += 1;
       }
       if (productFailures.length) break;
 
@@ -328,6 +391,8 @@ function buildProduct(spec, index) {
       expectedBoundaryHeight,
       checkedGroups,
       selectedChecks,
+      compositeChecks,
+      compositeSlotChecks,
       failureCount: productFailures.length,
     };
     return {
