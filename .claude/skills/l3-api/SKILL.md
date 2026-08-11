@@ -163,6 +163,7 @@ return Response(content=data, headers={
 - 증상: selected Shot/Chip Composite가 일반 Wafer Composite보다 훨씬 느리게 느껴질 수 있다.
 - 원인: Wafer Composite는 전체 이미지 batch/numba 누적을 타지만 selected Shot/Chip Composite는 선택 rect별 Python/numpy crop 루프를 탔다. `/api/composite-map` task 시작 시 LoginId composite thumbnail cache 전체를 삭제하면 운영 환경에서 시작 지연이 커진다.
 - 수정 패턴: selected rect 누적은 `_numba_accumulate_selected()`를 우선 사용하고, numba가 없을 때만 numpy fallback을 쓴다. `/api/composite-map` 시작 경로에서는 LoginId 단위 composite thumbnail cache 전체를 지우지 않는다. `/api/thumbnail` fast path는 source mtime보다 오래된 thumbnail을 cached로 반환하지 않는다. Composite 결과 표시는 일반 이미지와 같이 grid `/api/thumbnail?size=512`, single `/api/image?level=...`를 유지한다.
+- Shot Composite 경계는 chip마다 독립 border를 칠하지 말고 target grid edge 기준으로 최종 선폭을 그린다. 기본 내부/외곽 총 3px, 외곽 조정은 `SHOT_COMPOSITE_OUTER_BORDER_PX`로 한다. 내부 공유 경계가 6px가 되면 구현 오류다.
 
 ### Global logical search basic-index fallback (2026-05-11)
 

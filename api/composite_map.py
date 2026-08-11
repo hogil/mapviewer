@@ -129,6 +129,21 @@ _SUBSET_NAME_RE = re.compile(r"^square_(weighted_)?average_([0-7]+)\.(png|jpg|jp
 _SELECTED_REGION_PADDING_PX = 4
 
 
+def _positive_int_env(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(1, value)
+
+
+_SHOT_COMPOSITE_BORDER_PX = _positive_int_env("SHOT_COMPOSITE_BORDER_PX", 3)
+_SHOT_COMPOSITE_OUTER_BORDER_PX = _positive_int_env(
+    "SHOT_COMPOSITE_OUTER_BORDER_PX",
+    _SHOT_COMPOSITE_BORDER_PX,
+)
+
+
 def _normalize_selected_chip_coords(
     selected_chip_coords: Optional[Sequence[Tuple[int, int]]],
 ) -> Optional[set[Tuple[int, int]]]:
@@ -575,6 +590,71 @@ def _chip_pixel_rect_from_positions(
     return (sx0, sy0, sx1, sy1) if sx1 > sx0 and sy1 > sy0 else None
 
 
+def _draw_selected_shot_grid_borders(
+    base_indices: np.ndarray,
+    placements: Sequence[Dict[str, Any]],
+    *,
+    cols: int,
+    rows: int,
+    cell_width: int,
+    cell_height: int,
+    border_index: int = 10,
+) -> None:
+    """Draw final Shot Composite grid lines with a fixed visible pixel width."""
+    if cell_width <= 0 or cell_height <= 0:
+        return
+
+    internal_px = max(1, min(_SHOT_COMPOSITE_BORDER_PX, cell_width, cell_height))
+    outer_px = max(1, min(_SHOT_COMPOSITE_OUTER_BORDER_PX, cell_width, cell_height))
+    height, width = base_indices.shape[:2]
+    slots: Dict[Tuple[int, int], Tuple[int, int, int, int]] = {}
+
+    for placement in placements:
+        try:
+            tx0, ty0, tx1, ty1 = (int(value) for value in placement["target_rect"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if tx1 <= tx0 or ty1 <= ty0:
+            continue
+        local_x = tx0 // cell_width
+        local_y = ty0 // cell_height
+        if 0 <= local_x < cols and 0 <= local_y < rows:
+            slots[(local_x, local_y)] = (
+                max(0, min(width, tx0)),
+                max(0, min(height, ty0)),
+                max(0, min(width, tx1)),
+                max(0, min(height, ty1)),
+            )
+
+    def centered_span(edge: int, line_px: int, limit: int) -> Tuple[int, int]:
+        start = edge - (line_px // 2)
+        end = start + line_px
+        if start < 0:
+            end -= start
+            start = 0
+        if end > limit:
+            start = max(0, start - (end - limit))
+            end = limit
+        return start, end
+
+    for (slot_x, slot_y), (tx0, ty0, tx1, ty1) in slots.items():
+        if (slot_x - 1, slot_y) not in slots:
+            base_indices[ty0:ty1, tx0:min(tx1, tx0 + outer_px)] = border_index
+        if (slot_x + 1, slot_y) not in slots:
+            base_indices[ty0:ty1, max(tx0, tx1 - outer_px):tx1] = border_index
+        else:
+            x0, x1 = centered_span(tx1, internal_px, width)
+            base_indices[ty0:ty1, x0:x1] = border_index
+
+        if (slot_x, slot_y - 1) not in slots:
+            base_indices[ty0:min(ty1, ty0 + outer_px), tx0:tx1] = border_index
+        if (slot_x, slot_y + 1) not in slots:
+            base_indices[max(ty0, ty1 - outer_px):ty1, tx0:tx1] = border_index
+        else:
+            y0, y1 = centered_span(ty1, internal_px, height)
+            base_indices[y0:y1, tx0:tx1] = border_index
+
+
 def _build_selected_shot_geometry(
     positions_data: Dict[str, Any],
     selected_shot_groups: Sequence[Dict[str, Any]],
@@ -735,11 +815,6 @@ def _build_selected_shot_geometry(
         tx0, ty0, tx1, ty1 = placement["target_rect"]
         output_coords.add(coord)
         base_indices[ty0:ty1, tx0:tx1] = 0
-        if show_normal_border:
-            base_indices[ty0, tx0:tx1] = 10
-            base_indices[ty1 - 1, tx0:tx1] = 10
-            base_indices[ty0:ty1, tx0] = 10
-            base_indices[ty0:ty1, tx1 - 1] = 10
         position_rect_overrides[coord] = {
             "x0": tx0,
             "y0": ty0,
@@ -747,6 +822,16 @@ def _build_selected_shot_geometry(
             "y1": ty1,
             "quad": [[tx0, ty0], [tx1, ty0], [tx1, ty1], [tx0, ty1]],
         }
+
+    if show_normal_border:
+        _draw_selected_shot_grid_borders(
+            base_indices,
+            reference_group["placements"],
+            cols=cols,
+            rows=rows,
+            cell_width=cell_width,
+            cell_height=cell_height,
+        )
 
     return {
         "groups": groups,
