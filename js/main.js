@@ -1017,7 +1017,8 @@ class WaferMapViewer {
             clearTimeout(this._layoutPrimeTimer);
             this._layoutPrimeTimer = null;
         }
-        const delayMs = Math.max(0, Number(options.delayMs) || 120);
+        const rawDelayMs = Number(options.delayMs);
+        const delayMs = Number.isFinite(rawDelayMs) ? Math.max(0, rawDelayMs) : 120;
         return new Promise((resolve) => {
             this._layoutPrimeTimer = setTimeout(() => {
                 this._layoutPrimeTimer = null;
@@ -2753,6 +2754,12 @@ class WaferMapViewer {
 
     async applyPageState(page) {
         if (!page) return;
+        if (this.imageLoadAbortController) {
+            try { this.imageLoadAbortController.abort(); } catch (_) {}
+            this.imageLoadAbortController = null;
+        }
+        this._loadImageRequestSeq = (this._loadImageRequestSeq || 0) + 1;
+        this.cancelPyramidPrefetch?.();
         // 🔥 페이지 전환 즉시 캔버스/그리드 정리 (이전 페이지 잔상 방지)
         this._gridVisuallyHidden = false;
         if (this.ctx && this.dom.imageCanvas) {
@@ -9782,8 +9789,17 @@ class WaferMapViewer {
         const col = Number(input.dataset.coordinateCol);
         if (!state || !Number.isInteger(row) || !Number.isInteger(col)) return;
         const columns = this._coordinateSelectionListConfig(listName).columns;
+        const resetSyncedList = state.synced && !preserveSynced && row === 0 && col === 0;
         if (state.synced && !preserveSynced) {
-            state.rows = this._readCoordinateSelectionList(listName);
+            state.rows = resetSyncedList
+                ? this._newCoordinateSelectionListRows(listName)
+                : this._readCoordinateSelectionList(listName);
+            if (resetSyncedList) {
+                const selector = `input[data-coordinate-list="${listName}"][data-coordinate-row]`;
+                this.dom?.coordinateSelectListPanels?.querySelectorAll(selector).forEach((element) => {
+                    if (element !== input) element.value = '';
+                });
+            }
         }
         state.synced = false;
         while (state.rows.length <= row) state.rows.push(Array(columns).fill(''));
@@ -10213,7 +10229,8 @@ class WaferMapViewer {
                 error ||= `${index + 1}행: ${config.label}는 정수여야 합니다.`;
                 return;
             }
-            if (listName === 'chip' && (!Number.isInteger(x) || !Number.isInteger(y))) {
+            const hasDecimalText = values.some((value) => /[.]/.test(value));
+            if (listName === 'chip' && (hasDecimalText || !Number.isInteger(x) || !Number.isInteger(y))) {
                 hasDecimalChipCoordinate = true;
             }
             rows.push({ x, y, rowNumber: index + 1 });
@@ -10245,7 +10262,9 @@ class WaferMapViewer {
         const state = this.coordinateSelectionLists[listName];
         const columns = this._coordinateSelectionListConfig(listName).columns;
         if (state.synced) {
-            state.rows = this._readCoordinateSelectionList(listName);
+            state.rows = startRow === 0 && startCol === 0
+                ? this._newCoordinateSelectionListRows(listName)
+                : this._readCoordinateSelectionList(listName);
             state.synced = false;
         }
         while (state.rows.length < startRow + matrix.length) state.rows.push(Array(columns).fill(''));
@@ -15917,7 +15936,7 @@ class WaferMapViewer {
         }
 
         if (!highlightOnly && !skipEnsurePage) {
-            this.ensurePageForRole('wafer');
+            this.ensurePageForRole('wafer', { skipApply: true });
         }
 
         // 시각적 선택 상태 업데이트
@@ -34318,6 +34337,7 @@ class WaferMapViewer {
         this.gridMode = true;
         this.selectedImages = sortedImages;
         this.currentGridImages = sortedImages;
+        this._primeLayoutCacheForImages(sortedImages, { maxProcessIds: 4, delayMs: 0 });
         if (!this.gridSelectedIdxs) this.gridSelectedIdxs = [];
 
         // 🔥 Measure _gridMeasureMap: LOT 정렬로 인덱스가 변경되었으므로 재매핑

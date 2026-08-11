@@ -1062,8 +1062,10 @@ export class ChipAnnotator {
 
     getSelectedShotGroupSelections() {
         if (this.selectionMode !== 'shot') return [];
+        const selectedSet = this.selectedChips instanceof Set ? this.selectedChips : new Set();
         return [...this._getSelectedShotGroups()].map((group) => {
-            const selectedIndices = this._filterSelectableIndices(group.indices || []);
+            const selectedIndices = this._filterSelectableIndices(group.indices || [])
+                .filter((index) => selectedSet.has(index));
             return {
                 ...group,
                 selectedIndices,

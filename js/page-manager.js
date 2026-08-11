@@ -136,7 +136,7 @@ export class PageManager {
         return page;
     }
 
-    convertPage(id, role, state = null) {
+    convertPage(id, role, state = null, options = {}) {
         const page = this.pages.find(p => p.id === id);
         if (!page) return null;
         page.role = role || 'blank';
@@ -145,7 +145,7 @@ export class PageManager {
             page.state = this.clone(state);
         }
         this.renderTabs();
-        if (this.activePageId === id && typeof this.onPageActivated === 'function') {
+        if (!options.skipApply && this.activePageId === id && typeof this.onPageActivated === 'function') {
             const maybePromise = this.onPageActivated(page);
             if (maybePromise?.catch) {
                 maybePromise.catch(err => console.error('[PageManager] activate error', err));
@@ -208,7 +208,9 @@ export class PageManager {
         const active = this.pages.find(p => p.id === this.activePageId);
         if (active) {
             if (active.role === 'blank' && !options.forceNew) {
-                return this.convertPage(active.id, role, options.state);
+                return this.convertPage(active.id, role, options.state, {
+                    skipApply: options.skipApply,
+                });
             }
             if (active.role === role && !options.forceNew) {
                 return active;

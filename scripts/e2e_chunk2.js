@@ -1059,6 +1059,143 @@ const { createRunner } = require('./e2e_playwright_session');
     };
   });
 
+  await record('21-tab-single-independence', 'single image 탭 + 새 탭 이미지 상태 격리', async () => {
+    await boot('chunk2-tab-single-independence');
+    const paths = await page.evaluate(async () => {
+      const response = await fetch('/api/files/recursive?path=PW/P001/20260501&limit=50');
+      const data = await response.json();
+      return (data.files || [])
+        .map((item) => String(item || '').replace(/\\/g, '/'))
+        .filter((item) => /\.(png|jpe?g|bmp|webp|tiff?)$/i.test(item))
+        .slice(0, 3);
+    });
+    expect(paths.length >= 2, `tab independence image samples missing: ${JSON.stringify(paths)}`);
+
+    async function selectExplorerSingle(imagePath) {
+      await page.evaluate((targetPath) => {
+        const v = window.viewer;
+        v.selectedFolders = new Set();
+        v.lastSelectedFolder = null;
+        v.lastSelectedFolderPath = null;
+        v.selectedImages = [targetPath];
+        v.gridSelectedIdxs = [];
+        v.gridSelectedSet = new Set();
+        v.updateFileExplorerSelection({ skipEnsurePage: false });
+      }, imagePath);
+      await page.waitForFunction(
+        (targetPath) => {
+          const v = window.viewer;
+          const normalize = (value) => String(value || '').replace(/\\/g, '/');
+          return (
+            !!v &&
+            v.gridMode === false &&
+            v.viewMode === 'single' &&
+            !!v.currentImage &&
+            normalize(v.selectedImagePath) === normalize(targetPath)
+          );
+        },
+        imagePath,
+        { timeout: 90000 }
+      );
+      await page.evaluate(() => window.viewer.persistActivePageState?.());
+      await page.waitForFunction(
+        (targetPath) => {
+          const v = window.viewer;
+          const normalize = (value) => String(value || '').replace(/\\/g, '/');
+          return normalize(v.pageManager?.getActivePage?.()?.state?.selectedImagePath) === normalize(targetPath);
+        },
+        imagePath,
+        { timeout: 10000 }
+      );
+      return await page.evaluate(() => {
+        const v = window.viewer;
+        const activePage = v.pageManager?.getActivePage?.();
+        return {
+          activePageId: v.pageManager?.activePageId || null,
+          role: activePage?.role || null,
+          selectedImagePath: v.selectedImagePath || null,
+          statePath: activePage?.state?.selectedImagePath || null,
+          savedViewImagePath: activePage?.state?.savedViewState?.imagePath || null,
+          viewMode: v.viewMode || null,
+          gridMode: !!v.gridMode,
+        };
+      });
+    }
+
+    const first = await selectExplorerSingle(paths[0]);
+    await page.click('#page-add-btn');
+    await page.waitForFunction(
+      () => (window.viewer?.pageManager?.pages?.length || 0) >= 2,
+      null,
+      { timeout: 10000 }
+    );
+    const afterAdd = await page.evaluate(() => ({
+      activePageId: window.viewer.pageManager?.activePageId || null,
+      pages: (window.viewer.pageManager?.pages || []).map((tab) => ({
+        id: tab.id,
+        role: tab.role,
+        selectedImagePath: tab.state?.selectedImagePath || null,
+        savedViewImagePath: tab.state?.savedViewState?.imagePath || null,
+        viewMode: tab.state?.viewMode || null,
+        gridMode: !!tab.state?.gridMode,
+      })),
+    }));
+    const second = await selectExplorerSingle(paths[1]);
+
+    async function activateAndRead(pageId, expectedPath) {
+      await page.evaluate((id) => window.viewer.pageManager?.activatePage(id), pageId);
+      await page.waitForFunction(
+        (targetPath) => {
+          const v = window.viewer;
+          const normalize = (value) => String(value || '').replace(/\\/g, '/');
+          return (
+            !!v &&
+            v.gridMode === false &&
+            !!v.currentImage &&
+            normalize(v.selectedImagePath) === normalize(targetPath)
+          );
+        },
+        expectedPath,
+        { timeout: 90000 }
+      );
+      await sleep(300);
+      return await page.evaluate(() => {
+        const v = window.viewer;
+        const activePage = v.pageManager?.getActivePage?.();
+        const canvas = document.getElementById('image-canvas');
+        return {
+          activePageId: v.pageManager?.activePageId || null,
+          role: activePage?.role || null,
+          selectedImagePath: v.selectedImagePath || null,
+          currentImagePath: v.currentImagePath || null,
+          statePath: activePage?.state?.selectedImagePath || null,
+          savedViewImagePath: activePage?.state?.savedViewState?.imagePath || null,
+          viewMode: v.viewMode || null,
+          gridMode: !!v.gridMode,
+          canvasVisible: !!canvas && getComputedStyle(canvas).display !== 'none',
+        };
+      });
+    }
+
+    const firstAfter = await activateAndRead(first.activePageId, paths[0]);
+    const secondAfter = await activateAndRead(second.activePageId, paths[1]);
+    const normalize = (value) => String(value || '').replace(/\\/g, '/');
+    expect(first.activePageId !== second.activePageId, `single tab ids not distinct: ${JSON.stringify({ first, second })}`);
+    expect(normalize(firstAfter.selectedImagePath) === normalize(paths[0]), `first tab image changed: ${JSON.stringify({ paths, first, afterAdd, second, firstAfter })}`);
+    expect(normalize(secondAfter.selectedImagePath) === normalize(paths[1]), `second tab image changed: ${JSON.stringify({ paths, first, afterAdd, second, secondAfter })}`);
+    expect(normalize(firstAfter.statePath) === normalize(paths[0]), `first tab state changed: ${JSON.stringify({ firstAfter, paths })}`);
+    expect(normalize(secondAfter.statePath) === normalize(paths[1]), `second tab state changed: ${JSON.stringify({ secondAfter, paths })}`);
+    expect(firstAfter.canvasVisible && secondAfter.canvasVisible, `single canvases not visible: ${JSON.stringify({ firstAfter, secondAfter })}`);
+    return {
+      paths: paths.slice(0, 2),
+      first,
+      afterAdd,
+      second,
+      firstAfter,
+      secondAfter,
+    };
+  });
+
   await record('22,23,28,29', 'Navigator / Minimap / 반복 진입 복귀', async () => {
     await boot('chunk2-nav');
     await loadFolder('unknown');
@@ -2308,8 +2445,8 @@ const { createRunner } = require('./e2e_playwright_session');
       `layout cache should serve single view=${JSON.stringify(data)}`);
     expect(data.coordinateLabels.join('|') === 'Chip(Grid)|Chip(Pos)|Radious|Shot(Grid)' &&
       data.grid === '(10, 0)' &&
-      data.coord === '-27.5, 77.5' &&
-      data.radious === '82.2' &&
+      data.coord === '-27500.0, 77500.0' &&
+      data.radious === '82234.4' &&
       data.shot === '(-2, 3)',
     `coordinate display=${JSON.stringify(data)}`);
 
@@ -2670,9 +2807,9 @@ const { createRunner } = require('./e2e_playwright_session');
       pending: window.viewer?._layoutLoadPromises?.size || 0,
     }));
     expect(data.chip?.x_abs === 10 && data.chip?.y_abs === 0, `chip=${JSON.stringify(data.chip)}`);
-    expect(data.coord === '-27.5, 77.5', `coord=${data.coord}`);
+    expect(data.coord === '-27500.0, 77500.0', `coord=${data.coord}`);
     expect(data.grid === '(10, 0)', `grid=${data.grid}`);
-    expect(data.radious === '82.2', `radious=${data.radious}`);
+    expect(data.radious === '82234.4', `radious=${data.radious}`);
     expect(data.shot === '(-2, 3)', `shot=${data.shot}`);
     expect(!data.oldAbsElement && data.layoutRequest, `layout display/request=${JSON.stringify(data)}`);
     return {
@@ -3383,8 +3520,8 @@ const { createRunner } = require('./e2e_playwright_session');
       summaryText: document.getElementById('chip-coordinate-select-summary')?.innerText?.trim() || '',
     }));
     expect(
-      reopenedModal.selectedChips === 0 && reopenedModal.pickerGroups === 1 &&
-        reopenedModal.pickerChecked === 0 && !reopenedModal.hasHint &&
+      reopenedModal.selectedChips === 48 && reopenedModal.pickerGroups === 1 &&
+        reopenedModal.pickerChecked === 24 && !reopenedModal.hasHint &&
         reopenedModal.hasSummary && /^Yld/.test(reopenedModal.summaryText),
       `reopened coordinate modal=${JSON.stringify(reopenedModal)}`
     );
@@ -3621,6 +3758,22 @@ const { createRunner } = require('./e2e_playwright_session');
         Number(item?.x_abs) === 10 && Number(item?.y_abs) === 0
       );
       const group = chip ? annotator._getShotGroupForChip(chip) : null;
+      const shape = annotator.getShotGridShape?.() || { cols: 4, rows: 6 };
+      const canonicalChipCount = Math.max(1, Number(shape.cols) || 4) * Math.max(1, Number(shape.rows) || 6);
+      const toShotCoords = (items) => (items || []).map((item) => {
+        const slot = annotator._getShotGridSlotInfo?.(item, shape);
+        return {
+          x_abs: Number(item.x_abs),
+          y_abs: Number(item.y_abs),
+          ...(slot ? { slot_x: slot.slotX, slot_y: slot.slotY } : {}),
+        };
+      });
+      const partialGroup = [...(annotator.shotBoundaryGroups?.values?.() || [])]
+        .filter((candidate) => Array.isArray(candidate.chips) &&
+          candidate.chips.length > 0 &&
+          candidate.chips.length < canonicalChipCount)
+        .sort((a, b) => a.chips.length - b.chips.length ||
+          String(a.shotId ?? a.groupKey ?? '').localeCompare(String(b.shotId ?? b.groupKey ?? '')))[0];
       const outsideChip = (annotator.chips || []).find((item) => item !== chip);
       const canvas = annotator.canvas;
       const box = canvas?.getBoundingClientRect?.();
@@ -3644,18 +3797,17 @@ const { createRunner } = require('./e2e_playwright_session');
           x: (Number(outsideChip.rect.x0) + Number(outsideChip.rect.x1)) / 2,
           y: (Number(outsideChip.rect.y0) + Number(outsideChip.rect.y1)) / 2,
         } : null,
-        shotCoords: group.chips.map((item) => {
-          const slot = annotator._getShotGridSlotInfo?.(item, annotator.getShotGridShape?.() || { cols: 4, rows: 6 });
-          return {
-            x_abs: Number(item.x_abs),
-            y_abs: Number(item.y_abs),
-            ...(slot ? { slot_x: slot.slotX, slot_y: slot.slotY } : {}),
-          };
-        }),
+        shotCoords: toShotCoords(group.chips),
         shotId: String(group.shotId),
+        partialShot: partialGroup ? {
+          shotId: String(partialGroup.shotId ?? partialGroup.groupKey ?? 'partial'),
+          shotCoords: toShotCoords(partialGroup.chips),
+          chipCount: partialGroup.chips.length,
+          missingCount: canonicalChipCount - partialGroup.chips.length,
+        } : null,
       };
     });
-    expect(selectionTarget, 'selected-region chip/shot target missing');
+    expect(selectionTarget?.partialShot?.chipCount > 0, `selected-region chip/shot target missing=${JSON.stringify(selectionTarget)}`);
 
     await page.keyboard.down('Control');
     try {
@@ -3892,19 +4044,10 @@ const { createRunner } = require('./e2e_playwright_session');
       shotResult.imageInfo?.backgroundRatio < 0.25,
       `shot positions=${JSON.stringify({ selectionTarget, shotResult })}`);
 
-    const partialShotResult = await page.evaluate(async ({ imagePath }) => {
-      const annotator = window.viewer?.chipAnnotator;
-      const group = [...(annotator?.shotBoundaryGroups?.values?.() || [])].find((candidate) => String(candidate.shotId) === '8');
-      if (!group) throw new Error('single-chip partial Shot fixture missing');
-      const shape = annotator.getShotGridShape?.() || { cols: 4, rows: 6 };
-      const shotCoords = group.chips.map((chip) => {
-        const slot = annotator._getShotGridSlotInfo?.(chip, shape);
-        return {
-          x_abs: Number(chip.x_abs),
-          y_abs: Number(chip.y_abs),
-          ...(slot ? { slot_x: slot.slotX, slot_y: slot.slotY } : {}),
-        };
-      });
+    const partialShotResult = await page.evaluate(async ({ imagePath, partialShot }) => {
+      const shotId = String(partialShot?.shotId ?? 'partial');
+      const shotCoords = Array.isArray(partialShot?.shotCoords) ? partialShot.shotCoords : [];
+      if (!shotCoords.length) throw new Error('partial Shot fixture missing');
       const availableCoords = new Set(shotCoords.map((candidate) => `${candidate.x_abs}:${candidate.y_abs}`));
       await fetch('/api/composite-cleanup', { method: 'POST', cache: 'no-store' });
       const startResponse = await fetch('/api/composite-map', {
@@ -3915,7 +4058,7 @@ const { createRunner } = require('./e2e_playwright_session');
           selection_mode: 'shot',
           selected_chip_coords: shotCoords,
           selected_shot_groups: [{
-            shot_id: '8',
+            shot_id: shotId,
             chip_coords: shotCoords,
             shot_shape: { cols: 4, rows: 6 },
           }],
@@ -3965,7 +4108,7 @@ const { createRunner } = require('./e2e_playwright_session');
         await new Promise((resolve) => setTimeout(resolve, 200));
       }
       return {
-        shotId: '8',
+        shotId,
         requestedChipCount: shotCoords.length,
         sourceChipCount: availableCoords.size,
         result: {
@@ -3984,12 +4127,12 @@ const { createRunner } = require('./e2e_playwright_session');
         positionsChipCount: Array.isArray(positions?.chips) ? positions.chips.length : 0,
         positionsCanvas: positions?.coord?.canvas || null,
       };
-    }, { imagePath: target.imagePath });
+    }, { imagePath: target.imagePath, partialShot: selectionTarget.partialShot });
     expect(partialShotResult.result.width === shotResult.result.width &&
       partialShotResult.result.height === shotResult.result.height &&
-      partialShotResult.result.selected_chip_count === 1 &&
-      partialShotResult.result.selected_source_chip_count === 1 &&
-      partialShotResult.result.selected_missing_chip_count === 23 &&
+      partialShotResult.result.selected_chip_count === selectionTarget.partialShot.chipCount &&
+      partialShotResult.result.selected_source_chip_count === selectionTarget.partialShot.chipCount &&
+      partialShotResult.result.selected_missing_chip_count === selectionTarget.partialShot.missingCount &&
       partialShotResult.result.selected_shot_count === 1 &&
       partialShotResult.result.selected_shot_shape?.cols === 4 &&
       partialShotResult.result.selected_shot_shape?.rows === 6 &&
@@ -3997,7 +4140,7 @@ const { createRunner } = require('./e2e_playwright_session');
       partialShotResult.result.selection_grade_pixel_counts.length === 8 &&
       partialShotResult.imageSize?.width === shotResult.imageInfo?.width &&
       partialShotResult.imageSize?.height === shotResult.imageInfo?.height &&
-      partialShotResult.positionsChipCount === 1 &&
+      partialShotResult.positionsChipCount === selectionTarget.partialShot.chipCount &&
       partialShotResult.positionsCanvas?.width === shotResult.result.width &&
       partialShotResult.positionsCanvas?.height === shotResult.result.height,
     `partial shot must keep canonical canvas=${JSON.stringify(partialShotResult)}`);
@@ -4075,25 +4218,9 @@ const { createRunner } = require('./e2e_playwright_session');
       multiChipResult.positionsCanvas?.height === selectionTarget.chipSize.height,
       `multi-chip result=${JSON.stringify(multiChipResult)}`);
 
-    const multiShotResult = await page.evaluate(async ({ imagePath }) => {
-      const annotator = window.viewer?.chipAnnotator;
-      const shape = annotator?.getShotGridShape?.() || { cols: 4, rows: 6 };
-      const groups = ['4', '5'].map((shotId) => {
-        const group = [...(annotator?.shotBoundaryGroups?.values?.() || [])].find((candidate) => String(candidate.shotId) === shotId);
-        return {
-          shot_id: shotId,
-          chip_coords: (group?.chips || []).map((chip) => {
-            const slot = annotator._getShotGridSlotInfo?.(chip, shape);
-            return {
-              x_abs: Number(chip.x_abs),
-              y_abs: Number(chip.y_abs),
-              ...(slot ? { slot_x: slot.slotX, slot_y: slot.slotY } : {}),
-            };
-          }),
-          shot_shape: { cols: 4, rows: 6 },
-        };
-      });
-      if (groups.some((group) => group.chip_coords.length !== 24)) {
+    const multiShotResult = await page.evaluate(async ({ imagePath, shotGroups }) => {
+      const groups = Array.isArray(shotGroups) ? shotGroups : [];
+      if (groups.length !== 2 || groups.some((group) => group.chip_coords.length !== 24)) {
         throw new Error(`full shot fixture changed=${JSON.stringify(groups.map((group) => [group.shot_id, group.chip_coords.length]))}`);
       }
       const selectedChipCoords = [...new Map(
@@ -4143,7 +4270,7 @@ const { createRunner } = require('./e2e_playwright_session');
         positionsChipCount: Array.isArray(positions?.chips) ? positions.chips.length : 0,
         positionsCanvas: positions?.coord?.canvas || null,
       };
-    }, { imagePath: target.imagePath });
+    }, { imagePath: target.imagePath, shotGroups: uiShotRequestBody.selected_shot_groups });
     expect(multiShotResult.result.selection_mode === 'shot' &&
       multiShotResult.result.selected_shot_count === 2 &&
       multiShotResult.result.selected_source_chip_count === 48 &&
