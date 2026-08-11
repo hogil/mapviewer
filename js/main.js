@@ -17875,13 +17875,17 @@ class WaferMapViewer {
             // 🔬 Chip Positions 자동 로드 (annotations도 자동으로 로드됨)
             if (this.chipAnnotator) {
                 try {
-                    this.chipAnnotator.clearLayoutData();
-                    const loaded = await this.chipAnnotator.loadPositions(fullPath);
+                    this.chipAnnotator.clearLayoutData({ resetVisibility: false });
+                    const loaded = await this.chipAnnotator.loadPositions(fullPath, { loadAnnotations: false });
                     await this._loadLayoutForImage(fullPath, signal, isStaleLoad, layoutRowsPromise);
                     if (signal.aborted || isStaleLoad() || this.gridMode) {
                         return;
                     }
                     if (loaded) {
+                        await this.chipAnnotator.loadAnnotations(fullPath);
+                        if (signal.aborted || isStaleLoad() || this.gridMode) {
+                            return;
+                        }
                         console.log('✅ Chip positions & annotations loaded successfully');
                         if (this.selectedBottoms.size > 0) {
                             this.chipAnnotator.setBottomFilter(this.selectedBottoms);

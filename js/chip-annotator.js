@@ -1445,8 +1445,9 @@ export class ChipAnnotator {
     /** 
      * Load chip positions from backend
      */
-    async loadPositions(imagePath) {
+    async loadPositions(imagePath, options = {}) {
         try {
+            const loadExistingAnnotations = options?.loadAnnotations !== false;
             this.currentImagePath = imagePath;
             this.partId = null;
             this.device = null;
@@ -1510,8 +1511,9 @@ export class ChipAnnotator {
 
             this._updateMetadataDisplay();
 
-            // Load existing annotations
-            await this.loadAnnotations(imagePath);
+            if (loadExistingAnnotations) {
+                await this.loadAnnotations(imagePath);
+            }
 
             // 🎨 positions 로드 후 즉시 렌더링 (hover, grid 등 표시)
             // 오버레이 모드 재적용은 main.js의 _reapplyOverlayAfterPositionsLoad()에서 처리
