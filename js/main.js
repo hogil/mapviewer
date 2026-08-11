@@ -23279,7 +23279,7 @@ class WaferMapViewer {
         // A selected folder normally maps to one process/product. Prime its
         // small layout table while the grid renders so single-image clicks
         // can apply Chip/Shot coordinates without waiting for Parquet I/O.
-        this._primeLayoutCacheForImages(sortedImages, { maxProcessIds: 4, delayMs: 120 });
+        this._primeLayoutCacheForImages(sortedImages, { maxProcessIds: 4, delayMs: 0 });
         if (!this.gridSelectedIdxs) this.gridSelectedIdxs = [];
 
         // 🔥 M.Comp 드롭다운 캐시 소스 검증 → 이미지 변경 시 갱신

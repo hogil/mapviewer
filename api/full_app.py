@@ -1977,6 +1977,7 @@ async def _lifespan_background_init():
     )
     warm_count = max(0, int(os.getenv("STARTUP_THUMB_WARM_COUNT", "24")))
     warm_composite_modules = os.getenv("STARTUP_WARM_COMPOSITE_MODULES", "1").strip().lower() in {"1", "true", "yes", "y", "on"}
+    warm_layout = os.getenv("STARTUP_WARM_LAYOUT", "1").strip().lower() in {"1", "true", "yes", "y", "on"}
 
     async def _wait_for_user_idle(label: str) -> None:
         waited = 0.0
@@ -2057,6 +2058,27 @@ async def _lifespan_background_init():
 
     _spawn_startup_task(_warm_startup_routes(), name="l3-startup-warm-routes")
     _spawn_startup_task(_warm_target_folders(), name="l3-startup-warm-target-folders")
+
+    # 0.5) Shot 경계/좌표용 layout.parquet 인덱스 워밍업.
+    # 재시작 직후 첫 Shot 클릭이 Parquet 전체 read/parse를 직접 기다리지 않게 한다.
+    async def _warm_layout_index():
+        await asyncio.sleep(0.35)
+        started = time.perf_counter()
+        try:
+            layout_index = await loop.run_in_executor(IO_POOL, _read_layout_index)
+            bootlog.info(
+                "✅ [STARTUP] layout warm complete: processes=%s rows=%s (%.0fms)",
+                len(layout_index),
+                sum(len(rows) for rows in layout_index.values()),
+                (time.perf_counter() - started) * 1000.0,
+            )
+        except Exception as exc:
+            bootlog.warning(f"⚠️ [STARTUP] layout warm 실패: {exc}")
+
+    if warm_layout:
+        _spawn_startup_task(_warm_layout_index(), name="l3-startup-warm-layout")
+    else:
+        bootlog.info("⏭️ [STARTUP] layout 워밍업 비활성화")
 
     # 0.7) Composite/Measure 모듈 워밍업 — 첫 요청 lazy import/ProcessPool 비용을 사용자 클릭에서 제거
     async def _warm_composite_modules():
