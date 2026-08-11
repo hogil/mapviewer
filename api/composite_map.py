@@ -942,6 +942,25 @@ def _accumulate_selected_geometry_from_images(
     has_8_13 = np.zeros((target_height, target_width), dtype=np.bool_)
     all_invalid = np.ones((target_height, target_width), dtype=np.bool_)
     placements = list(_iter_selected_geometry_placements(geometry))
+    placements_arr = np.array(
+        [
+            [
+                int(placement["source_rect"][0]),
+                int(placement["source_rect"][1]),
+                int(placement["source_rect"][2]),
+                int(placement["source_rect"][3]),
+                int(placement["target_rect"][0]),
+                int(placement["target_rect"][1]),
+                int(placement["target_rect"][2]),
+                int(placement["target_rect"][3]),
+            ]
+            for placement in placements
+        ],
+        dtype=np.int64,
+    )
+    use_numba_selected = (
+        _HAS_NUMBA and _numba_accumulate_selected is not None and placements_arr.size > 0
+    )
     processed_count = 0
 
     if not placements:
@@ -958,29 +977,41 @@ def _accumulate_selected_geometry_from_images(
             if raw_indices is None:
                 continue
             img = raw_indices.astype(np.uint8, copy=False)
-            for placement in placements:
-                sx0, sy0, sx1, sy1 = placement["source_rect"]
-                tx0, ty0, tx1, ty1 = placement["target_rect"]
-                copy_width = min(sx1 - sx0, tx1 - tx0)
-                copy_height = min(sy1 - sy0, ty1 - ty0)
-                if copy_width <= 0 or copy_height <= 0:
-                    continue
-                sx1c = sx0 + copy_width
-                sy1c = sy0 + copy_height
-                tx1c = tx0 + copy_width
-                ty1c = ty0 + copy_height
-                crop = img[sy0:sy1c, sx0:sx1c]
-                ge14 = crop >= 14
-                ge8 = crop >= 8
-                mid = ge8 & ~ge14
-                target_slice = (slice(ty0, ty1c), slice(tx0, tx1c))
-                has_0_7[target_slice] |= (~ge8) | ge14
-                has_8_13[target_slice] |= mid
-                all_invalid[target_slice] &= ge14
-                if ge14.any():
-                    grade_counts[0, ty0:ty1c, tx0:tx1c] += ge14
-                for grade_idx in range(8):
-                    grade_counts[grade_idx, ty0:ty1c, tx0:tx1c] += (crop == grade_idx)
+            if use_numba_selected:
+                if not img.flags.c_contiguous:
+                    img = np.ascontiguousarray(img, dtype=np.uint8)
+                _numba_accumulate_selected(
+                    img,
+                    placements_arr,
+                    grade_counts,
+                    has_0_7,
+                    has_8_13,
+                    all_invalid,
+                )
+            else:
+                for placement in placements:
+                    sx0, sy0, sx1, sy1 = placement["source_rect"]
+                    tx0, ty0, tx1, ty1 = placement["target_rect"]
+                    copy_width = min(sx1 - sx0, tx1 - tx0)
+                    copy_height = min(sy1 - sy0, ty1 - ty0)
+                    if copy_width <= 0 or copy_height <= 0:
+                        continue
+                    sx1c = sx0 + copy_width
+                    sy1c = sy0 + copy_height
+                    tx1c = tx0 + copy_width
+                    ty1c = ty0 + copy_height
+                    crop = img[sy0:sy1c, sx0:sx1c]
+                    ge14 = crop >= 14
+                    ge8 = crop >= 8
+                    mid = ge8 & ~ge14
+                    target_slice = (slice(ty0, ty1c), slice(tx0, tx1c))
+                    has_0_7[target_slice] |= (~ge8) | ge14
+                    has_8_13[target_slice] |= mid
+                    all_invalid[target_slice] &= ge14
+                    if ge14.any():
+                        grade_counts[0, ty0:ty1c, tx0:tx1c] += ge14
+                    for grade_idx in range(8):
+                        grade_counts[grade_idx, ty0:ty1c, tx0:tx1c] += (crop == grade_idx)
             processed_count += 1
 
     return grade_counts, has_0_7, has_8_13, all_invalid, processed_count
@@ -1380,6 +1411,44 @@ if _HAS_NUMBA:
                 if not batch_all_invalid:
                     all_invalid[y, x] = False
 
+    @njit(cache=_NUMBA_CACHE)
+    def _numba_accumulate_selected(img, placements, grade_counts, has_0_7, has_8_13, all_invalid):
+        """선택 Chip/Shot rect만 target canvas에 누적한다."""
+        for p in range(placements.shape[0]):
+            sx0 = placements[p, 0]
+            sy0 = placements[p, 1]
+            sx1 = placements[p, 2]
+            sy1 = placements[p, 3]
+            tx0 = placements[p, 4]
+            ty0 = placements[p, 5]
+            tx1 = placements[p, 6]
+            ty1 = placements[p, 7]
+            copy_width = sx1 - sx0
+            if tx1 - tx0 < copy_width:
+                copy_width = tx1 - tx0
+            copy_height = sy1 - sy0
+            if ty1 - ty0 < copy_height:
+                copy_height = ty1 - ty0
+            if copy_width <= 0 or copy_height <= 0:
+                continue
+            for yy in range(copy_height):
+                sy = sy0 + yy
+                ty = ty0 + yy
+                for xx in range(copy_width):
+                    sx = sx0 + xx
+                    tx = tx0 + xx
+                    v = img[sy, sx]
+                    if v < 8:
+                        grade_counts[v, ty, tx] += 1
+                        has_0_7[ty, tx] = True
+                        all_invalid[ty, tx] = False
+                    elif v < 14:
+                        has_8_13[ty, tx] = True
+                        all_invalid[ty, tx] = False
+                    else:
+                        grade_counts[0, ty, tx] += 1
+                        has_0_7[ty, tx] = True
+
     _SQ_WEIGHTS = np.array([0, 1, 4, 9, 16, 25, 36, 49], dtype=np.float32)
     _WT_FACTORS = np.array([1, 1, 2, 3, 4, 5, 6, 7], dtype=np.float32)
 
@@ -1431,9 +1500,11 @@ if _HAS_NUMBA:
             _small_inv = np.ones((2, 2), dtype=np.bool_)
             _numba_accumulate_image(_small_img, _small_gc, _small_h07, _small_h813, _small_inv)
             _numba_accumulate_batch(_small_stack, _small_gc, _small_h07, _small_h813, _small_inv)
+            _small_placements = np.array([[0, 0, 2, 2, 0, 0, 2, 2]], dtype=np.int64)
+            _numba_accumulate_selected(_small_img, _small_placements, _small_gc, _small_h07, _small_h813, _small_inv)
             _numba_compute_sum_maps(_small_gc, _SQ_WEIGHTS, _WT_FACTORS, 1)
             del _small, _small_pal, _small_lut, _small_v, _small_m
-            del _small_img, _small_stack, _small_gc, _small_h07, _small_h813, _small_inv
+            del _small_img, _small_stack, _small_placements, _small_gc, _small_h07, _small_h813, _small_inv
         except Exception:
             pass
 else:
@@ -1442,6 +1513,7 @@ else:
     _numba_render_composite = None
     _numba_accumulate_image = None
     _numba_accumulate_batch = None
+    _numba_accumulate_selected = None
     _numba_compute_sum_maps = None
     _SQ_WEIGHTS = np.array([0, 1, 4, 9, 16, 25, 36, 49], dtype=np.float32)
     _WT_FACTORS = np.array([1, 1, 2, 3, 4, 5, 6, 7], dtype=np.float32)
@@ -1479,6 +1551,8 @@ def warm_numba_kernels() -> Dict[str, Any]:
             small_inv = np.ones((2, 2), dtype=np.bool_)
             _numba_accumulate_image(small[0], small_gc, small_h07, small_h813, small_inv)
             _numba_accumulate_batch(small, small_gc, small_h07, small_h813, small_inv)
+            small_placements = np.array([[0, 0, 2, 2, 0, 0, 2, 2]], dtype=np.int64)
+            _numba_accumulate_selected(small[0], small_placements, small_gc, small_h07, small_h813, small_inv)
             _numba_compute_sum_maps(small_gc, _SQ_WEIGHTS, _WT_FACTORS, 2)
             _NUMBA_WARMED = True
             _NUMBA_WARM_ERROR = None
@@ -2933,7 +3007,11 @@ def create_composite_heatmaps(
 
     selected_geometry = shot_geometry or chip_geometry
     if selected_geometry:
-        accumulator_mode = "selected_region"
+        accumulator_mode = (
+            "selected_region_numba"
+            if _HAS_NUMBA and _numba_accumulate_selected is not None
+            else "selected_region"
+        )
         grade_counts, has_0_7, has_8_13, all_invalid, processed_count = _accumulate_selected_geometry_from_images(
             image_paths,
             selected_geometry,

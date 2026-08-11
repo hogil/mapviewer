@@ -278,6 +278,13 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
 - E2E guard: `scripts/e2e_chunk1.js` record `systematic-bin-group`는 그리드와 단일 bottom legend 순서까지 확인하고, `grid-context-actions`는 3개 grid image 선택 후 `#selected-grid-yield-summary`가 보이는지 확인한다. `scripts/e2e_chunk2.js` record `coordinate-selection-cells`는 Grade 필터와 `SYSTEMATIC` 필터 각각에서 숨겨진 좌표 선택은 0개, 보이는 좌표 선택은 1개가 되는지 확인하고, Shot 2개 선택 후 좌표 모달 `Yld` summary가 `Chip 48`, `Shot Yld`, `Shot Pos Yld`를 모두 포함하는지 확인한다.
 - 파일: `api/full_app.py`, `index.html`, `js/chip-annotator.js`, `js/main.js`, `scripts/e2e_chunk1.js`, `scripts/e2e_chunk2.js`
 
+#### BUG-34: Selected Shot/Chip Composite 속도와 축소 표시 품질 회귀 (2026-08-11)
+- 증상: Wafer Composite보다 Shot Composite가 훨씬 느리게 느껴지고, Composite 결과 그리드 썸네일이 축소 표시될 때 깨져 보일 수 있었다.
+- 원인: 일반 Wafer Composite는 전체 이미지 batch/numba 누적 경로를 타지만, selected Shot/Chip Composite는 선택 rect마다 Python/numpy crop 비교 루프를 반복했다. `/api/composite-map` task 시작 시 현재 LoginId의 composite thumbnail cache 폴더 전체를 삭제해 오래 돌린 운영 환경에서는 시작 지연이 커질 수 있었다. 결과 그리드는 실제 composite PNG를 `/api/thumbnail?size=512`로 축소해 보여주는데, 전체 grid thumbnail CSS의 `crisp-edges` 계열 렌더링이 composite 축소 이미지에는 aliasing처럼 보일 수 있었다.
+- 수정 계약: selected Shot/Chip 누적은 `_numba_accumulate_selected()` compiled 경로를 우선 사용하고, numba가 없으면 기존 numpy 경로로 fallback한다. `/api/composite-map` 시작 경로에서는 LoginId 단위 composite thumbnail cache 전체를 지우지 않는다. `/api/thumbnail` fast path는 source mtime보다 오래된 thumbnail을 cached로 반환하지 않는다. Recolor나 명시 cleanup처럼 기존 output을 바꾸는 경로에서만 필요한 cache invalidation을 수행한다. Composite 결과 표시 경로는 일반 이미지와 동일하게 유지한다. 그리드는 `/api/thumbnail?size=512`, 단일보기는 `/api/image?level=...` 원본/피라미드 경로를 사용한다.
+- E2E guard: `selected-region-composite`는 response `numba.accumulator`가 numba 사용 환경에서 `selected_region_numba`인지 확인하고, 동일 fixture에서 Shot Composite 처리시간이 기존 baseline보다 악화되지 않아야 한다. Composite 결과 grid thumbnail은 `/api/thumbnail?size=512` 요청을 쓰되, double-click 단일보기에서는 `/api/image?level=...`를 쓰는지 확인한다.
+- 파일: `api/composite_map.py`, `api/full_app.py`, `scripts/e2e_chunk2.js`
+
 ### Available skills
 - deploy-check: Ubuntu 프로덕션 배포 전 점검을 수행한다. 배포 전 민감정보, 설정, SSL/SAML, 환경변수, 운영 체크리스트를 확인할 때 사용한다. (file: D:/project/mapviewer/.claude/skills/deploy-check/SKILL.md)
 - e2e-test: L3 Tracker 전체 기능 E2E 테스트를 Playwright 브라우저 자동화로 수행한다. `/e2e-test`, `E2E 테스트`, `전체 테스트`, `기능 테스트 돌려줘` 같은 요청에 반응한다. (file: D:/project/mapviewer/.claude/skills/e2e-test/skill.md)

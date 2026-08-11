@@ -8150,7 +8150,11 @@ async def get_thumbnail(
                 return None, 'forbidden', None
             # 🔥 _path_stat가 있으면 이미 exists+is_file 검증됨 — 중복 stat 제거
             if not _path_stat:
-                if not image_path.exists() or not image_path.is_file():
+                try:
+                    _path_stat = image_path.stat()
+                except OSError:
+                    _path_stat = None
+                if not _path_stat or not stat_module.S_ISREG(_path_stat.st_mode):
                     return None, 'not_found', None
             if not is_supported_image(image_path):
                 return None, 'unsupported', None
@@ -8167,7 +8171,11 @@ async def get_thumbnail(
                                             variant=variant,
                                             cached_stat=_path_stat)
             if thumb_path.exists() and thumb_path.stat().st_size > 0:
-                return image_path, 'cached', thumb_path
+                try:
+                    if thumb_path.stat().st_mtime >= _path_stat.st_mtime:
+                        return image_path, 'cached', thumb_path
+                except Exception:
+                    pass
 
             # --- 썸네일 생성 (캐시 미스) ---
             thumb_path.parent.mkdir(parents=True, exist_ok=True)
@@ -11281,9 +11289,6 @@ async def create_composite_map_endpoint(
                 _image_paths_snapshot = position_filtered
             else:
                 _log(f"[composite-map] positions 없는 이미지 {len(_image_paths_snapshot)}개 — positions 없이 진행", level="warning")
-
-            # 🔥 썸네일 캐시 무효화 (동기 I/O — executor 스레드에서 실행)
-            _invalidate_composite_thumbnail_caches(login_id=login_id or ANONYMOUS_LOGIN_ID)
 
             from .composite_map import create_composite_heatmaps, create_palette_overlay
             from functools import partial

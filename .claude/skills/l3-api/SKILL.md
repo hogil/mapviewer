@@ -158,6 +158,12 @@ return Response(content=data, headers={
 - 수정 패턴: 기존 JSON 응답 계약은 유지하되, subset cache invalidation과 `create_subset_map()`은 `COMPOSITE_EXECUTOR`의 `run_in_executor`로 실행한다. 이미지 로드 지연을 timeout 완화로 숨기지 않는다.
 - 평가: `unknown` 재귀 이미지로 composite 생성 → subset fetch pending 중 `/api/image` 또는 next/prev 이미지 전환이 subset 완료를 기다리지 않고 응답해야 한다.
 
+### Selected Shot/Chip Composite 속도 (2026-08-11)
+
+- 증상: selected Shot/Chip Composite가 일반 Wafer Composite보다 훨씬 느리게 느껴질 수 있다.
+- 원인: Wafer Composite는 전체 이미지 batch/numba 누적을 타지만 selected Shot/Chip Composite는 선택 rect별 Python/numpy crop 루프를 탔다. `/api/composite-map` task 시작 시 LoginId composite thumbnail cache 전체를 삭제하면 운영 환경에서 시작 지연이 커진다.
+- 수정 패턴: selected rect 누적은 `_numba_accumulate_selected()`를 우선 사용하고, numba가 없을 때만 numpy fallback을 쓴다. `/api/composite-map` 시작 경로에서는 LoginId 단위 composite thumbnail cache 전체를 지우지 않는다. `/api/thumbnail` fast path는 source mtime보다 오래된 thumbnail을 cached로 반환하지 않는다. Composite 결과 표시는 일반 이미지와 같이 grid `/api/thumbnail?size=512`, single `/api/image?level=...`를 유지한다.
+
 ### Global logical search basic-index fallback (2026-05-11)
 
 - 증상: full token index가 아직 준비되지 않은 cold/basic cache load 상태에서 UI global logical search가 `bintype AND _wafer_` 같은 실제 파일명 필드 검색을 0건으로 반환할 수 있었다.
