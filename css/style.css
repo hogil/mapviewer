@@ -3157,6 +3157,7 @@
             gap: 5px;
             min-width: 0;
             min-height: 0;
+            box-sizing: border-box;
             padding: 6px;
             background: #191919;
             border: 1px solid #454545;

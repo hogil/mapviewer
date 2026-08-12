@@ -32519,7 +32519,7 @@ class WaferMapViewer {
                         ? SYSTEMATIC_BIN_TYPES.reduce((sum, bin) => sum + (binCounts[bin] || 0), 0)
                         : (binCounts[countKey] || 0);
                     const pct = netd > 0 ? (cnt / netd * 100).toFixed(1) : '0.0';
-                    const countText = chips.length > 0 ? `${pct}%(${cnt})` : '';
+                    const countText = chips.length > 0 ? `${pct}%(${_formatCount(cnt)})` : '';
                     const bgStyle = `background-color: ${color};`;
                     return `
                         <div class="legend-item" data-section="bottom" data-key="${displayLabel}" data-index="${index}" draggable="true" style="cursor: pointer;">
