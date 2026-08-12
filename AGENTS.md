@@ -294,6 +294,13 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
 - E2E guard: `scripts/e2e_chunk2.js` record `21-tab-single-independence`는 PW/P001 단일 이미지를 탭1에 로드하고, `+`로 탭2를 만든 뒤 다른 단일 이미지를 로드한다. 이후 탭1/탭2를 왕복하며 각 탭의 `selectedImagePath`, active page state, canvas visible 상태가 자기 이미지로 유지되는지 확인한다. 이전 구현처럼 빈 탭 변환이 선택값을 지우거나 탭1 state가 탭2 이미지로 바뀌면 FAIL이다.
 - 파일: `js/page-manager.js`, `js/main.js`, `scripts/e2e_chunk2.js`
 
+#### BUG-36: 좌표 선택 모달 글자 잘림과 visible Enter 안내 회귀 (2026-08-12)
+- 증상: `Chip/Shot 좌표 선택 · 실시간` modeless panel에서 제목, `Shot X/Y`, `Chip X/Y`, `Shot Position`, `Yld` summary, 범위 선택 문구가 좁은 폭 안에서 잘리거나 겹쳐 보일 수 있었다. 다중 검색/권한/라벨 UI에는 사용자가 원치 않는 visible `Enter` 안내 문구가 남아 있었다.
+- 원인: 좌표 선택 패널은 `592px` 고정 상한과 `144px/184px` 수준의 타이트한 grid column을 사용했고, summary line은 `nowrap + ellipsis`로 강제되어 내용이 숨겨졌다. Shot Position cell button은 line-height/정렬이 안정적이지 않아 작은 셀에서 숫자가 치우쳐 보일 수 있었다. HTML에는 `Enter -> 검색 실행` helper와 `Enter` placeholder/label이 실제 visible text로 남아 있었다.
+- 수정 계약: 사용자 화면의 static HTML/CSS에는 visible `Enter`, `엔터`, `↵`, `⏎` 안내를 두지 않는다. 실제 키 처리 코드는 유지한다. 좌표 선택 패널은 제목과 heading이 close/Clear 버튼과 겹치지 않도록 min-width/ellipsis/flex-shrink를 명확히 하고, summary group은 wrap을 허용한다. Shot/Chip list와 Shot Position column은 글자 2~5자 입력이 가려지지 않는 폭을 보장하고, input/button cell은 `display:block/flex`, line-height, overflow 규칙으로 셀 안에서 수직 중앙에 보여야 한다.
+- E2E guard: `coordinate-selection-cells`는 panel을 연 뒤 `#chip-coordinate-select-modal` 내부 heading, search input, list cell, Shot Position cell, summary, range status의 bounding box가 서로 겹치지 않고, 각 요소의 `scrollWidth <= clientWidth + 1` 또는 의도된 wrapping 상태인지 확인한다. visible body text에는 `\bEnter\b|엔터|↵|⏎`가 없어야 한다. 이 guard는 timeout 완화가 아니라 실제 layout overflow를 실패로 기록해야 한다.
+- 파일: `index.html`, `css/style.css`, `scripts/e2e_chunk2.js`
+
 ### Available skills
 - deploy-check: Ubuntu 프로덕션 배포 전 점검을 수행한다. 배포 전 민감정보, 설정, SSL/SAML, 환경변수, 운영 체크리스트를 확인할 때 사용한다. (file: D:/project/mapviewer/.claude/skills/deploy-check/SKILL.md)
 - e2e-test: L3 Tracker 전체 기능 E2E 테스트를 Playwright 브라우저 자동화로 수행한다. `/e2e-test`, `E2E 테스트`, `전체 테스트`, `기능 테스트 돌려줘` 같은 요청에 반응한다. (file: D:/project/mapviewer/.claude/skills/e2e-test/skill.md)
