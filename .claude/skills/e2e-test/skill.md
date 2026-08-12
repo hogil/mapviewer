@@ -6573,5 +6573,6 @@ return {
 #### BUG-36: Coordinate selector visible text and clipping guard
 - The coordinate selector modeless panel must not show static `Enter`, `엔터`, `↵`, or `⏎` helper text anywhere in visible body/modal text. Keyboard handling may still use Enter internally.
 - `coordinate-selection-cells` should open `#chip-coordinate-select-modal` and check the title, close button, `Shot X/Y`, `Chip X/Y`, `Shot Position`, quick search inputs, list cells, Shot Position palette cells, summary, and range status for visual overflow. A failure is real when visible text is clipped, hidden by ellipsis where wrapping is expected, or overlaps another control.
+- Single-image filename bar actions (`Ref Map`, `Measure`, `MY LOT`) must occupy their own grid column; long `#file-path-text` / `#file-name-text` content may ellipsize inside the filename column but must not render under or overlap the action buttons.
 - Do not pass this by loosening waits or hiding the panel. The guard should compare element bounding boxes and `scrollWidth/clientWidth` for non-wrapping controls, while allowing the summary rows to wrap vertically inside their scroll area.
 - Files: `index.html`, `css/style.css`, `scripts/e2e_chunk2.js`.
