@@ -829,6 +829,7 @@
             flex-wrap: nowrap;
             align-items: center;
             justify-content: space-between;
+            overflow: hidden;
             user-select: none;
             -webkit-user-select: none;
             -webkit-tap-highlight-color: transparent;
@@ -845,7 +846,9 @@
             gap: 1px;
             align-items: center;
             flex-wrap: nowrap;
+            flex: 1 1 auto;
             min-width: 0;
+            overflow: hidden;
         }
 
         .legend-group-bottom {
@@ -854,7 +857,9 @@
             align-items: center;
             flex-wrap: nowrap;
             margin-left: auto;
+            flex: 0 1 auto;
             min-width: 0;
+            overflow: hidden;
         }
         
         .viewer-container.grid-mode ~ #grid-color-legend-bottom,
@@ -868,7 +873,8 @@
             gap: 2px;
             margin-right: 2px;
             font-size: 10px;
-            flex-shrink: 0;
+            flex: 0 1 auto;
+            min-width: 0;
             user-select: none;
             -webkit-user-select: none;
         }
@@ -893,9 +899,21 @@
         
         .legend-label-grid {
             color: #eee;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
             white-space: nowrap;
             user-select: none;
             -webkit-user-select: none;
+        }
+
+        .legend-count-grid {
+            min-width: 0;
+            max-width: 54px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            flex: 0 1 auto;
         }
         
         .control-group {
