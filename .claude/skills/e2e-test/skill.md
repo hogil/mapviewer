@@ -6569,3 +6569,9 @@ return {
 - The new blank tab must convert to `wafer` without applying an empty page state over the just-selected file. If the second tab selection disappears or stays blank, FAIL.
 - Page switches must abort or stale out any image fetch/decode from the previously active tab. A completed image load from tab 1 must never write `selectedImagePath`, canvas bitmap, minimap, or saved page state for tab 2.
 - Guard: `scripts/e2e_chunk2.js` record `21-tab-single-independence` must verify tab 1 and tab 2 have distinct page ids and preserve their own `state.selectedImagePath`, `savedViewState.imagePath`, active `selectedImagePath`, and visible canvas after round-tripping both tabs.
+
+#### BUG-36: Coordinate selector visible text and clipping guard
+- The coordinate selector modeless panel must not show static `Enter`, `엔터`, `↵`, or `⏎` helper text anywhere in visible body/modal text. Keyboard handling may still use Enter internally.
+- `coordinate-selection-cells` should open `#chip-coordinate-select-modal` and check the title, close button, `Shot X/Y`, `Chip X/Y`, `Shot Position`, quick search inputs, list cells, Shot Position palette cells, summary, and range status for visual overflow. A failure is real when visible text is clipped, hidden by ellipsis where wrapping is expected, or overlaps another control.
+- Do not pass this by loosening waits or hiding the panel. The guard should compare element bounding boxes and `scrollWidth/clientWidth` for non-wrapping controls, while allowing the summary rows to wrap vertically inside their scroll area.
+- Files: `index.html`, `css/style.css`, `scripts/e2e_chunk2.js`.
