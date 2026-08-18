@@ -1242,6 +1242,9 @@ class WaferMapViewer {
         this.gridShotBoundaryDataCache = new Map();
         this._gridShotBoundaryRenderSeq = 0;
         this._gridShotBoundaryRenderTimer = null;
+        this._gridCoordinateSelectionRenderSeq = 0;
+        this._gridCoordinateSelectionRenderTimer = null;
+        this._pendingGridPlainClickSelection = null;
 
         this.gridCols = DEFAULT_GRID_COLS;
 
@@ -5667,12 +5670,19 @@ class WaferMapViewer {
                 // 🔥 성능 최적화: data-index 사용 (indexOf 제거)
                 const idx = parseInt(thumbWrap.dataset.index, 10);
                 if (!isNaN(idx)) {
-                    this.toggleGridImageSelect(idx, event);
+                    if (event.ctrlKey || event.metaKey || event.shiftKey) {
+                        this._flushPendingGridPlainClickSelection?.();
+                        this.toggleGridImageSelect(idx, event);
+                    } else {
+                        this._scheduleGridPlainClickSelection?.(idx, event);
+                    }
                 }
             } else if (event.target.closest('.lot-header')) {
                 // Lot 헤더 클릭은 별도 핸들러에서 처리하므로 선택 초기화 방지
+                this._clearPendingGridPlainClickSelection?.({ apply: false });
                 return;
             } else if (!event.ctrlKey && !event.metaKey) {
+                this._clearPendingGridPlainClickSelection?.({ apply: false });
                 this.clearGridSelection();
             }
         };
@@ -5742,6 +5752,7 @@ class WaferMapViewer {
             // 🔥 드래그 선택이 완료된 경우 (임계값 초과) - 탭 선택 처리하지 않음
 
             // 교차하는 썸네일 찾기
+            this._clearPendingGridPlainClickSelection?.({ apply: false });
 
             const newIdxs = findIntersectingThumbnails(dragLeft, dragTop, dragRight, dragBottom);
             this.ensureGridSelectionStructures();
@@ -10388,6 +10399,7 @@ class WaferMapViewer {
         }
         this._updateCoordinateSelectionSummary();
         this._renderCoordinateSelectionShotPicker();
+        this._scheduleGridCoordinateSelectionOverlayRender?.(0);
         if (result && (result.matchedCount === 0 || result.matchedRows === 0) && operation === 'replace') {
             this._setCoordinateSelectionError('일치하는 Shot/Chip이 없습니다. 입력값과 현재 이미지의 좌표를 확인하세요.');
         } else {
@@ -10742,6 +10754,7 @@ class WaferMapViewer {
         this._setCoordinateSelectionError('');
         this._updateCoordinateSelectionSummary();
         this._renderCoordinateSelectionShotPicker();
+        this._scheduleGridCoordinateSelectionOverlayRender?.(0);
         return {
             selected: selected !== false,
             selectedCount: nextSelection.size,
@@ -11245,6 +11258,7 @@ class WaferMapViewer {
         const skipped = result.unmatchedRows?.length ? `, ${result.unmatchedRows.length}행 미일치` : '';
         const shotSuffix = result.selectedShotCount ? ` / ${result.selectedShotCount}개 Shot` : '';
         this.showToast?.(`${result.selectedCount}개 Chip${shotSuffix} 변경${skipped}`, 2200);
+        this._scheduleGridCoordinateSelectionOverlayRender?.(0);
         this.closeCoordinateSelectionModal();
     }
 
@@ -23586,6 +23600,7 @@ class WaferMapViewer {
 
         this.showGridImmediately(sortedImages);
         this._scheduleGridShotBoundaryOverlayRender?.(0);
+        this._scheduleGridCoordinateSelectionOverlayRender?.(0);
 
         // 🔥 gradient measure는 배치 워밍업으로 먼저 캐시 생성
         this._prefetchCheckedMeasureThumbs(sortedImages);
@@ -24055,6 +24070,7 @@ class WaferMapViewer {
                     img.dataset.retryCount = '0';
                     img.style.opacity = '1';
                     this._scheduleGridShotBoundaryOverlayRender?.(0);
+                    this._scheduleGridCoordinateSelectionOverlayRender?.(0);
                 }
                 if (this.gridLoadInFlight > 0) this.gridLoadInFlight--;
                 this.drainGridLoadQueue();
@@ -24166,6 +24182,8 @@ class WaferMapViewer {
 
         wrap.ondblclick = (e) => {
             e.stopPropagation();
+            this._clearPendingGridPlainClickSelection?.({ apply: false });
+            this._restoreGridSelectionBeforeLastPrimaryClick?.(idx);
             this.revertGradeSelectionIfNeeded(idx);
 
             // 🔥 스크롤 위치 미리 저장 (enterGridImageViewMode 호출 전)
@@ -24212,6 +24230,7 @@ class WaferMapViewer {
         wrap.oncontextmenu = (e) => {
             e.preventDefault();
             e.stopPropagation();
+            this._clearPendingGridPlainClickSelection?.({ apply: false });
             this.contextMenuJustShown = true;
             this.showContextMenu(e, idx);
         };
@@ -26444,6 +26463,7 @@ class WaferMapViewer {
     }
 
     clearGridSelection() {
+        this._clearPendingGridPlainClickSelection?.({ apply: false });
         // ✅ 화살표가 표시 중인지 확인
         const wasShowingArrow = this.viewMode === 'single' || this.viewMode === 'gridImage';
 
@@ -26491,6 +26511,7 @@ class WaferMapViewer {
     }
 
     selectAllGridImages() {
+        this._clearPendingGridPlainClickSelection?.({ apply: false });
         if (this.selectedImages) {
             // 🔥 최적화: 모든 요소에 selected 클래스 추가
             const grid = document.getElementById('image-grid');
@@ -26522,6 +26543,66 @@ class WaferMapViewer {
                 };
             }
         }
+    }
+
+    _clearPendingGridPlainClickSelection({ apply = false } = {}) {
+        const pending = this._pendingGridPlainClickSelection;
+        if (!pending) return;
+        if (pending.timer) {
+            clearTimeout(pending.timer);
+        }
+        this._pendingGridPlainClickSelection = null;
+        if (apply && this.gridMode && Number.isInteger(pending.idx)) {
+            this.toggleGridImageSelect(pending.idx, pending.event || { button: 0 });
+        }
+    }
+
+    _flushPendingGridPlainClickSelection() {
+        this._clearPendingGridPlainClickSelection({ apply: true });
+    }
+
+    _scheduleGridPlainClickSelection(idx, event) {
+        this._clearPendingGridPlainClickSelection({ apply: false });
+        if (!Number.isInteger(idx)) return;
+        const eventSnapshot = {
+            button: 0,
+            ctrlKey: false,
+            metaKey: false,
+            shiftKey: false,
+        };
+        this._pendingGridPlainClickSelection = {
+            idx,
+            event: eventSnapshot,
+            timer: setTimeout(() => {
+                const pending = this._pendingGridPlainClickSelection;
+                if (!pending || pending.idx !== idx) return;
+                this._pendingGridPlainClickSelection = null;
+                if (this.gridMode) {
+                    this.toggleGridImageSelect(idx, eventSnapshot);
+                }
+            }, 260),
+        };
+    }
+
+    _restoreGridSelectionBeforeLastPrimaryClick(idx) {
+        const snapshot = this._gridSelectionBeforeLastPrimaryClick;
+        if (
+            !snapshot ||
+            snapshot.idx !== idx ||
+            performance.now() - snapshot.timestamp >= 900 ||
+            !Array.isArray(snapshot.indices)
+        ) {
+            return false;
+        }
+        const imageCount = Array.isArray(this.currentGridImages) ? this.currentGridImages.length : 0;
+        const restored = snapshot.indices
+            .filter(selIdx => Number.isInteger(selIdx) && selIdx >= 0 && selIdx < imageCount)
+            .sort((a, b) => a - b);
+        this.gridSelectedIdxs = restored;
+        this.gridSelectedSet = new Set(restored);
+        this.updateGridSelection?.();
+        this._gridSelectionBeforeLastPrimaryClick = null;
+        return true;
     }
 
     toggleGridImageSelect(idx, e) {
@@ -26861,19 +26942,8 @@ class WaferMapViewer {
     enterGridImageViewMode(idx) {
         const gridImages = Array.isArray(this.currentGridImages) ? [...this.currentGridImages] : [];
         let gridSelectedIdxs = Array.isArray(this.gridSelectedIdxs) ? [...this.gridSelectedIdxs] : [];
-        const preDblClickSelection = this._gridSelectionBeforeLastPrimaryClick;
-        if (
-            preDblClickSelection &&
-            preDblClickSelection.idx === idx &&
-            performance.now() - preDblClickSelection.timestamp < 900 &&
-            Array.isArray(preDblClickSelection.indices) &&
-            preDblClickSelection.indices.length > 0
-        ) {
-            gridSelectedIdxs = preDblClickSelection.indices
-                .filter(selIdx => Number.isInteger(selIdx) && selIdx >= 0 && selIdx < gridImages.length)
-                .sort((a, b) => a - b);
-            this.gridSelectedIdxs = [...gridSelectedIdxs];
-            this.gridSelectedSet = new Set(gridSelectedIdxs);
+        if (this._restoreGridSelectionBeforeLastPrimaryClick?.(idx)) {
+            gridSelectedIdxs = Array.isArray(this.gridSelectedIdxs) ? [...this.gridSelectedIdxs] : [];
         }
         this._gridSelectionBeforeLastPrimaryClick = null;
         const savedSnapshot = this.captureActivePageState();
@@ -29485,6 +29555,7 @@ class WaferMapViewer {
         };
         this.gridThumbRectCache = null;
         this._scheduleGridShotBoundaryOverlayRender?.(0);
+        this._scheduleGridCoordinateSelectionOverlayRender?.(0);
     }
 
     scheduleShowGrid() {
@@ -32176,22 +32247,33 @@ class WaferMapViewer {
         });
 
         const groups = new Map();
+        const chipEntries = [];
         let maxX = 0;
         let maxY = 0;
         chips.forEach((chip) => {
             const chipX = Number(chip?.x_abs ?? chip?.x);
             const chipY = Number(chip?.y_abs ?? chip?.y);
-            const layout = layoutByChip.get(`${chipX}:${chipY}`);
-            const groupKey = this._getGridShotLayoutGroupKey(layout);
             const rect = chip?.rect;
-            if (!layout || !groupKey || !rect) return;
+            if (!rect) return;
             const x0 = Number(rect.x0);
             const y0 = Number(rect.y0);
             const x1 = Number(rect.x1);
             const y1 = Number(rect.y1);
-            if (![x0, y0, x1, y1].every(Number.isFinite)) return;
+            if (![chipX, chipY, x0, y0, x1, y1].every(Number.isFinite)) return;
             maxX = Math.max(maxX, x0, x1);
             maxY = Math.max(maxY, y0, y1);
+            chipEntries.push({
+                xAbs: chipX,
+                yAbs: chipY,
+                minX: Math.min(x0, x1),
+                minY: Math.min(y0, y1),
+                width: Math.abs(x1 - x0),
+                height: Math.abs(y1 - y0),
+            });
+
+            const layout = layoutByChip.get(`${chipX}:${chipY}`);
+            const groupKey = this._getGridShotLayoutGroupKey(layout);
+            if (!layout || !groupKey) return;
 
             let group = groups.get(groupKey);
             if (!group) {
@@ -32219,6 +32301,10 @@ class WaferMapViewer {
         const data = {
             canvasWidth,
             canvasHeight,
+            chips: chipEntries.filter((chip) =>
+                [chip.minX, chip.minY, chip.width, chip.height].every(Number.isFinite) &&
+                chip.width > 0 && chip.height > 0
+            ),
             groups: Array.from(groups.values())
                 .map((group) => ({
                     ...group,
@@ -32313,6 +32399,146 @@ class WaferMapViewer {
         });
         await Promise.allSettled(wraps.map((wrap) =>
             this._renderGridShotBoundaryOverlayForWrap(wrap, requestSeq)
+        ));
+    }
+
+    _getGridCoordinateSelectionKeys() {
+        const annotator = this.chipAnnotator;
+        const keys = new Set();
+        if (!annotator?.chips?.length || !annotator?.selectedChips?.size) return keys;
+        annotator.selectedChips.forEach((index) => {
+            const chip = annotator.chips?.[index];
+            const xAbs = Number(chip?.x_abs ?? chip?.x);
+            const yAbs = Number(chip?.y_abs ?? chip?.y);
+            if (Number.isFinite(xAbs) && Number.isFinite(yAbs)) {
+                keys.add(`${xAbs}:${yAbs}`);
+            }
+        });
+        return keys;
+    }
+
+    _getGridCoordinateSelectionSourceSet() {
+        const pending = this._pendingGridRegionComposite;
+        const sourceImages = Array.isArray(pending?.sourceImages) ? pending.sourceImages : [];
+        return new Set(sourceImages
+            .map((imagePath) => this.normalizePath(imagePath))
+            .filter(Boolean));
+    }
+
+    _scheduleGridCoordinateSelectionOverlayRender(delay = 0) {
+        if (!this.gridMode) {
+            this._clearGridCoordinateSelectionOverlays();
+            return;
+        }
+        if (this._gridCoordinateSelectionRenderTimer) {
+            clearTimeout(this._gridCoordinateSelectionRenderTimer);
+        }
+        this._gridCoordinateSelectionRenderTimer = setTimeout(() => {
+            this._gridCoordinateSelectionRenderTimer = null;
+            this.renderGridCoordinateSelectionOverlays();
+        }, Math.max(0, Number(delay) || 0));
+    }
+
+    _clearGridCoordinateSelectionOverlays() {
+        if (this._gridCoordinateSelectionRenderTimer) {
+            clearTimeout(this._gridCoordinateSelectionRenderTimer);
+            this._gridCoordinateSelectionRenderTimer = null;
+        }
+        this._gridCoordinateSelectionRenderSeq += 1;
+        document.querySelectorAll('.grid-coordinate-selection-overlay').forEach((canvas) => {
+            canvas.remove();
+        });
+    }
+
+    async _renderGridCoordinateSelectionOverlayForWrap(wrap, requestSeq, selectedKeys, sourceSet) {
+        if (!wrap?.isConnected || requestSeq !== this._gridCoordinateSelectionRenderSeq) return;
+        const imagePath = wrap.dataset?.path;
+        const sourceKey = this.normalizePath(imagePath);
+        const thumbBox = wrap.querySelector('.grid-thumb-imgbox');
+        const img = wrap.querySelector('.grid-thumb-img');
+        if (!imagePath || !sourceKey || !thumbBox || !img) return;
+        if (!sourceSet.has(sourceKey)) {
+            thumbBox.querySelector('.grid-coordinate-selection-overlay')?.remove();
+            return;
+        }
+
+        let canvas = thumbBox.querySelector('.grid-coordinate-selection-overlay');
+        if (!canvas) {
+            canvas = document.createElement('canvas');
+            canvas.className = 'grid-coordinate-selection-overlay';
+            thumbBox.appendChild(canvas);
+        }
+
+        const cssWidth = Math.max(1, Math.round(thumbBox.clientWidth || img.clientWidth || 0));
+        const cssHeight = Math.max(1, Math.round(thumbBox.clientHeight || img.clientHeight || 0));
+        if (cssWidth <= 1 || cssHeight <= 1) return;
+        if (canvas.width !== cssWidth) canvas.width = cssWidth;
+        if (canvas.height !== cssHeight) canvas.height = cssHeight;
+
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, cssWidth, cssHeight);
+
+        const data = await this._getGridShotBoundaryData(imagePath);
+        if (!this.gridMode || requestSeq !== this._gridCoordinateSelectionRenderSeq || !wrap.isConnected) return;
+        if (!data?.chips?.length || !(data.canvasWidth > 0) || !(data.canvasHeight > 0)) {
+            canvas.dataset.coordinateOverlayRendered = 'false';
+            canvas.dataset.coordinateSelectedChipCount = '0';
+            canvas.dataset.coordinateOverlayPath = sourceKey;
+            return;
+        }
+
+        const scale = Math.min(cssWidth / data.canvasWidth, cssHeight / data.canvasHeight);
+        const offsetX = (cssWidth - data.canvasWidth * scale) / 2;
+        const offsetY = (cssHeight - data.canvasHeight * scale) / 2;
+        ctx.fillStyle = 'rgba(255, 216, 64, 0.35)';
+        ctx.strokeStyle = 'rgba(255, 246, 120, 0.95)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([]);
+
+        let drawn = 0;
+        data.chips.forEach((chip) => {
+            if (!selectedKeys.has(`${chip.xAbs}:${chip.yAbs}`)) return;
+            const x = offsetX + chip.minX * scale;
+            const y = offsetY + chip.minY * scale;
+            const width = Math.max(1, chip.width * scale);
+            const height = Math.max(1, chip.height * scale);
+            if (width <= 0 || height <= 0) return;
+            ctx.fillRect(x, y, width, height);
+            ctx.strokeRect(x, y, width, height);
+            drawn += 1;
+        });
+
+        canvas.dataset.coordinateOverlayRendered = drawn > 0 ? 'true' : 'false';
+        canvas.dataset.coordinateSelectedChipCount = String(drawn);
+        canvas.dataset.coordinateOverlayPath = sourceKey;
+    }
+
+    async renderGridCoordinateSelectionOverlays() {
+        if (!this.gridMode) {
+            this._clearGridCoordinateSelectionOverlays();
+            return;
+        }
+        const selectedKeys = this._getGridCoordinateSelectionKeys();
+        const sourceSet = this._getGridCoordinateSelectionSourceSet();
+        if (!selectedKeys.size || !sourceSet.size) {
+            this._clearGridCoordinateSelectionOverlays();
+            return;
+        }
+        const requestSeq = (this._gridCoordinateSelectionRenderSeq || 0) + 1;
+        this._gridCoordinateSelectionRenderSeq = requestSeq;
+        const wraps = this._getVisibleGridShotBoundaryWraps();
+        const visibleSourceWraps = wraps.filter((wrap) =>
+            sourceSet.has(this.normalizePath(wrap?.dataset?.path))
+        );
+        const visibleSet = new Set(visibleSourceWraps);
+        document.querySelectorAll('.grid-coordinate-selection-overlay').forEach((canvas) => {
+            const wrap = canvas.closest('.grid-thumb-wrap');
+            if (!visibleSet.has(wrap)) canvas.remove();
+        });
+        await Promise.allSettled(visibleSourceWraps.map((wrap) =>
+            this._renderGridCoordinateSelectionOverlayForWrap(wrap, requestSeq, selectedKeys, sourceSet)
         ));
     }
 
@@ -33153,6 +33379,7 @@ class WaferMapViewer {
             this.showToast?.('현재 wafer의 좌표 정보가 아직 준비되지 않았습니다.', 2200);
             return;
         }
+        this._scheduleGridCoordinateSelectionOverlayRender?.(0);
         if (options.openModal !== false) {
             this.openCoordinateSelectionModal();
         }
@@ -35132,6 +35359,8 @@ class WaferMapViewer {
         
         wrap.ondblclick = e => {
             e.stopPropagation();
+            this._clearPendingGridPlainClickSelection?.({ apply: false });
+            this._restoreGridSelectionBeforeLastPrimaryClick?.(idx);
             this.revertGradeSelectionIfNeeded(idx);
 
             // 🔥 스크롤 위치 미리 저장 (enterGridImageViewMode 호출 전)
@@ -35175,6 +35404,7 @@ class WaferMapViewer {
         wrap.oncontextmenu = e => {
             e.preventDefault();
             e.stopPropagation();
+            this._clearPendingGridPlainClickSelection?.({ apply: false });
             this.contextMenuJustShown = true;
             this.showContextMenu(e, idx);
         };
@@ -35202,6 +35432,8 @@ class WaferMapViewer {
             img.dataset.loading = 'false';
             img.dataset.gridLoaded = 'true';
             img.style.opacity = '1';
+            this._scheduleGridShotBoundaryOverlayRender?.(0);
+            this._scheduleGridCoordinateSelectionOverlayRender?.(0);
         };
 
         img.onerror = (e) => {

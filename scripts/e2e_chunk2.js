@@ -4025,6 +4025,11 @@ const { createRunner } = require('./e2e_playwright_session');
     await page.waitForFunction(() => window.viewer?.borderNormalize === false, null, { timeout: 10000 });
 
     await setSelection([target.index, gridCoordSecond.index]);
+    await page.evaluate((index) => {
+      document.querySelectorAll('#image-grid .grid-thumb-wrap')[index]
+        ?.scrollIntoView({ block: 'center', inline: 'nearest' });
+    }, target.index);
+    await sleep(500);
     const gridCoordBefore = await page.evaluate(() => {
       const wrapper = document.querySelector('.grid-scroll-wrapper');
       return {
@@ -4214,6 +4219,13 @@ const { createRunner } = require('./e2e_playwright_session');
       gridCoordShot.chipCount,
       { timeout: 10000 }
     ).then(() => true).catch(() => false);
+    const gridCoordOverlayReady = await page.waitForFunction(
+      (chipCount) => Array.from(document.querySelectorAll('.grid-coordinate-selection-overlay'))
+        .some((canvas) => canvas.dataset.coordinateOverlayRendered === 'true' &&
+          Number(canvas.dataset.coordinateSelectedChipCount || '0') === chipCount),
+      gridCoordShot.chipCount,
+      { timeout: 30000 }
+    ).then(() => true).catch(() => false);
     const gridCoordQuickState = await page.evaluate(() => ({
       activeList: window.viewer?.coordinateSelectionActiveList || '',
       target: window.viewer?.coordinateSelectionTarget || '',
@@ -4238,6 +4250,29 @@ const { createRunner } = require('./e2e_playwright_session');
       pendingSourceCount: window.viewer?._pendingGridRegionComposite?.sourceImages?.length || 0,
       pendingGridModeSource: window.viewer?._pendingGridRegionComposite?.gridModeSource === true,
       modalVisible: getComputedStyle(document.getElementById('chip-coordinate-select-modal')).display !== 'none',
+      coordOverlay: (() => {
+        const canvases = Array.from(document.querySelectorAll('.grid-coordinate-selection-overlay'));
+        const rendered = canvases.filter((canvas) => canvas.dataset.coordinateOverlayRendered === 'true');
+        const first = rendered[0] || null;
+        let nonTransparent = 0;
+        if (first) {
+          const ctx = first.getContext('2d');
+          if (ctx) {
+            const pixels = ctx.getImageData(0, 0, first.width, first.height).data;
+            for (let i = 3; i < pixels.length; i += 4) {
+              if (pixels[i] > 0) nonTransparent += 1;
+            }
+          }
+        }
+        return {
+          count: canvases.length,
+          renderedCount: rendered.length,
+          maxSelectedChipCount: Math.max(0, ...rendered.map((canvas) =>
+            Number(canvas.dataset.coordinateSelectedChipCount || '0'))),
+          paths: rendered.map((canvas) => canvas.dataset.coordinateOverlayPath || ''),
+          nonTransparent,
+        };
+      })(),
       gridVisibleWraps: Array.from(document.querySelectorAll('#image-grid .grid-thumb-wrap'))
         .filter((wrap) => {
           const rect = wrap.getBoundingClientRect();
@@ -4248,12 +4283,16 @@ const { createRunner } = require('./e2e_playwright_session');
         .map((input) => input.value),
     }));
     expect(gridCoordQuickReady &&
+      gridCoordOverlayReady &&
       gridCoordQuickState.gridMode &&
       (gridCoordQuickState.viewMode === null || gridCoordQuickState.viewMode === '') &&
       gridCoordQuickState.selectedPaths.length === 2 &&
       gridCoordQuickState.pendingSourceCount === 2 &&
       gridCoordQuickState.pendingGridModeSource &&
       gridCoordQuickState.modalVisible &&
+      gridCoordQuickState.coordOverlay.renderedCount > 0 &&
+      gridCoordQuickState.coordOverlay.maxSelectedChipCount === gridCoordShot.chipCount &&
+      gridCoordQuickState.coordOverlay.nonTransparent > 0 &&
       gridCoordQuickState.gridVisibleWraps > 0,
       `grid coord quick pick=${JSON.stringify(gridCoordQuickPick)} state=${JSON.stringify(gridCoordQuickState)}`);
     await page.locator('#chip-coordinate-select-close').click();
@@ -4265,6 +4304,8 @@ const { createRunner } = require('./e2e_playwright_session');
       selectedChipCount: window.viewer?.chipAnnotator?.selectedChips?.size || 0,
       shotGroupCount: window.viewer?.chipAnnotator?._getSelectedShotGroups?.().size || 0,
       pendingSourceCount: window.viewer?._pendingGridRegionComposite?.sourceImages?.length || 0,
+      coordOverlayRendered: Array.from(document.querySelectorAll('.grid-coordinate-selection-overlay'))
+        .filter((canvas) => canvas.dataset.coordinateOverlayRendered === 'true').length,
       modalHidden: getComputedStyle(document.getElementById('chip-coordinate-select-modal')).display === 'none',
     }));
     expect(gridCoordAfter.gridMode &&
@@ -4274,8 +4315,65 @@ const { createRunner } = require('./e2e_playwright_session');
       gridCoordAfter.selectedChipCount === gridCoordShot.chipCount &&
       gridCoordAfter.shotGroupCount === 1 &&
       gridCoordAfter.pendingSourceCount === 2 &&
+      gridCoordAfter.coordOverlayRendered > 0 &&
       gridCoordAfter.modalHidden,
       `grid coord after=${JSON.stringify(gridCoordAfter)}`);
+
+    const gridDblBefore = await page.evaluate(() => ({
+      selectedIdxs: [...(window.viewer?.gridSelectedIdxs || [])].sort((a, b) => a - b),
+      selectedPaths: (window.viewer?._getGridSelectedImagePaths?.() || [])
+        .map((imagePath) => String(imagePath || '').replace(/\\/g, '/'))
+        .sort(),
+      selectedWraps: Array.from(document.querySelectorAll('#image-grid .grid-thumb-wrap.selected'))
+        .map((wrap) => Number(wrap.dataset.index))
+        .sort((a, b) => a - b),
+    }));
+    await page.locator('#image-grid .grid-thumb-wrap').nth(target.index).dblclick({ delay: 30 });
+    await page.waitForFunction(
+      () => window.viewer?.viewMode === 'gridImage' || window.viewer?.singleImageFromGrid === true,
+      null,
+      { timeout: 30000 }
+    );
+    const gridDblDetail = await page.evaluate(() => ({
+      viewMode: window.viewer?.viewMode || null,
+      singleImageFromGrid: window.viewer?.singleImageFromGrid === true,
+      selectedIdxs: [...(window.viewer?.gridSelectedIdxs || [])].sort((a, b) => a - b),
+      selectedPaths: (window.viewer?._getGridSelectedImagePaths?.() || [])
+        .map((imagePath) => String(imagePath || '').replace(/\\/g, '/'))
+        .sort(),
+      savedSelectedIndices: [...(window.viewer?.savedViewState?.selectedIndices || [])].sort((a, b) => a - b),
+      savedSelectedPaths: [...(window.viewer?.savedViewState?.selectedImagePaths || [])]
+        .map((imagePath) => String(imagePath || '').replace(/\\/g, '/'))
+        .sort(),
+      gridViewSaveSelectedIndices: [...(window.viewer?.gridViewSaveState?.selectedIndices || [])].sort((a, b) => a - b),
+    }));
+    expect(
+      gridDblDetail.selectedIdxs.join(',') === gridDblBefore.selectedIdxs.join(',') &&
+        gridDblDetail.selectedPaths.join('|') === gridDblBefore.selectedPaths.join('|') &&
+        gridDblDetail.savedSelectedIndices.join(',') === gridDblBefore.selectedIdxs.join(',') &&
+        gridDblDetail.savedSelectedPaths.join('|') === gridDblBefore.selectedPaths.join('|'),
+      `grid double-click changed selection before=${JSON.stringify(gridDblBefore)} detail=${JSON.stringify(gridDblDetail)}`
+    );
+    await backToGrid();
+    const gridDblAfter = await page.evaluate(() => ({
+      gridMode: window.viewer?.gridMode === true,
+      viewMode: window.viewer?.viewMode || null,
+      selectedIdxs: [...(window.viewer?.gridSelectedIdxs || [])].sort((a, b) => a - b),
+      selectedPaths: (window.viewer?._getGridSelectedImagePaths?.() || [])
+        .map((imagePath) => String(imagePath || '').replace(/\\/g, '/'))
+        .sort(),
+      selectedWraps: Array.from(document.querySelectorAll('#image-grid .grid-thumb-wrap.selected'))
+        .map((wrap) => Number(wrap.dataset.index))
+        .sort((a, b) => a - b),
+    }));
+    expect(
+      gridDblAfter.gridMode &&
+        (gridDblAfter.viewMode === null || gridDblAfter.viewMode === '') &&
+        gridDblAfter.selectedIdxs.join(',') === gridDblBefore.selectedIdxs.join(',') &&
+        gridDblAfter.selectedPaths.join('|') === gridDblBefore.selectedPaths.join('|') &&
+        gridDblAfter.selectedWraps.join(',') === gridDblBefore.selectedWraps.join(','),
+      `grid double-click return changed selection before=${JSON.stringify(gridDblBefore)} after=${JSON.stringify(gridDblAfter)}`
+    );
 
     await boot('chunk2-selected-region-composite-after-grid-coord');
     await loadFolder(folder);
