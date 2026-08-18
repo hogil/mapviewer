@@ -4124,6 +4124,38 @@ const { createRunner } = require('./e2e_playwright_session');
       gridShotOverlay.selectedPaths.join('|') === gridShotBefore.selectedPaths.join('|') &&
       gridShotOverlay.selectedChipCount === gridShotBefore.selectedChipCount,
       `grid Shot overlay must not change wafer/coord selection before=${JSON.stringify(gridShotBefore)} after=${JSON.stringify(gridShotOverlay)}`);
+    const gridShotCanonicalEdge = await page.evaluate(async ({ imagePath }) => {
+      const data = await window.viewer?._getGridShotBoundaryData?.(imagePath);
+      const partials = (data?.groups || []).filter((group) =>
+        Number(group.fullSlotCount || 0) > Number(group.chipCount || 0)
+      );
+      const bad = partials.filter((group) =>
+        group.canonicalBoundary !== true ||
+        Math.abs(Number(group.width) - Number(group.canonicalWidth || group.width)) > 1 ||
+        Math.abs(Number(group.height) - Number(group.canonicalHeight || group.height)) > 1
+      );
+      return {
+        groupCount: data?.groups?.length || 0,
+        partialCount: partials.length,
+        canonicalPartialCount: partials.filter((group) => group.canonicalBoundary === true).length,
+        bad: bad.slice(0, 5).map((group) => ({
+          shotId: group.shotId,
+          chipCount: group.chipCount,
+          fullSlotCount: group.fullSlotCount,
+          width: group.width,
+          height: group.height,
+          canonicalWidth: group.canonicalWidth,
+          canonicalHeight: group.canonicalHeight,
+          canonicalBoundary: group.canonicalBoundary,
+        })),
+      };
+    }, { imagePath: target.imagePath });
+    expect(
+      gridShotCanonicalEdge.partialCount > 0 &&
+        gridShotCanonicalEdge.canonicalPartialCount === gridShotCanonicalEdge.partialCount &&
+        gridShotCanonicalEdge.bad.length === 0,
+      `grid edge Shot boundary must use canonical size: ${JSON.stringify(gridShotCanonicalEdge)}`
+    );
     await page.locator('#grid-shot-boundary-btn').click();
     await page.waitForFunction(
       () => window.viewer?.gridShotBoundaryVisible === false &&

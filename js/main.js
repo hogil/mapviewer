@@ -32217,6 +32217,262 @@ class WaferMapViewer {
         return shotId ? `id:${shotId}` : null;
     }
 
+    _normalizeGridFullShotType(value) {
+        const normalized = String(value ?? '').trim().toUpperCase();
+        if (normalized === 'WHOLE' || normalized === 'FULL') return 'FULL';
+        if (normalized === 'FRAGMENT' || normalized === 'PARTIAL') return 'PARTIAL';
+        return normalized;
+    }
+
+    _medianGridNumber(values) {
+        const finite = (Array.isArray(values) ? values : [])
+            .map(Number)
+            .filter(Number.isFinite)
+            .sort((a, b) => a - b);
+        if (!finite.length) return null;
+        const mid = Math.floor(finite.length / 2);
+        return finite.length % 2 ? finite[mid] : (finite[mid - 1] + finite[mid]) / 2;
+    }
+
+    _medianGridChipRectSize(entries) {
+        const widths = [];
+        const heights = [];
+        (Array.isArray(entries) ? entries : []).forEach((entry) => {
+            const width = Number(entry?.width);
+            const height = Number(entry?.height);
+            if (Number.isFinite(width) && width > 0) widths.push(width);
+            if (Number.isFinite(height) && height > 0) heights.push(height);
+        });
+        const width = this._medianGridNumber(widths);
+        const height = this._medianGridNumber(heights);
+        return Number.isFinite(width) && Number.isFinite(height) ? { width, height } : null;
+    }
+
+    _inferGridThumbnailScreenTransform(entries) {
+        const byCoord = new Map();
+        (Array.isArray(entries) ? entries : []).forEach((entry) => {
+            const centerX = Number(entry?.centerX);
+            const centerY = Number(entry?.centerY);
+            const xAbs = Number(entry?.xAbs);
+            const yAbs = Number(entry?.yAbs);
+            if (![centerX, centerY, xAbs, yAbs].every(Number.isFinite)) return;
+            byCoord.set(`${xAbs}:${yAbs}`, { ...entry, centerX, centerY, xAbs, yAbs });
+        });
+        const medianVector = (vectors) => {
+            const dx = this._medianGridNumber(vectors.map((vector) => vector.dx));
+            const dy = this._medianGridNumber(vectors.map((vector) => vector.dy));
+            return Number.isFinite(dx) && Number.isFinite(dy) ? { dx, dy } : null;
+        };
+        const xVectors = [];
+        const yVectors = [];
+        byCoord.forEach((entry) => {
+            const nextX = byCoord.get(`${entry.xAbs + 1}:${entry.yAbs}`);
+            const nextY = byCoord.get(`${entry.xAbs}:${entry.yAbs + 1}`);
+            if (nextX) xVectors.push({ dx: nextX.centerX - entry.centerX, dy: nextX.centerY - entry.centerY });
+            if (nextY) yVectors.push({ dx: nextY.centerX - entry.centerX, dy: nextY.centerY - entry.centerY });
+        });
+        const xVector = medianVector(xVectors);
+        const yVector = medianVector(yVectors);
+        const hasXVector = !!xVector;
+        const hasYVector = !!yVector;
+        const xAxis = xVector && Math.abs(xVector.dy) > Math.abs(xVector.dx) ? 'y' : 'x';
+        const yAxis = yVector && Math.abs(yVector.dx) > Math.abs(yVector.dy) ? 'x' : 'y';
+        if (xAxis === yAxis) {
+            return {
+                xAxis: 'x',
+                xSign: xVector && Math.abs(xVector.dx) > 0 ? Math.sign(xVector.dx) || 1 : 1,
+                yAxis: 'y',
+                ySign: yVector && Math.abs(yVector.dy) > 0 ? Math.sign(yVector.dy) || 1 : 1,
+                transposed: false,
+                hasXVector,
+                hasYVector,
+            };
+        }
+        return {
+            xAxis,
+            xSign: xAxis === 'x'
+                ? (Math.sign(xVector?.dx || 1) || 1)
+                : (Math.sign(xVector?.dy || 1) || 1),
+            yAxis,
+            ySign: yAxis === 'x'
+                ? (Math.sign(yVector?.dx || 1) || 1)
+                : (Math.sign(yVector?.dy || 1) || 1),
+            transposed: xAxis === 'y' && yAxis === 'x',
+            hasXVector,
+            hasYVector,
+        };
+    }
+
+    _getGridDisplayShotShape(gridShape, screenTransform) {
+        const cols = Math.max(1, Number(gridShape?.cols) || 1);
+        const rows = Math.max(1, Number(gridShape?.rows) || 1);
+        return screenTransform?.transposed ? { cols: rows, rows: cols } : { cols, rows };
+    }
+
+    _toGridDisplayShotSlot(rawSlotX, rawSlotY, geometry) {
+        if (!geometry) return null;
+        const gridCols = Math.max(1, Number(geometry.gridShape?.cols) || Number(geometry.shape?.cols) || 1);
+        const gridRows = Math.max(1, Number(geometry.gridShape?.rows) || Number(geometry.shape?.rows) || 1);
+        const transform = geometry.screenTransform || {};
+        if (transform.transposed) {
+            return {
+                slotX: transform.ySign >= 0 ? rawSlotY : gridRows - 1 - rawSlotY,
+                slotY: transform.xSign >= 0 ? rawSlotX : gridCols - 1 - rawSlotX,
+            };
+        }
+        return {
+            slotX: transform.xSign >= 0 ? rawSlotX : gridCols - 1 - rawSlotX,
+            slotY: transform.ySign >= 0 ? rawSlotY : gridRows - 1 - rawSlotY,
+        };
+    }
+
+    _getGridCanonicalShotShape(layoutRows) {
+        const groups = new Map();
+        (Array.isArray(layoutRows) ? layoutRows : []).forEach((row) => {
+            const key = this._getGridShotLayoutGroupKey(row);
+            const x = Number(row?.chip_x_pos);
+            const y = Number(row?.chip_y_pos);
+            if (!key || !Number.isInteger(x) || !Number.isInteger(y)) return;
+            let group = groups.get(key);
+            if (!group) {
+                group = { xs: [], ys: [], isFull: false };
+                groups.set(key, group);
+            }
+            group.xs.push(x);
+            group.ys.push(y);
+            if (this._normalizeGridFullShotType(row?.full_shot_type) === 'FULL') group.isFull = true;
+        });
+        const candidates = [...groups.values()].map((group) => {
+            const minX = Math.min(...group.xs);
+            const minY = Math.min(...group.ys);
+            const cols = Math.max(...group.xs) - minX + 1;
+            const rows = Math.max(...group.ys) - minY + 1;
+            const count = group.xs.length;
+            return { cols, rows, count, area: cols * rows, isFull: group.isFull, minX, minY };
+        }).filter((group) => group.cols > 0 && group.rows > 0 && group.count > 0);
+        if (!candidates.length) return null;
+        const pool = candidates.some((group) => group.isFull)
+            ? candidates.filter((group) => group.isFull)
+            : candidates;
+        const best = [...pool].sort((left, right) =>
+            right.count - left.count ||
+            right.area - left.area ||
+            left.cols - right.cols ||
+            left.rows - right.rows
+        )[0];
+        const positiveModulo = (value, size) => ((value % size) + size) % size;
+        return best ? {
+            cols: best.cols,
+            rows: best.rows,
+            slotOriginX: positiveModulo(best.minX, best.cols),
+            slotOriginY: positiveModulo(best.minY, best.rows),
+        } : null;
+    }
+
+    _getGridShotGeometry(chipEntries, layoutRows, groups) {
+        const canonicalShape = this._getGridCanonicalShotShape(layoutRows);
+        const allEntries = Array.isArray(chipEntries) ? chipEntries : [];
+        const groupList = [...(groups?.values?.() || [])].filter((group) => group.entries?.length);
+        if (!allEntries.length || !groupList.length) return null;
+        const gridCols = Math.max(1, Number(canonicalShape?.cols) || 0);
+        const gridRows = Math.max(1, Number(canonicalShape?.rows) || 0);
+        if (!gridCols || !gridRows) return null;
+        const fullSlotCount = gridCols * gridRows;
+        const referenceGroup = [...groupList].sort((left, right) => {
+            const leftFull = left.entries.length >= fullSlotCount ? 0 : 1;
+            const rightFull = right.entries.length >= fullSlotCount ? 0 : 1;
+            return leftFull - rightFull ||
+                right.entries.length - left.entries.length ||
+                String(left.shotId).localeCompare(String(right.shotId), undefined, { numeric: true });
+        })[0];
+        let screenTransform = this._inferGridThumbnailScreenTransform(referenceGroup?.entries || allEntries);
+        if ((!screenTransform?.hasXVector || !screenTransform?.hasYVector) &&
+            referenceGroup?.entries?.length !== allEntries.length) {
+            const broadTransform = this._inferGridThumbnailScreenTransform(allEntries);
+            if (broadTransform?.hasXVector && broadTransform?.hasYVector) {
+                screenTransform = broadTransform;
+            }
+        }
+        const gridShape = { cols: gridCols, rows: gridRows };
+        return {
+            gridShape,
+            shape: this._getGridDisplayShotShape(gridShape, screenTransform),
+            screenTransform,
+            slotOriginX: Number.isFinite(Number(canonicalShape?.slotOriginX)) ? Number(canonicalShape.slotOriginX) : 0,
+            slotOriginY: Number.isFinite(Number(canonicalShape?.slotOriginY)) ? Number(canonicalShape.slotOriginY) : 0,
+            fullSlotCount,
+            referenceCellSize: this._medianGridChipRectSize(referenceGroup?.entries || []) ||
+                this._medianGridChipRectSize(allEntries),
+        };
+    }
+
+    _getGridShotBoundaryRect(group, geometry) {
+        if (!group || !Array.isArray(group.entries) || !group.entries.length) return null;
+        const minX = Math.min(...group.entries.map((entry) => entry.minX));
+        const minY = Math.min(...group.entries.map((entry) => entry.minY));
+        const maxX = Math.max(...group.entries.map((entry) => entry.minX + entry.width));
+        const maxY = Math.max(...group.entries.map((entry) => entry.minY + entry.height));
+        if (![minX, minY, maxX, maxY].every(Number.isFinite)) return null;
+        const actual = {
+            minX,
+            minY,
+            maxX,
+            maxY,
+            width: maxX - minX,
+            height: maxY - minY,
+            canonicalBoundary: false,
+            fullSlotCount: Number(geometry?.fullSlotCount) || group.entries.length,
+        };
+        if (!geometry?.shape || group.entries.length >= actual.fullSlotCount) return actual;
+        const cellSize = geometry.referenceCellSize;
+        const displayCols = Math.max(1, Number(geometry.shape.cols) || 0);
+        const displayRows = Math.max(1, Number(geometry.shape.rows) || 0);
+        const gridCols = Math.max(1, Number(geometry.gridShape?.cols) || displayCols);
+        const gridRows = Math.max(1, Number(geometry.gridShape?.rows) || displayRows);
+        if (!cellSize || !displayCols || !displayRows) return actual;
+
+        const positiveModulo = (value, size) => ((value % size) + size) % size;
+        const originsX = [];
+        const originsY = [];
+        group.entries.forEach((entry) => {
+            const layoutX = Number(entry?.layout?.chip_x_pos);
+            const layoutY = Number(entry?.layout?.chip_y_pos);
+            const rawX = Number.isInteger(layoutX) ? layoutX : Number(entry?.xAbs);
+            const rawY = Number.isInteger(layoutY) ? layoutY : Number(entry?.yAbs);
+            if (!Number.isInteger(rawX) || !Number.isInteger(rawY)) return;
+            const rawSlotX = positiveModulo(rawX - geometry.slotOriginX, gridCols);
+            const rawSlotY = positiveModulo(rawY - geometry.slotOriginY, gridRows);
+            const slot = this._toGridDisplayShotSlot(rawSlotX, rawSlotY, geometry);
+            if (!slot || !Number.isFinite(entry.centerX) || !Number.isFinite(entry.centerY)) return;
+            originsX.push(entry.centerX - (slot.slotX + 0.5) * cellSize.width);
+            originsY.push(entry.centerY - (slot.slotY + 0.5) * cellSize.height);
+        });
+        const originX = this._medianGridNumber(originsX);
+        const originY = this._medianGridNumber(originsY);
+        if (!Number.isFinite(originX) || !Number.isFinite(originY)) return actual;
+        const nominal = {
+            minX: originX,
+            minY: originY,
+            maxX: originX + displayCols * cellSize.width,
+            maxY: originY + displayRows * cellSize.height,
+            width: displayCols * cellSize.width,
+            height: displayRows * cellSize.height,
+            canonicalBoundary: true,
+            fullSlotCount: actual.fullSlotCount,
+            canonicalWidth: displayCols * cellSize.width,
+            canonicalHeight: displayRows * cellSize.height,
+        };
+        const eps = Math.max(1, Math.min(cellSize.width, cellSize.height) * 0.2);
+        return nominal.minX <= actual.minX + eps &&
+            nominal.minY <= actual.minY + eps &&
+            nominal.maxX >= actual.maxX - eps &&
+            nominal.maxY >= actual.maxY - eps &&
+            nominal.width > 0 &&
+            nominal.height > 0
+            ? nominal
+            : actual;
+    }
+
     async _getGridShotBoundaryData(imagePath) {
         const cacheKey = this.normalizePath(imagePath);
         if (!cacheKey) return null;
@@ -32269,11 +32525,15 @@ class WaferMapViewer {
                 minY: Math.min(y0, y1),
                 width: Math.abs(x1 - x0),
                 height: Math.abs(y1 - y0),
+                centerX: (x0 + x1) / 2,
+                centerY: (y0 + y1) / 2,
             });
+            const chipEntry = chipEntries[chipEntries.length - 1];
 
             const layout = layoutByChip.get(`${chipX}:${chipY}`);
             const groupKey = this._getGridShotLayoutGroupKey(layout);
             if (!layout || !groupKey) return;
+            chipEntry.layout = layout;
 
             let group = groups.get(groupKey);
             if (!group) {
@@ -32285,6 +32545,7 @@ class WaferMapViewer {
                     maxX: -Infinity,
                     maxY: -Infinity,
                     chipCount: 0,
+                    entries: [],
                 };
                 groups.set(groupKey, group);
             }
@@ -32293,6 +32554,23 @@ class WaferMapViewer {
             group.maxX = Math.max(group.maxX, x0, x1);
             group.maxY = Math.max(group.maxY, y0, y1);
             group.chipCount += 1;
+            group.entries.push(chipEntry);
+        });
+
+        const shotGeometry = this._getGridShotGeometry(chipEntries, rows, groups);
+        groups.forEach((group) => {
+            const boundary = this._getGridShotBoundaryRect(group, shotGeometry);
+            if (!boundary) return;
+            group.minX = boundary.minX;
+            group.minY = boundary.minY;
+            group.maxX = boundary.maxX;
+            group.maxY = boundary.maxY;
+            group.canonicalBoundary = boundary.canonicalBoundary === true;
+            group.fullSlotCount = boundary.fullSlotCount;
+            group.canonicalWidth = boundary.canonicalWidth;
+            group.canonicalHeight = boundary.canonicalHeight;
+            maxX = Math.max(maxX, boundary.maxX);
+            maxY = Math.max(maxY, boundary.maxY);
         });
 
         const canvasInfo = positions?.coord?.canvas || {};
@@ -32301,13 +32579,31 @@ class WaferMapViewer {
         const data = {
             canvasWidth,
             canvasHeight,
-            chips: chipEntries.filter((chip) =>
-                [chip.minX, chip.minY, chip.width, chip.height].every(Number.isFinite) &&
-                chip.width > 0 && chip.height > 0
-            ),
+            chips: chipEntries
+                .filter((chip) =>
+                    [chip.minX, chip.minY, chip.width, chip.height].every(Number.isFinite) &&
+                    chip.width > 0 && chip.height > 0
+                )
+                .map((chip) => ({
+                    xAbs: chip.xAbs,
+                    yAbs: chip.yAbs,
+                    minX: chip.minX,
+                    minY: chip.minY,
+                    width: chip.width,
+                    height: chip.height,
+                })),
             groups: Array.from(groups.values())
                 .map((group) => ({
-                    ...group,
+                    shotId: group.shotId,
+                    minX: group.minX,
+                    minY: group.minY,
+                    maxX: group.maxX,
+                    maxY: group.maxY,
+                    chipCount: group.chipCount,
+                    fullSlotCount: group.fullSlotCount || group.chipCount,
+                    canonicalBoundary: group.canonicalBoundary === true,
+                    canonicalWidth: group.canonicalWidth,
+                    canonicalHeight: group.canonicalHeight,
                     width: group.maxX - group.minX,
                     height: group.maxY - group.minY,
                 }))

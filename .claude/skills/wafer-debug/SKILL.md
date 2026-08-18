@@ -215,10 +215,10 @@ argument-hint: [증상-설명]
 
 ### Grid Shot thumbnail overlay separation (2026-08-18)
 
-- 증상: grid mode의 `Shot` 버튼을 눌렀을 때 썸네일 위 Shot 경계만 보여야 하는데, 선택 wafer를 열거나 Coord/Shot Composite selection 흐름처럼 동작한다.
-- 원인 후보: `#grid-shot-boundary-btn`가 `openGridCoordinateSelection()`을 호출하면 grid thumbnail overlay와 coordinate modal 진입이 섞인다. 한 row/column Shot 구조에서는 기준 Shot만으로 screen transform을 추론해 회전/전치 방향이 틀릴 수 있다.
-- 수정 패턴: grid Shot은 `gridShotBoundaryVisible`과 `.grid-shot-boundary-overlay` canvas만 토글한다. `gridSelectedIdxs`, selected wafer paths, `viewMode`, `selectedImagePath`, coordinate modal display, chip selection은 그대로 둔다. Coord 버튼만 coordinate modal/representative wafer 진입을 담당한다. 기준 Shot에 한 축 벡터가 없으면 전체 chip entries로 `ChipAnnotator` screen transform을 보강한다.
-- E2E 신호: `selected-region-composite`는 grid Shot 클릭 전후 선택/grid/modal 상태 불변과 실제 overlay canvas nontransparent pixel을 확인한다. `scripts/e2e_shot_100_products_guard.js`는 `1×2`, `2×1`을 포함한 100개 synthetic product의 shape/rotation/chip-count coverage를 확인한다.
+- 증상: grid mode의 `Shot` 버튼을 눌렀을 때 썸네일 위 Shot 경계만 보여야 하는데, 선택 wafer를 열거나 Coord/Shot Composite selection 흐름처럼 동작한다. single image에서는 정상인 edge partial Shot 크기가 grid thumbnail에서만 작게 보일 수 있다.
+- 원인 후보: `#grid-shot-boundary-btn`가 `openGridCoordinateSelection()`을 호출하면 grid thumbnail overlay와 coordinate modal 진입이 섞인다. 한 row/column Shot 구조에서는 기준 Shot만으로 screen transform을 추론해 회전/전치 방향이 틀릴 수 있다. grid thumbnail data가 edge partial Shot을 실제 chip rect min/max로만 만들고, canonical full Shot shape/cell size를 복원하지 않을 수 있다.
+- 수정 패턴: grid Shot은 `gridShotBoundaryVisible`과 `.grid-shot-boundary-overlay` canvas만 토글한다. `gridSelectedIdxs`, selected wafer paths, `viewMode`, `selectedImagePath`, coordinate modal display, chip selection은 그대로 둔다. 기준 Shot에 한 축 벡터가 없으면 전체 chip entries로 `ChipAnnotator` screen transform을 보강한다. edge partial Shot은 layout `FULL` Shot에서 canonical cols/rows와 slot origin을 잡고, thumbnail positions rect cell size로 full Shot 크기 boundary를 그린다.
+- E2E 신호: `selected-region-composite`는 grid Shot 클릭 전후 선택/grid/modal 상태 불변과 실제 overlay canvas nontransparent pixel을 확인한다. 같은 record는 partial edge Shot group이 `canonicalBoundary=true`이고 width/height가 canonical width/height와 같은지 확인한다. `scripts/e2e_shot_100_products_guard.js`는 `1×2`, `2×1`을 포함한 100개 synthetic product의 shape/rotation/chip-count coverage를 확인한다.
 
 ### Grid Coord all-loaded source and coordinate-list sync (2026-08-18)
 
