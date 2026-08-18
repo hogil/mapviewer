@@ -1534,7 +1534,7 @@ export class ChipAnnotator {
 
             // 🎨 positions 로드 후 즉시 렌더링 (hover, grid 등 표시)
             // 오버레이 모드 재적용은 main.js의 _reapplyOverlayAfterPositionsLoad()에서 처리
-            this.render();
+            if (options?.render !== false) this.render();
 
             return true;
         } catch (error) {

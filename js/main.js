@@ -800,7 +800,6 @@ class WaferMapViewer {
             coordinateSelectModal: document.getElementById('chip-coordinate-select-modal'),
             coordinateSelectClose: document.getElementById('chip-coordinate-select-close'),
             coordinateSelectCancel: document.getElementById('chip-coordinate-select-cancel'),
-            coordinateSelectComposite: document.getElementById('chip-coordinate-select-composite'),
             coordinateSelectApply: document.getElementById('chip-coordinate-select-apply'),
             coordinateSelectHint: document.getElementById('chip-coordinate-select-hint'),
             coordinateSelectSummary: document.getElementById('chip-coordinate-select-summary'),
@@ -9089,95 +9088,15 @@ class WaferMapViewer {
         }[char]));
     }
 
-    _getSelectedRegionCompositeOptions(selectedChips = null) {
-        const annotator = this.chipAnnotator;
-        if (!annotator) return null;
-        const chips = Array.isArray(selectedChips) && selectedChips.length
-            ? selectedChips
-            : Array.from(annotator.selectedChips || [])
-                .map((index) => annotator.chips?.[index])
-                .filter(Boolean);
-        const selectedSnapshot = [...new Map(
-            chips
-                .map((chip) => ({
-                    x_abs: Number(chip?.x_abs),
-                    y_abs: Number(chip?.y_abs),
-                }))
-                .filter((chip) => Number.isFinite(chip.x_abs) && Number.isFinite(chip.y_abs))
-                .map((chip) => [`${chip.x_abs}:${chip.y_abs}`, chip])
-        ).values()];
-        if (!selectedSnapshot.length) return null;
-
-        const requestedMode = annotator.selectionMode === 'shot' ? 'shot' : 'chip';
-        const shotShape = annotator.getShotGridShape?.() || annotator.getShotCompositeGridShape?.();
-        const selectedShotGroups = requestedMode === 'shot'
-            ? [...(annotator.getSelectedShotGroupSelections?.() || annotator._getSelectedShotGroups?.() || [])]
-                .map((group) => {
-                    const groupChips = Array.isArray(group?.selectedChips) ? group.selectedChips : group?.chips;
-                    return {
-                        shot_id: String(group?.shotId ?? '').trim(),
-                        chip_coords: (Array.isArray(groupChips) ? groupChips : [])
-                            .map((chip) => {
-                                const x = Number(chip?.x_abs);
-                                const y = Number(chip?.y_abs);
-                                const slotInfo = annotator._getShotGridSlotInfo?.(chip, shotShape) ||
-                                    annotator._getShotRawGridSlotInfo?.(chip, shotShape);
-                                return {
-                                    x_abs: x,
-                                    y_abs: y,
-                                    ...(slotInfo ? { slot_x: slotInfo.slotX, slot_y: slotInfo.slotY } : {}),
-                                };
-                            })
-                            .filter((chip) => Number.isFinite(chip.x_abs) && Number.isFinite(chip.y_abs)),
-                        ...(shotShape ? { shot_shape: shotShape } : {}),
-                    };
-                })
-                .filter((group) => group.shot_id && group.chip_coords.length > 0)
-            : [];
-        const selectionMode = requestedMode === 'shot' && selectedShotGroups.length > 0 ? 'shot' : 'chip';
-        const selectedUnit = selectionMode === 'shot' ? 'Shot' : 'Chip';
-        const selectedUnitCount = selectionMode === 'shot' ? selectedShotGroups.length : selectedSnapshot.length;
-        return {
-            selectedChips: selectedSnapshot,
-            selectionMode,
-            selectedShotGroups: selectionMode === 'shot' ? selectedShotGroups : [],
-            selectedUnit,
-            selectedUnitCount,
-        };
-    }
-
-    _syncCoordinateCompositeButtonState() {
-        const button = this.dom?.coordinateSelectComposite;
-        if (!button) return;
-        const options = this._getSelectedRegionCompositeOptions();
-        if (!options) {
-            button.disabled = true;
-            button.textContent = 'Shot Composite';
-            button.title = '';
-            delete button.dataset.selectionMode;
-            return;
-        }
-        const pending = this._pendingGridRegionComposite;
-        const sourceCount = Array.isArray(pending?.sourceImages) ? pending.sourceImages.length : 1;
-        button.disabled = false;
-        button.textContent = `${options.selectedUnit} Composite`;
-        button.dataset.selectionMode = options.selectionMode;
-        button.title = `${sourceCount} wafer · ${options.selectedUnitCount} ${options.selectedUnit}`;
-    }
-
     _updateCoordinateSelectionSummary() {
         const summary = this.dom?.coordinateSelectSummary;
         const annotator = this.chipAnnotator;
-        if (!summary || !annotator) {
-            this._syncCoordinateCompositeButtonState();
-            return;
-        }
+        if (!summary || !annotator) return;
         const selectedIndices = Array.from(annotator.selectedChips || []).filter((index) => annotator.chips?.[index]);
         const shotGroups = [...(annotator._getSelectedShotGroups?.() || [])];
         if (!selectedIndices.length) {
             summary.textContent = 'Yld - · G 0/B 0';
             summary.title = 'No selected chips';
-            this._syncCoordinateCompositeButtonState();
             return;
         }
         const selectedChips = selectedIndices.map((index) => annotator.chips[index]).filter(Boolean);
@@ -9205,7 +9124,6 @@ class WaferMapViewer {
             annotator.formatSelectionYieldBreakdownTitle?.(breakdown.shotGroups, 'Shot Yld') || shotYieldLine,
             annotator.formatSelectionYieldBreakdownTitle?.(breakdown.shotPositionGroups, 'Shot Pos Yld') || positionYieldLine,
         ].join('\n');
-        this._syncCoordinateCompositeButtonState();
     }
 
     _renderCoordinateSelectionShotPicker() {
@@ -10996,9 +10914,6 @@ class WaferMapViewer {
         dom.coordinateSelectListPanels?.addEventListener('paste', (event) => this._handleCoordinateSelectionListPaste(event));
         dom.coordinateSelectClose?.addEventListener('click', () => this.closeCoordinateSelectionModal());
         dom.coordinateSelectCancel?.addEventListener('click', () => this.closeCoordinateSelectionModal());
-        dom.coordinateSelectComposite?.addEventListener('click', () => {
-            void this.createCompositeFromCoordinateSelection();
-        });
         dom.coordinateSelectApply?.addEventListener('click', () => this.applyCoordinateSelection());
         dom.coordinateSelectRangeEnabled?.addEventListener('change', () => {
             this.coordinateSelectionRange.enabled = !!dom.coordinateSelectRangeEnabled.checked;
@@ -11280,41 +11195,6 @@ class WaferMapViewer {
             }
         };
         document.addEventListener('keydown', this.coordinateSelectionEscapeHandler, true);
-    }
-
-    async createCompositeFromCoordinateSelection() {
-        const button = this.dom?.coordinateSelectComposite;
-        if (this.coordinateSelectionLiveTimer) {
-            clearTimeout(this.coordinateSelectionLiveTimer);
-            this.coordinateSelectionLiveTimer = null;
-        }
-        if (this.isCoordinateSelectionOpen) {
-            this._applyCoordinateSelectionLive({ forceClear: true });
-        }
-        if (this.dom?.coordinateSelectError?.textContent) {
-            this._syncCoordinateCompositeButtonState();
-            return;
-        }
-
-        this._ensureGridImageCoordinateCompositeSource?.();
-        const options = this._getSelectedRegionCompositeOptions();
-        if (!options) {
-            this._setCoordinateSelectionError('Composite Map을 만들 Shot 또는 Chip을 선택하세요.');
-            this._syncCoordinateCompositeButtonState();
-            return;
-        }
-
-        if (button) button.disabled = true;
-        this.closeCoordinateSelectionModal();
-        try {
-            await this.handleCompositeCreate({
-                selectedChips: options.selectedChips,
-                selectionMode: options.selectionMode,
-                selectedShotGroups: options.selectedShotGroups,
-            });
-        } finally {
-            this._syncCoordinateCompositeButtonState();
-        }
     }
 
     async applyCoordinateSelection() {
@@ -12675,7 +12555,8 @@ class WaferMapViewer {
         const pendingGridRegion = hasRegionSelection && this._pendingGridRegionComposite &&
             Array.isArray(this._pendingGridRegionComposite.sourceImages) &&
             this._pendingGridRegionComposite.sourceImages.length > 0 &&
-            (!this._pendingGridRegionComposite.targetPath ||
+            (this._pendingGridRegionComposite.gridModeSource === true ||
+                !this._pendingGridRegionComposite.targetPath ||
                 this.normalizePath(this._pendingGridRegionComposite.targetPath) === this.normalizePath(this.selectedImagePath))
             ? this._pendingGridRegionComposite
             : null;
@@ -33197,6 +33078,27 @@ class WaferMapViewer {
         return false;
     }
 
+    async _prepareGridCoordinateSelectionTarget(targetPath) {
+        const path = String(targetPath || '').trim();
+        if (!path) return false;
+        const annotator = await this._getChipAnnotator?.();
+        if (!annotator) return false;
+        const requestId = (this._gridCoordinatePrepareRequestId || 0) + 1;
+        this._gridCoordinatePrepareRequestId = requestId;
+        const isStale = () => this._gridCoordinatePrepareRequestId !== requestId;
+
+        annotator.clearSelection?.(false);
+        annotator.clearLayoutData?.({ resetVisibility: false });
+        const loaded = await annotator.loadPositions(path, { loadAnnotations: false, render: false });
+        if (!loaded || isStale()) return false;
+        await this._loadLayoutForImage(path, null, isStale);
+        if (isStale()) return false;
+        annotator.clearSelection?.(false);
+        this._gridCoordinateTargetPath = path;
+        return Array.isArray(annotator.chips) && annotator.chips.length > 0 &&
+            annotator.shotBoundaryGroups?.size > 0;
+    }
+
     async openGridCoordinateSelection(options = {}) {
         if (!this.gridMode) {
             if (options.showShotBoundary && this.chipAnnotator) {
@@ -33235,6 +33137,7 @@ class WaferMapViewer {
         this._pendingGridRegionComposite = {
             sourceImages: [...dedupedSourcePaths],
             targetPath: imageList[targetIndex],
+            gridModeSource: true,
             selectedOnly: selectedPaths.length > 0,
             startedAt: Date.now(),
         };
@@ -33244,15 +33147,11 @@ class WaferMapViewer {
                 : `로드된 wafer ${dedupedSourcePaths.length}개 기준 Coord 선택`,
             1800
         );
-        this.enterGridImageViewMode(targetIndex);
 
-        const ready = await this._waitForGridCoordinateTargetReady();
+        const ready = await this._prepareGridCoordinateSelectionTarget(imageList[targetIndex]);
         if (!ready) {
             this.showToast?.('현재 wafer의 좌표 정보가 아직 준비되지 않았습니다.', 2200);
             return;
-        }
-        if (options.showShotBoundary && this.chipAnnotator && !this.chipAnnotator.shotBoundaryVisible) {
-            this.chipAnnotator.setShotBoundaryVisible(true);
         }
         if (options.openModal !== false) {
             this.openCoordinateSelectionModal();
