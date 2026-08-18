@@ -2945,6 +2945,52 @@ def _compute_maps_from_counts(
     return square_mean_map, weighted_map, calc_mask, weighted_mask
 
 
+def _save_shot_local_square_weighted_map(
+    output_dir: Path,
+    palette_list: Optional[Sequence[int]],
+    invalid_mask: Optional[np.ndarray],
+    base_indices: np.ndarray,
+    idx_8_mask: Optional[np.ndarray],
+    scheme: Optional[str],
+    grade_counts: np.ndarray,
+    only_low_mask: Optional[np.ndarray],
+    image_count: int,
+) -> List[Dict[str, str]]:
+    selected_grades = list(range(min(int(grade_counts.shape[0]), 8)))
+    _square_mean_map, weighted_map, _calc_mask, weighted_mask = _compute_maps_from_counts(
+        grade_counts=grade_counts,
+        selected_grades=selected_grades,
+        invalid_mask=invalid_mask,
+        idx_8_mask=idx_8_mask,
+        only_low_mask=only_low_mask,
+        image_count=image_count,
+    )
+
+    palette = _build_palette_list(palette_list)
+    sum_palette = _build_sum_map_palette(palette, gradient_scheme="default")
+    target = output_dir / "shot_local_square_weighted_average.png"
+    vmin, vmax = _value_range_for_map(weighted_map, weighted_mask, clamp_min_to_zero=True)
+    idx_arr = _render_sum_map_palette(
+        base_indices=base_indices,
+        value_map=weighted_map,
+        mask=weighted_mask,
+        value_min=vmin,
+        value_max=vmax,
+    )
+    actual_path, rel_path = _save_palette_png(idx_arr, sum_palette, target)
+    _save_gradient_stats(
+        output_dir,
+        [(actual_path.name, "shot_local_weighted_square_mean", "Shot-local Square Weighted Avg", weighted_map, weighted_mask)],
+        {0: (vmin, vmax)},
+    )
+    return [{
+        "path": rel_path,
+        "type": "shot_local_weighted_square_mean",
+        "display_name": "Shot-local Square Weighted Avg",
+        "filename": actual_path.name,
+    }]
+
+
 def create_composite_heatmaps(
     image_paths: List[str],
     indices: List[int] = None,
@@ -2956,6 +3002,7 @@ def create_composite_heatmaps(
     login_id: Optional[str] = None,
     selected_chip_coords: Optional[Sequence[Tuple[int, int]]] = None,
     selected_shot_groups: Optional[Sequence[Dict[str, Any]]] = None,
+    shot_local_square_weighted: bool = False,
 ) -> Dict[str, Any]:
     start_time = time.perf_counter()
     trace = _trace_enabled()
@@ -3267,6 +3314,7 @@ def create_composite_heatmaps(
 
     # 공유 palette array for sum map 렌더링 (개인색 적용)
     _palette_rgb = np.array(palette_bytes, dtype=np.uint8).reshape(256, 3) if palette_bytes else None
+    del _palette_rgb
 
     # 🔥 사전 계산: 각 grade의 최종 마스크 (invalid 제외, chip_inner만)
     _heatmap_masks = []
@@ -3317,33 +3365,49 @@ def create_composite_heatmaps(
     valid_indices = [idx for idx in indices if idx < 8]
     sum_map_entries: List[Dict[str, str]] = []
     sum_map_rel_path = None
+    shot_local_square_weighted = bool(shot_local_square_weighted and shot_geometry)
 
-    with ThreadPoolExecutor(max_workers=min(len(valid_indices), 8) + 1) as pool:
-        # heatmap 작업 제출
-        hm_futures = [pool.submit(_save_heatmap_task, idx) for idx in valid_indices]
+    if shot_local_square_weighted:
+        sum_map_entries = _save_shot_local_square_weighted_map(
+            output_dir=output_dir,
+            palette_list=palette_bytes,
+            invalid_mask=invalid_mask,
+            base_indices=base_indices,
+            idx_8_mask=idx_8_13_only,
+            scheme=scheme,
+            grade_counts=grade_counts,
+            only_low_mask=chip_inner_mask,
+            image_count=composite_sample_count,
+        )
+        if sum_map_entries:
+            sum_map_rel_path = sum_map_entries[0]["path"]
+    else:
+        with ThreadPoolExecutor(max_workers=min(len(valid_indices), 8) + 1) as pool:
+            # heatmap 작업 제출
+            hm_futures = [pool.submit(_save_heatmap_task, idx) for idx in valid_indices]
 
-        # sum map 작업도 같은 풀에 제출 (heatmap과 동시 실행)
-        sum_future = None
-        if create_sum:
-            sum_future = pool.submit(
-                _save_sum_map_variants,
-                None, output_dir, palette_bytes,
-                invalid_mask, base_indices, idx_8_13_only, scheme,
-                "", False, grade_counts, chip_inner_mask, None, composite_sample_count,
-            )
+            # sum map 작업도 같은 풀에 제출 (heatmap과 동시 실행)
+            sum_future = None
+            if create_sum:
+                sum_future = pool.submit(
+                    _save_sum_map_variants,
+                    None, output_dir, palette_bytes,
+                    invalid_mask, base_indices, idx_8_13_only, scheme,
+                    "", False, grade_counts, chip_inner_mask, None, composite_sample_count,
+                )
 
-        # heatmap 결과 수집
-        for future in hm_futures:
-            res = future.result()
-            if res:
-                heatmap_times.append(res.pop("heatmap_time"))
-                heatmaps.append(res)
+            # heatmap 결과 수집
+            for future in hm_futures:
+                res = future.result()
+                if res:
+                    heatmap_times.append(res.pop("heatmap_time"))
+                    heatmaps.append(res)
 
-        # sum map 결과 수집
-        if sum_future:
-            sum_map_entries = sum_future.result()
-            if sum_map_entries:
-                sum_map_rel_path = sum_map_entries[0]["path"]
+            # sum map 결과 수집
+            if sum_future:
+                sum_map_entries = sum_future.result()
+                if sum_map_entries:
+                    sum_map_rel_path = sum_map_entries[0]["path"]
 
     _mark("save_heatmaps_and_sum_maps", t)
 
@@ -3440,6 +3504,8 @@ def create_composite_heatmaps(
         result["selected_source_chip_count"] = shot_geometry["source_chip_count"]
         result["selected_missing_chip_count"] = shot_geometry["missing_chip_count"]
         result["selected_shot_shape"] = shot_geometry["shot_shape"]
+    if shot_local_square_weighted:
+        result["shot_local_square_weighted"] = True
     if sum_map_rel_path:
         result["sum_map_path"] = sum_map_rel_path
     if sum_map_entries:

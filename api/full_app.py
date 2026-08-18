@@ -10877,6 +10877,7 @@ class CompositeMapRequest(BaseModel):
     selection_mode: Optional[Literal["chip", "shot"]] = None
     selected_chip_coords: Optional[List[ChipCoord]] = None
     selected_shot_groups: Optional[List[CompositeShotGroup]] = None
+    shot_local_square_weighted: bool = False
 
 
 async def run_composite_map_task(
@@ -11219,6 +11220,9 @@ async def create_composite_map_endpoint(
             for coord in payload.selected_chip_coords
         ]
 
+    if payload.shot_local_square_weighted and not payload.selected_shot_groups:
+        raise HTTPException(status_code=400, detail="Shot-local Square Weighted Composite에는 selected_shot_groups가 필요합니다.")
+
     if payload.selected_shot_groups is not None:
         if payload.palette_mode:
             raise HTTPException(status_code=400, detail="선택 영역 Composite는 heatmap 모드만 지원합니다.")
@@ -11350,6 +11354,7 @@ async def create_composite_map_endpoint(
                     login_id=login_id,
                     selected_chip_coords=selected_chip_coords,
                     selected_shot_groups=selected_shot_groups,
+                    shot_local_square_weighted=payload.shot_local_square_weighted,
                 )
                 result = task_fn()
 
@@ -11374,6 +11379,8 @@ async def create_composite_map_endpoint(
                     response["timings"] = result["timings"]
                 if "numba" in result:
                     response["numba"] = result["numba"]
+                if result.get("shot_local_square_weighted"):
+                    response["shot_local_square_weighted"] = True
                 if selected_chip_coords or selected_shot_groups:
                     response["selection_mode"] = payload.selection_mode or "chip"
                     response["selected_chip_count"] = result.get(

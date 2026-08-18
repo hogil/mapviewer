@@ -4366,12 +4366,15 @@ const { createRunner } = require('./e2e_playwright_session');
     const gridContextShotComposite = await page.evaluate(() => {
       const v = window.viewer;
       const item = document.getElementById('grid-selected-region-composite-create');
+      const specialItem = document.getElementById('grid-shot-local-square-weighted-create');
+      const chipItem = document.getElementById('grid-chip-composite-create');
       const original = v?.handleCompositeCreate;
       let captured = null;
       if (v && item && typeof original === 'function') {
         v.handleCompositeCreate = (options = {}) => {
           captured = {
             selectionMode: options.selectionMode || '',
+            shotLocalSquareWeighted: options.shotLocalSquareWeighted === true,
             selectedChipCount: Array.isArray(options.selectedChips) ? options.selectedChips.length : 0,
             sourceCount: Array.isArray(options.sourceImages) ? options.sourceImages.length : 0,
             shotGroupCount: Array.isArray(options.selectedShotGroups) ? options.selectedShotGroups.length : 0,
@@ -4393,6 +4396,10 @@ const { createRunner } = require('./e2e_playwright_session');
         exists: !!item,
         text: item?.textContent?.trim() || '',
         visible: !!item && getComputedStyle(item).display !== 'none',
+        specialText: specialItem?.textContent?.trim() || '',
+        specialVisible: !!specialItem && getComputedStyle(specialItem).display !== 'none',
+        chipText: chipItem?.textContent?.trim() || '',
+        chipVisible: !!chipItem && getComputedStyle(chipItem).display !== 'none',
         captured,
         menuHidden: getComputedStyle(document.getElementById('grid-context-menu')).display === 'none',
       };
@@ -4406,8 +4413,63 @@ const { createRunner } = require('./e2e_playwright_session');
       gridContextShotComposite.captured?.shotGroupCount === 1 &&
       gridContextShotComposite.captured?.firstShotChipCount === gridCoordShot.chipCount &&
       gridContextShotComposite.captured?.firstShotHasSlots === true &&
+      gridContextShotComposite.captured?.shotLocalSquareWeighted === false &&
+      gridContextShotComposite.specialVisible &&
+      gridContextShotComposite.specialText.includes('Shot-local Square Weighted Avg 만들기') &&
+      gridContextShotComposite.chipVisible &&
+      gridContextShotComposite.chipText.includes('선택 Chip Composite Map 만들기') &&
       gridContextShotComposite.menuHidden,
       `grid context selected shot composite=${JSON.stringify(gridContextShotComposite)}`);
+
+    await page.locator('#image-grid .grid-thumb-wrap').nth(target.index).click({ button: 'right' });
+    await page.waitForFunction(
+      () => {
+        const menu = document.getElementById('grid-context-menu');
+        const item = document.getElementById('grid-shot-local-square-weighted-create');
+        return menu && item &&
+          getComputedStyle(menu).display !== 'none' &&
+          getComputedStyle(item).display !== 'none';
+      },
+      null,
+      { timeout: 10000 }
+    );
+    const gridContextShotLocalWeighted = await page.evaluate(() => {
+      const v = window.viewer;
+      const item = document.getElementById('grid-shot-local-square-weighted-create');
+      const original = v?.handleCompositeCreate;
+      let captured = null;
+      if (v && item && typeof original === 'function') {
+        v.handleCompositeCreate = (options = {}) => {
+          captured = {
+            selectionMode: options.selectionMode || '',
+            shotLocalSquareWeighted: options.shotLocalSquareWeighted === true,
+            selectedChipCount: Array.isArray(options.selectedChips) ? options.selectedChips.length : 0,
+            sourceCount: Array.isArray(options.sourceImages) ? options.sourceImages.length : 0,
+            shotGroupCount: Array.isArray(options.selectedShotGroups) ? options.selectedShotGroups.length : 0,
+          };
+        };
+        try {
+          item.click();
+        } finally {
+          v.handleCompositeCreate = original;
+        }
+      }
+      return {
+        exists: !!item,
+        text: item?.textContent?.trim() || '',
+        captured,
+        menuHidden: getComputedStyle(document.getElementById('grid-context-menu')).display === 'none',
+      };
+    });
+    expect(gridContextShotLocalWeighted.exists &&
+      gridContextShotLocalWeighted.text.includes('Shot-local Square Weighted Avg 만들기') &&
+      gridContextShotLocalWeighted.captured?.selectionMode === 'shot' &&
+      gridContextShotLocalWeighted.captured?.shotLocalSquareWeighted === true &&
+      gridContextShotLocalWeighted.captured?.selectedChipCount === gridCoordShot.chipCount &&
+      gridContextShotLocalWeighted.captured?.sourceCount === 2 &&
+      gridContextShotLocalWeighted.captured?.shotGroupCount === 1 &&
+      gridContextShotLocalWeighted.menuHidden,
+      `grid context shot-local weighted=${JSON.stringify(gridContextShotLocalWeighted)}`);
 
     const gridDblBefore = await page.evaluate(() => ({
       selectedIdxs: [...(window.viewer?.gridSelectedIdxs || [])].sort((a, b) => a - b),

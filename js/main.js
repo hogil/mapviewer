@@ -12140,6 +12140,8 @@ class WaferMapViewer {
             shotShape: result.selected_shot_shape || null,
             compositeSampleCount: result.composite_sample_count || null,
             selectionCrop: result.selection_crop || null,
+            shotLocalSquareWeighted: result.shot_local_square_weighted === true ||
+                this.lastCompositeSelection?.shotLocalSquareWeighted === true,
             sumMaps: [],
         };
         this.lastCompositeSourceImages = sourceImages;
@@ -12510,6 +12512,7 @@ class WaferMapViewer {
 
         const hasRegionSelection = Array.isArray(options.selectedChips) || Array.isArray(options.selectedShotGroups);
         const selectionMode = options.selectionMode === 'shot' ? 'shot' : 'chip';
+        const shotLocalSquareWeighted = options.shotLocalSquareWeighted === true && selectionMode === 'shot';
         const selectedShotGroups = selectionMode === 'shot' && Array.isArray(options.selectedShotGroups)
             ? options.selectedShotGroups
                 .map((group) => {
@@ -12597,13 +12600,15 @@ class WaferMapViewer {
         const previousPageState = this.captureActivePageState();
         this.lastCompositeSourceImages = [...selected];
         this.lastCompositeSelection = hasRegionSelection
-            ? { mode: selectionMode, chipCoords: selectedChipCoords, shotGroups: selectedShotGroups }
+            ? { mode: selectionMode, chipCoords: selectedChipCoords, shotGroups: selectedShotGroups, shotLocalSquareWeighted }
             : null;
         this.clearGridSelectionMarks({ hidePanel: true, updateContext: false });
         this._resetContextCompositeChecks();
 
         const selectionLabel = hasRegionSelection
-            ? `선택 ${selectionMode === 'shot' ? 'Shot' : 'Chip'} (${selectionMode === 'shot' && selectedShotGroups.length > 0 ? selectedShotGroups.length : selectedChipCoords.length}개, ${selectedChipCoords.length}개 Chip)`
+            ? shotLocalSquareWeighted
+                ? `Shot-local Square Weighted (${selectedShotGroups.length}개 Shot, ${selected.length}개 wafer)`
+                : `선택 ${selectionMode === 'shot' ? 'Shot' : 'Chip'} (${selectionMode === 'shot' && selectedShotGroups.length > 0 ? selectedShotGroups.length : selectedChipCoords.length}개, ${selectedChipCoords.length}개 Chip)`
             : null;
         const inputLabel = selectionLabel || `${selected.length}개 이미지`;
 
@@ -12650,6 +12655,7 @@ class WaferMapViewer {
                         selection_mode: selectionMode,
                         selected_chip_coords: selectedChipCoords,
                         ...(selectedShotGroups.length > 0 ? { selected_shot_groups: selectedShotGroups } : {}),
+                        ...(shotLocalSquareWeighted ? { shot_local_square_weighted: true } : {}),
                     } : {}),
                 }),
                 cache: 'no-store'  // 캐시 사용 안 함
@@ -14761,36 +14767,58 @@ class WaferMapViewer {
         }
     }
 
-    _buildSelectedRegionCompositeContext(sourceImages = []) {
+    _buildSelectedRegionCompositeContext(sourceImages = [], options = {}) {
         const annotator = this.chipAnnotator;
-        if (!annotator || !(annotator.selectedChips instanceof Set) || annotator.selectedChips.size === 0) {
+        if (!annotator || !Array.isArray(annotator.chips) || annotator.chips.length === 0) {
             return null;
         }
 
+        const requestedMode = options.mode === 'shot' || options.mode === 'chip'
+            ? options.mode
+            : null;
+        const includeAllWhenEmpty = options.includeAllWhenEmpty === true;
+        const selectedMode = requestedMode || (annotator.selectionMode === 'shot' ? 'shot' : 'chip');
         const orderedIndices = Array.isArray(annotator.selectedChipsOrder)
-            ? annotator.selectedChipsOrder.filter(index => annotator.selectedChips.has(index))
+            ? annotator.selectedChipsOrder.filter(index => annotator.selectedChips?.has(index))
             : [];
         const orderedSet = new Set(orderedIndices);
         const selectedIndices = [
             ...orderedIndices,
-            ...Array.from(annotator.selectedChips).filter(index => !orderedSet.has(index)),
+            ...Array.from(annotator.selectedChips || []).filter(index => !orderedSet.has(index)),
         ];
-        const selectedChipCoords = [...new Map(
-            selectedIndices
-                .map(index => annotator.chips?.[index])
+
+        const coordFromChip = (chip) => {
+            const x = Number(chip?.x_abs);
+            const y = Number(chip?.y_abs);
+            return Number.isFinite(x) && Number.isFinite(y) ? { x_abs: x, y_abs: y } : null;
+        };
+        const dedupeCoords = (chips) => [...new Map(
+            (chips || [])
+                .map(coordFromChip)
                 .filter(Boolean)
-                .map(chip => ({
-                    x_abs: Number(chip.x_abs),
-                    y_abs: Number(chip.y_abs),
-                }))
-                .filter(chip => Number.isFinite(chip.x_abs) && Number.isFinite(chip.y_abs))
                 .map(chip => [`${chip.x_abs}:${chip.y_abs}`, chip])
         ).values()];
-        if (!selectedChipCoords.length) return null;
+        const selectedChipObjects = selectedIndices.map(index => annotator.chips?.[index]).filter(Boolean);
+        let selectedChipCoords = dedupeCoords(selectedChipObjects);
+        let selectedShotGroups = [];
+        let usedAllRegion = false;
 
-        const selectedMode = annotator.selectionMode === 'shot' ? 'shot' : 'chip';
-        const selectedShotGroups = selectedMode === 'shot'
-            ? [...(annotator.getSelectedShotGroupSelections?.() || annotator._getSelectedShotGroups?.() || [])]
+        if (selectedMode === 'shot') {
+            let groupSource = [...(annotator.getSelectedShotGroupSelections?.() || [])];
+            if (!groupSource.length && includeAllWhenEmpty) {
+                groupSource = [...(annotator.shotBoundaryGroups?.values?.() || [])].map((group) => {
+                    const indices = Array.isArray(group?.indices)
+                        ? (annotator._filterSelectableIndices?.(group.indices) || group.indices)
+                        : [];
+                    return {
+                        ...group,
+                        selectedIndices: indices,
+                        selectedChips: indices.map((index) => annotator.chips?.[index]).filter(Boolean),
+                    };
+                });
+                usedAllRegion = true;
+            }
+            selectedShotGroups = groupSource
                 .map((group) => {
                     const shotShape = annotator.getShotGridShape?.() ||
                         annotator.getShotCompositeGridShape?.();
@@ -14813,8 +14841,22 @@ class WaferMapViewer {
                         ...(shotShape ? { shot_shape: shotShape } : {}),
                     };
                 })
-                .filter((group) => group.shot_id && group.chip_coords.length > 0)
-            : [];
+                .filter((group) => group.shot_id && group.chip_coords.length > 0);
+            selectedChipCoords = [...new Map(
+                selectedShotGroups
+                    .flatMap(group => group.chip_coords)
+                    .map(chip => [`${chip.x_abs}:${chip.y_abs}`, { x_abs: chip.x_abs, y_abs: chip.y_abs }])
+            ).values()];
+        } else if (!selectedChipCoords.length && includeAllWhenEmpty) {
+            const indices = annotator._filterSelectableIndices?.(annotator.chips.map((_, index) => index)) ||
+                annotator.chips.map((_, index) => index);
+            selectedChipCoords = dedupeCoords(indices.map(index => annotator.chips?.[index]).filter(Boolean));
+            usedAllRegion = true;
+        }
+
+        if (!selectedChipCoords.length) return null;
+        if (selectedMode === 'shot' && !selectedShotGroups.length) return null;
+
         const selectedUnit = selectedMode === 'shot' ? 'Shot' : 'Chip';
         const selectedUnitCount = selectedMode === 'shot' && selectedShotGroups.length > 0
             ? selectedShotGroups.length
@@ -14832,27 +14874,27 @@ class WaferMapViewer {
             selectedShotGroups,
             selectedUnit,
             selectedUnitCount,
+            usedAllRegion,
             sourceImages: dedupedSources,
         };
     }
 
-    _getGridSelectedRegionCompositeContext() {
+    _getGridSelectedRegionCompositeContext(options = {}) {
         if (this.isCompositeMode || this.gridMode !== true) return null;
-        const pending = this._pendingGridRegionComposite;
-        if (!pending || pending.gridModeSource !== true ||
-            !Array.isArray(pending.sourceImages) || pending.sourceImages.length === 0) {
+        const sourceImages = this._getGridSelectedImagePaths();
+        if (!sourceImages.length) {
             return null;
         }
-        const context = this._buildSelectedRegionCompositeContext(pending.sourceImages);
+        const context = this._buildSelectedRegionCompositeContext(sourceImages, options);
         return context && context.sourceImages.length > 0 ? context : null;
     }
 
-    _updateGridSelectedRegionCompositeContextItem(contextMenu) {
+    _ensureGridContextMenuItem(contextMenu, id) {
         if (!contextMenu) return;
-        let item = document.getElementById('grid-selected-region-composite-create');
+        let item = document.getElementById(id);
         if (!item) {
             item = document.createElement('div');
-            item.id = 'grid-selected-region-composite-create';
+            item.id = id;
             item.className = 'context-menu-item';
             item.style.cssText = 'padding: 8px 12px; color: #fff; cursor: pointer; font-size: 14px; display: none;';
             item.onmouseenter = () => { item.style.background = '#3a3a3a'; };
@@ -14862,8 +14904,11 @@ class WaferMapViewer {
                 contextMenu.firstChild;
             contextMenu.insertBefore(item, insertBefore);
         }
+        return item;
+    }
 
-        const context = this._getGridSelectedRegionCompositeContext();
+    _configureGridCompositeContextItem(item, context, options = {}) {
+        if (!item) return;
         if (!context) {
             item.style.setProperty('display', 'none', 'important');
             item.onclick = null;
@@ -14871,15 +14916,17 @@ class WaferMapViewer {
         }
 
         item.style.setProperty('display', 'block', 'important');
-        item.textContent = `선택 ${context.selectedUnit} Composite Map 만들기 (${context.selectedUnitCount}개)`;
-        item.title = '현재 Grid Coord 선택 영역만 Composite Map으로 만듭니다.';
+        const regionPrefix = context.usedAllRegion ? '전체' : '선택';
+        item.textContent = options.text ||
+            `${regionPrefix} ${context.selectedUnit} Composite Map 만들기 (${context.selectedUnitCount}개)`;
+        item.title = options.title || '현재 Grid의 선택 wafer와 선택 영역으로 Composite Map을 만듭니다.';
         item.onclick = (clickEvent) => {
             clickEvent?.preventDefault?.();
             clickEvent?.stopPropagation?.();
-            const latestContext = this._getGridSelectedRegionCompositeContext();
+            const latestContext = this._getGridSelectedRegionCompositeContext(options.contextOptions || {});
             this.hideContextMenu();
             if (!latestContext) {
-                this.showToast?.('Composite Map을 만들 Grid Coord 선택 영역이 없습니다.', 1800);
+                this.showToast?.('Composite Map을 만들 Grid 선택 wafer/좌표 정보가 없습니다.', 1800);
                 return;
             }
             this.handleCompositeCreate({
@@ -14887,8 +14934,54 @@ class WaferMapViewer {
                 selectionMode: latestContext.selectionMode,
                 selectedShotGroups: latestContext.selectedShotGroups,
                 sourceImages: latestContext.sourceImages,
+                shotLocalSquareWeighted: options.shotLocalSquareWeighted === true,
             });
         };
+    }
+
+    _updateGridSelectedRegionCompositeContextItems(contextMenu) {
+        const shotContext = this._getGridSelectedRegionCompositeContext({
+            mode: 'shot',
+            includeAllWhenEmpty: true,
+        });
+        const shotLabel = shotContext
+            ? `${shotContext.usedAllRegion ? '전체' : '선택'} Shot Composite Map 만들기 (${shotContext.selectedUnitCount}개)`
+            : '';
+        this._configureGridCompositeContextItem(
+            this._ensureGridContextMenuItem(contextMenu, 'grid-selected-region-composite-create'),
+            shotContext,
+            {
+                text: shotLabel,
+                contextOptions: { mode: 'shot', includeAllWhenEmpty: true },
+            }
+        );
+        this._configureGridCompositeContextItem(
+            this._ensureGridContextMenuItem(contextMenu, 'grid-shot-local-square-weighted-create'),
+            shotContext,
+            {
+                text: shotContext
+                    ? `Shot-local Square Weighted Avg 만들기 (${shotContext.usedAllRegion ? '전체 Shot' : `${shotContext.selectedUnitCount}개 Shot`})`
+                    : '',
+                title: '선택 wafer의 Shot을 shot-local grid로 누적해 square weighted average 한 장을 만듭니다.',
+                contextOptions: { mode: 'shot', includeAllWhenEmpty: true },
+                shotLocalSquareWeighted: true,
+            }
+        );
+
+        const chipContext = this._getGridSelectedRegionCompositeContext({
+            mode: 'chip',
+            includeAllWhenEmpty: true,
+        });
+        this._configureGridCompositeContextItem(
+            this._ensureGridContextMenuItem(contextMenu, 'grid-chip-composite-create'),
+            chipContext,
+            {
+                text: chipContext
+                    ? `${chipContext.usedAllRegion ? '전체' : '선택'} Chip Composite Map 만들기 (${chipContext.selectedUnitCount}개)`
+                    : '',
+                contextOptions: { mode: 'chip', includeAllWhenEmpty: true },
+            }
+        );
     }
 
     showContextMenu(event, clickedIdx) {
@@ -14917,7 +15010,7 @@ class WaferMapViewer {
         }
 
         this.updateContextMenuState();
-        this._updateGridSelectedRegionCompositeContextItem(contextMenu);
+        this._updateGridSelectedRegionCompositeContextItems(contextMenu);
         this._markGridContextSubmenusStale();
 
         contextMenu.style.display = 'block';
@@ -34276,6 +34369,34 @@ class WaferMapViewer {
             compositeItem.onmouseenter = () => { compositeItem.style.background = '#3a3a3a'; };
             compositeItem.onmouseleave = () => { compositeItem.style.background = ''; };
             menu.appendChild(compositeItem);
+
+            if (selectedMode === 'shot') {
+                const chipCompositeItem = document.createElement('div');
+                chipCompositeItem.id = 'chip-composite-create-chip';
+                chipCompositeItem.className = 'context-menu-item';
+                chipCompositeItem.style.cssText = `
+                    padding: 8px 16px;
+                    cursor: pointer;
+                    color: #fff;
+                    font-size: 14px;
+                `;
+                chipCompositeItem.textContent = `선택 Chip Composite Map 만들기 (${selectedChips.length}개)`;
+                chipCompositeItem.title = '현재 선택된 Chip들을 하나의 Chip 기준 Composite Map으로 만듭니다.';
+                chipCompositeItem.onclick = () => {
+                    const selectedSnapshot = selectedChips.map((chip) => ({
+                        x_abs: chip.x_abs,
+                        y_abs: chip.y_abs,
+                    }));
+                    menu.remove();
+                    this.handleCompositeCreate({
+                        selectedChips: selectedSnapshot,
+                        selectionMode: 'chip',
+                    });
+                };
+                chipCompositeItem.onmouseenter = () => { chipCompositeItem.style.background = '#3a3a3a'; };
+                chipCompositeItem.onmouseleave = () => { chipCompositeItem.style.background = ''; };
+                menu.appendChild(chipCompositeItem);
+            }
         }
 
         // Chip 1개 선택 시: Chip 보기
