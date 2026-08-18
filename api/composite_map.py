@@ -766,7 +766,7 @@ def _build_selected_shot_geometry(
         raise ValueError("선택한 Shot의 chip 크기를 계산할 수 없습니다.")
     target_width = cols * cell_width
     target_height = rows * cell_height
-    base_indices = np.full((target_height, target_width), 8, dtype=np.uint8)
+    base_indices = np.zeros((target_height, target_width), dtype=np.uint8)
     output_coords: set[Tuple[int, int]] = set()
     position_rect_overrides: Dict[Tuple[int, int], Dict[str, Any]] = {}
 
@@ -814,7 +814,6 @@ def _build_selected_shot_geometry(
         coord = placement["coord"]
         tx0, ty0, tx1, ty1 = placement["target_rect"]
         output_coords.add(coord)
-        base_indices[ty0:ty1, tx0:tx1] = 0
         position_rect_overrides[coord] = {
             "x0": tx0,
             "y0": ty0,
@@ -2745,6 +2744,10 @@ def _save_sum_map_variants(
 
         if only_low_mask is not None:
             calc_mask = only_low_mask.astype(bool, copy=False).copy()
+            if idx_8_mask is not None:
+                calc_mask &= ~idx_8_mask
+            if invalid_mask is not None:
+                calc_mask &= ~invalid_mask
         else:
             calc_mask = grade_counts_float.sum(axis=0) > 0
             if idx_8_mask is not None:

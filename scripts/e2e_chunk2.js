@@ -4593,6 +4593,168 @@ const { createRunner } = require('./e2e_playwright_session');
       gridContextShotLocalWeighted.menuHidden,
       `grid context shot-local weighted=${JSON.stringify(gridContextShotLocalWeighted)}`);
 
+    const gridShotPositionSelection = await page.evaluate(() => {
+      const v = window.viewer;
+      const annotator = v?.chipAnnotator;
+      if (!v || !annotator?.selectByCoordinateRows) return null;
+      const result = annotator.selectByCoordinateRows('shot-position', [
+        { value: '0' },
+        { value: '1' },
+        { value: '2' },
+      ], { operation: 'replace' });
+      v._scheduleGridCoordinateSelectionOverlayRender?.(0);
+      const selectedChips = [...(annotator.selectedChips || [])]
+        .map((index) => annotator.chips?.[index])
+        .filter(Boolean);
+      const shotKeys = new Set();
+      selectedChips.forEach((chip) => {
+        const group = annotator._getShotGroupForChip?.(chip);
+        if (group) shotKeys.add(String(group.groupKey ?? group.shotId));
+      });
+      const positions = [...new Set(selectedChips
+        .map((chip) => annotator.getShotPositionForChip?.(chip))
+        .filter((value) => Number.isInteger(value)))]
+        .sort((a, b) => a - b);
+      return {
+        result,
+        selectionMode: annotator.selectionMode || '',
+        selectedCount: annotator.selectedChips?.size || 0,
+        shotGroupCount: shotKeys.size,
+        positions,
+        pendingSourceCount: v._pendingGridRegionComposite?.sourceImages?.length || 0,
+      };
+    });
+    expect(gridShotPositionSelection?.selectionMode === 'chip' &&
+      gridShotPositionSelection.selectedCount > gridShotPositionSelection.positions.length &&
+      gridShotPositionSelection.shotGroupCount > 1 &&
+      gridShotPositionSelection.positions.join(',') === '0,1,2' &&
+      gridShotPositionSelection.pendingSourceCount === 2,
+      `grid shot-position selection=${JSON.stringify(gridShotPositionSelection)}`);
+    await page.locator('#image-grid .grid-thumb-wrap').nth(target.index).click({ button: 'right' });
+    await page.waitForFunction(
+      () => {
+        const menu = document.getElementById('grid-context-menu');
+        const item = document.getElementById('grid-selected-region-composite-create');
+        return menu && item &&
+          getComputedStyle(menu).display !== 'none' &&
+          getComputedStyle(item).display !== 'none';
+      },
+      null,
+      { timeout: 10000 }
+    );
+    const gridShotPositionComposite = await page.evaluate(() => {
+      const v = window.viewer;
+      const item = document.getElementById('grid-selected-region-composite-create');
+      const original = v?.handleCompositeCreate;
+      let captured = null;
+      if (v && item && typeof original === 'function') {
+        v.handleCompositeCreate = (options = {}) => {
+          const groups = Array.isArray(options.selectedShotGroups) ? options.selectedShotGroups : [];
+          const groupChipCounts = groups.map((group) =>
+            Array.isArray(group.chip_coords) ? group.chip_coords.length : 0);
+          const uniqueSlots = [...new Set(groups.flatMap((group) =>
+            (group.chip_coords || []).map((chip) => `${chip.slot_x}:${chip.slot_y}`)
+          ))].sort();
+          captured = {
+            selectionMode: options.selectionMode || '',
+            selectedChipCount: Array.isArray(options.selectedChips) ? options.selectedChips.length : 0,
+            sourceCount: Array.isArray(options.sourceImages) ? options.sourceImages.length : 0,
+            shotGroupCount: groups.length,
+            totalShotChipCount: groupChipCounts.reduce((sum, count) => sum + count, 0),
+            maxGroupChipCount: Math.max(0, ...groupChipCounts),
+            uniqueSlotCount: uniqueSlots.length,
+            uniqueSlots,
+          };
+        };
+        try {
+          item.click();
+        } finally {
+          v.handleCompositeCreate = original;
+        }
+      }
+      return {
+        captured,
+        selectedIdxs: [...(v?.gridSelectedIdxs || [])].sort((a, b) => a - b),
+        selectedPaths: (v?._getGridSelectedImagePaths?.() || [])
+          .map((imagePath) => String(imagePath || '').replace(/\\/g, '/'))
+          .sort(),
+        menuHidden: getComputedStyle(document.getElementById('grid-context-menu')).display === 'none',
+      };
+    });
+    expect(gridShotPositionComposite.captured?.selectionMode === 'shot' &&
+      gridShotPositionComposite.captured?.sourceCount === 2 &&
+      gridShotPositionComposite.captured?.shotGroupCount === gridShotPositionSelection.shotGroupCount &&
+      gridShotPositionComposite.captured?.selectedChipCount === gridShotPositionSelection.selectedCount &&
+      gridShotPositionComposite.captured?.totalShotChipCount === gridShotPositionSelection.selectedCount &&
+      gridShotPositionComposite.captured?.maxGroupChipCount <= 3 &&
+      gridShotPositionComposite.captured?.uniqueSlotCount === 3 &&
+      gridShotPositionComposite.selectedIdxs.join(',') === gridContextBefore.selectedIdxs.join(',') &&
+      gridShotPositionComposite.selectedPaths.join('|') === gridContextBefore.selectedPaths.join('|') &&
+      gridShotPositionComposite.menuHidden,
+      `grid shot-position composite payload=${JSON.stringify({ gridShotPositionSelection, gridShotPositionComposite })}`);
+
+    const gridCoordCompositeRestore = await page.evaluate(async () => {
+      const v = window.viewer;
+      const annotator = v?.chipAnnotator;
+      const readCoordState = () => {
+        const activeAnnotator = window.viewer?.chipAnnotator;
+        const selectedChips = [...(activeAnnotator?.selectedChips || [])]
+          .map((index) => activeAnnotator.chips?.[index])
+          .filter(Boolean);
+        const positions = [...new Set(selectedChips
+          .map((chip) => activeAnnotator?.getShotPositionForChip?.(chip))
+          .filter((value) => Number.isInteger(value)))]
+          .sort((a, b) => a - b);
+        const overlays = Array.from(document.querySelectorAll('.grid-coordinate-selection-overlay'));
+        const rendered = overlays.filter((canvas) => canvas.dataset.coordinateOverlayRendered === 'true');
+        return {
+          gridMode: window.viewer?.gridMode === true,
+          viewMode: window.viewer?.viewMode || null,
+          selectedChipCount: activeAnnotator?.selectedChips?.size || 0,
+          selectionMode: activeAnnotator?.selectionMode || '',
+          positions,
+          pendingSourceCount: window.viewer?._pendingGridRegionComposite?.sourceImages?.length || 0,
+          gridSelectedIdxs: [...(window.viewer?.gridSelectedIdxs || [])].sort((a, b) => a - b),
+          gridSelectedPaths: (window.viewer?._getGridSelectedImagePaths?.() || [])
+            .map((imagePath) => String(imagePath || '').replace(/\\/g, '/'))
+            .sort(),
+          renderedOverlayCount: rendered.length,
+          maxOverlayChipCount: Math.max(0, ...rendered.map((canvas) =>
+            Number(canvas.dataset.coordinateSelectedChipCount || '0'))),
+        };
+      };
+      if (!v || !annotator?.clearSelection || !v.captureActivePageState || !v.applyPageState) {
+        return { ok: false, reason: 'viewer methods missing' };
+      }
+      const pageId = v.pageManager?.activePageId || 'e2e-wafer-page';
+      const before = readCoordState();
+      const state = v.captureActivePageState();
+      v.clearGridSelectionMarks?.({ hidePanel: true, updateContext: false });
+      annotator.clearSelection(false);
+      v._pendingGridRegionComposite = null;
+      v._clearGridCoordinateSelectionOverlays?.();
+      await v.applyPageState({ id: pageId, role: 'wafer', state });
+      const deadline = Date.now() + 5000;
+      let after = readCoordState();
+      while (Date.now() < deadline && after.renderedOverlayCount === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        after = readCoordState();
+      }
+      return { ok: true, before, after };
+    });
+    expect(gridCoordCompositeRestore.ok &&
+      gridCoordCompositeRestore.after.gridMode &&
+      (gridCoordCompositeRestore.after.viewMode === null || gridCoordCompositeRestore.after.viewMode === '') &&
+      gridCoordCompositeRestore.after.selectionMode === gridCoordCompositeRestore.before.selectionMode &&
+      gridCoordCompositeRestore.after.selectedChipCount === gridCoordCompositeRestore.before.selectedChipCount &&
+      gridCoordCompositeRestore.after.positions.join(',') === gridCoordCompositeRestore.before.positions.join(',') &&
+      gridCoordCompositeRestore.after.pendingSourceCount === gridCoordCompositeRestore.before.pendingSourceCount &&
+      gridCoordCompositeRestore.after.gridSelectedIdxs.join(',') === gridCoordCompositeRestore.before.gridSelectedIdxs.join(',') &&
+      gridCoordCompositeRestore.after.gridSelectedPaths.join('|') === gridCoordCompositeRestore.before.gridSelectedPaths.join('|') &&
+      gridCoordCompositeRestore.after.renderedOverlayCount > 0 &&
+      gridCoordCompositeRestore.after.maxOverlayChipCount > 0,
+      `grid coord selection must survive composite tab restore=${JSON.stringify(gridCoordCompositeRestore)}`);
+
     const gridDblBefore = await page.evaluate(() => ({
       selectedIdxs: [...(window.viewer?.gridSelectedIdxs || [])].sort((a, b) => a - b),
       selectedPaths: (window.viewer?._getGridSelectedImagePaths?.() || [])

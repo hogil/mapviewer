@@ -2182,6 +2182,109 @@ class WaferMapViewer {
         });
     }
 
+    _serializeGridRegionCompositeState(pending) {
+        if (!pending || typeof pending !== 'object') return null;
+        const sourceImages = Array.isArray(pending.sourceImages)
+            ? [...new Map(
+                pending.sourceImages
+                    .filter(Boolean)
+                    .map(path => [this.normalizePath(path), path])
+                    .filter(([key]) => !!key)
+            ).values()]
+            : [];
+        if (!sourceImages.length) return null;
+        return {
+            sourceImages,
+            targetPath: pending.targetPath || null,
+            gridModeSource: pending.gridModeSource === true,
+            selectedOnly: pending.selectedOnly === true,
+            startedAt: Number.isFinite(Number(pending.startedAt)) ? Number(pending.startedAt) : Date.now(),
+        };
+    }
+
+    captureGridCoordinateSelectionState() {
+        const annotator = this.chipAnnotator;
+        if (!this.gridMode || !annotator || this.viewMode === 'gridImage') return null;
+        if (!(annotator.selectedChips instanceof Set) || annotator.selectedChips.size === 0) return null;
+
+        const ordered = Array.isArray(annotator.selectedChipsOrder)
+            ? annotator.selectedChipsOrder.filter(index => annotator.selectedChips.has(index))
+            : [];
+        const remaining = [...annotator.selectedChips].filter(index => !ordered.includes(index));
+        const coords = [...ordered, ...remaining]
+            .map(index => annotator.chips?.[index])
+            .filter(Boolean)
+            .map(chip => ({
+                x_abs: Number(chip.x_abs),
+                y_abs: Number(chip.y_abs),
+            }))
+            .filter(coord => Number.isFinite(coord.x_abs) && Number.isFinite(coord.y_abs));
+        if (!coords.length) return null;
+
+        const pending = this._serializeGridRegionCompositeState(this._pendingGridRegionComposite);
+        const targetPath = this._gridCoordinateTargetPath ||
+            pending?.targetPath ||
+            annotator.currentImagePath ||
+            null;
+        if (!targetPath) return null;
+
+        return {
+            targetPath,
+            selectionMode: annotator.selectionMode === 'shot' ? 'shot' : 'chip',
+            shotBoundaryVisible: annotator.shotBoundaryVisible === true,
+            coords,
+            pendingGridRegionComposite: pending,
+        };
+    }
+
+    async restoreGridCoordinateSelectionState(selectionState, pageId = null) {
+        if (!selectionState || !this.gridMode || this.viewMode === 'gridImage') return false;
+        const targetPath = selectionState.targetPath || selectionState.pendingGridRegionComposite?.targetPath || null;
+        if (!targetPath) return false;
+        const isActivePage = () => !pageId || !this.pageManager || this.pageManager.activePageId === pageId;
+        if (!isActivePage()) return false;
+
+        const ready = await this._prepareGridCoordinateSelectionTarget(targetPath);
+        if (!ready || !isActivePage() || !this.gridMode || this.viewMode === 'gridImage') return false;
+
+        const annotator = this.chipAnnotator;
+        if (!annotator || !Array.isArray(annotator.chips) || annotator.chips.length === 0) return false;
+        const coordToIndex = new Map();
+        annotator.chips.forEach((chip, index) => {
+            const x = Number(chip?.x_abs);
+            const y = Number(chip?.y_abs);
+            if (Number.isFinite(x) && Number.isFinite(y)) {
+                coordToIndex.set(`${x}:${y}`, index);
+            }
+        });
+
+        const nextOrder = [];
+        (selectionState.coords || []).forEach(coord => {
+            const x = Number(coord?.x_abs);
+            const y = Number(coord?.y_abs);
+            const index = coordToIndex.get(`${x}:${y}`);
+            if (Number.isInteger(index) && !nextOrder.includes(index)) {
+                nextOrder.push(index);
+            }
+        });
+        if (!nextOrder.length) return false;
+
+        annotator.selectionMode = selectionState.selectionMode === 'shot' ? 'shot' : 'chip';
+        annotator.shotBoundaryVisible = selectionState.shotBoundaryVisible === true;
+        annotator.selectedChips = new Set(nextOrder);
+        annotator.selectedChipsOrder = [...nextOrder];
+        this._gridCoordinateTargetPath = targetPath;
+        const pending = this._serializeGridRegionCompositeState(selectionState.pendingGridRegionComposite);
+        if (pending) {
+            this._pendingGridRegionComposite = pending;
+        }
+        annotator.render?.();
+        annotator.updateSelectedChipsList?.();
+        this._syncShotBoundaryButtonUI?.();
+        this._scheduleGridCoordinateSelectionOverlayRender?.(0);
+        return true;
+    }
+
     captureActivePageState(options = {}) {
         const compactGridArrays = options.compactGridArrays === true;
         const savedViewSnapshot = this.deepCloneSimple(this.buildSavedViewSnapshot());
@@ -2256,6 +2359,7 @@ class WaferMapViewer {
             selectedGrades: this.selectedGrades ? [...this.selectedGrades] : [],
             selectedGradientRanges: this.selectedGradientRanges ? [...this.selectedGradientRanges] : [],
             singleChipSelectionState: this.captureSingleChipSelectionState(),
+            gridCoordinateSelectionState: this.captureGridCoordinateSelectionState(),
         };
     }
 
@@ -2948,6 +3052,9 @@ class WaferMapViewer {
         }
         if (!this.gridMode && state.singleChipSelectionState) {
             this.scheduleRestoreSingleChipSelectionState(state.singleChipSelectionState);
+        }
+        if (this.gridMode && this.viewMode !== 'gridImage' && state.gridCoordinateSelectionState) {
+            await this.restoreGridCoordinateSelectionState(state.gridCoordinateSelectionState, page?.id || null);
         }
         this.updateContextMenuState();
         this.syncCompositeInlineStatus(page?.id);
@@ -14811,6 +14918,62 @@ class WaferMapViewer {
         }
     }
 
+    _getSelectedShotGroupSourceFromSelectedChips(selectedChipObjects = []) {
+        const annotator = this.chipAnnotator;
+        if (!annotator) return [];
+        const directGroups = [...(annotator.getSelectedShotGroupSelections?.() || [])];
+        if (directGroups.length) return directGroups;
+        if (!Array.isArray(selectedChipObjects) || selectedChipObjects.length === 0 ||
+            typeof annotator._getShotGroupForChip !== 'function') {
+            return [];
+        }
+
+        const byGroup = new Map();
+        const seen = new Set();
+        selectedChipObjects.forEach((inputChip) => {
+            const x = Number(inputChip?.x_abs ?? inputChip?.xAbs);
+            const y = Number(inputChip?.y_abs ?? inputChip?.yAbs);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+
+            let chip = null;
+            const inputIndex = Number(inputChip?.index);
+            if (Number.isInteger(inputIndex) && annotator.chips?.[inputIndex]) {
+                chip = annotator.chips[inputIndex];
+            }
+            if (!chip && typeof annotator._getChipIndexFromCoords === 'function') {
+                const coordIndex = annotator._getChipIndexFromCoords(x, y);
+                if (Number.isInteger(coordIndex) && annotator.chips?.[coordIndex]) {
+                    chip = annotator.chips[coordIndex];
+                }
+            }
+            if (!chip) {
+                chip = (annotator.chips || []).find((candidate) =>
+                    Number(candidate?.x_abs) === x && Number(candidate?.y_abs) === y
+                ) || inputChip;
+            }
+
+            const group = annotator._getShotGroupForChip(chip);
+            if (!group) return;
+            const groupKey = String(group.groupKey ?? group.shotId ?? byGroup.size);
+            const coordKey = `${groupKey}:${x}:${y}`;
+            if (seen.has(coordKey)) return;
+            seen.add(coordKey);
+
+            let entry = byGroup.get(groupKey);
+            if (!entry) {
+                entry = { ...group, selectedIndices: [], selectedChips: [] };
+                byGroup.set(groupKey, entry);
+            }
+            const chipIndex = annotator.chips?.indexOf(chip);
+            if (Number.isInteger(chipIndex) && chipIndex >= 0) {
+                entry.selectedIndices.push(chipIndex);
+            }
+            entry.selectedChips.push(chip);
+        });
+
+        return [...byGroup.values()].filter((group) => group.selectedChips.length > 0);
+    }
+
     _buildSelectedRegionCompositeContext(sourceImages = [], options = {}) {
         const annotator = this.chipAnnotator;
         if (!annotator || !Array.isArray(annotator.chips) || annotator.chips.length === 0) {
@@ -14848,7 +15011,7 @@ class WaferMapViewer {
         let usedAllRegion = false;
 
         if (selectedMode === 'shot') {
-            let groupSource = [...(annotator.getSelectedShotGroupSelections?.() || [])];
+            let groupSource = this._getSelectedShotGroupSourceFromSelectedChips(selectedChipObjects);
             if (!groupSource.length && includeAllWhenEmpty) {
                 groupSource = [...(annotator.shotBoundaryGroups?.values?.() || [])].map((group) => {
                     const indices = Array.isArray(group?.indices)
