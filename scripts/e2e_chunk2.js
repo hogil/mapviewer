@@ -4417,6 +4417,52 @@ const { createRunner } = require('./e2e_playwright_session');
         .map((wrap) => Number(wrap.dataset.index))
         .sort((a, b) => a - b),
     }));
+    const gridStaleRightMouseup = await page.evaluate((index) => {
+      const wrapper = document.querySelector('.grid-scroll-wrapper');
+      const wrap = document.querySelector(`#image-grid .grid-thumb-wrap[data-index="${index}"]`);
+      const before = {
+        selectedIdxs: [...(window.viewer?.gridSelectedIdxs || [])].sort((a, b) => a - b),
+        selectedPaths: (window.viewer?._getGridSelectedImagePaths?.() || [])
+          .map((imagePath) => String(imagePath || '').replace(/\\/g, '/'))
+          .sort(),
+        selectedWraps: Array.from(document.querySelectorAll('#image-grid .grid-thumb-wrap.selected'))
+          .map((item) => Number(item.dataset.index))
+          .sort((a, b) => a - b),
+      };
+      if (!wrapper || !wrap) return { ok: false, reason: 'missing grid wrapper or target wrap', before };
+      const rect = wrap.getBoundingClientRect();
+      wrapper.dispatchEvent(new MouseEvent('mousedown', {
+        button: 0,
+        buttons: 1,
+        clientX: rect.left + rect.width / 2,
+        clientY: rect.top + rect.height / 2,
+        bubbles: true,
+        cancelable: true,
+      }));
+      document.dispatchEvent(new MouseEvent('mouseup', {
+        button: 2,
+        buttons: 0,
+        clientX: 0,
+        clientY: 0,
+        bubbles: true,
+        cancelable: true,
+      }));
+      const after = {
+        selectedIdxs: [...(window.viewer?.gridSelectedIdxs || [])].sort((a, b) => a - b),
+        selectedPaths: (window.viewer?._getGridSelectedImagePaths?.() || [])
+          .map((imagePath) => String(imagePath || '').replace(/\\/g, '/'))
+          .sort(),
+        selectedWraps: Array.from(document.querySelectorAll('#image-grid .grid-thumb-wrap.selected'))
+          .map((item) => Number(item.dataset.index))
+          .sort((a, b) => a - b),
+      };
+      return { ok: true, before, after };
+    }, target.index);
+    expect(gridStaleRightMouseup.ok &&
+      gridStaleRightMouseup.after.selectedIdxs.join(',') === gridStaleRightMouseup.before.selectedIdxs.join(',') &&
+      gridStaleRightMouseup.after.selectedPaths.join('|') === gridStaleRightMouseup.before.selectedPaths.join('|') &&
+      gridStaleRightMouseup.after.selectedWraps.join(',') === gridStaleRightMouseup.before.selectedWraps.join(','),
+      `right mouseup after Coord must not clear grid selection=${JSON.stringify(gridStaleRightMouseup)}`);
     await page.locator('#image-grid .grid-thumb-wrap').nth(target.index).click({ button: 'right' });
     await page.waitForFunction(
       () => {
@@ -4488,7 +4534,7 @@ const { createRunner } = require('./e2e_playwright_session');
       gridContextShotComposite.captured?.firstShotHasSlots === true &&
       gridContextShotComposite.captured?.shotLocalSquareWeighted === false &&
       gridContextShotComposite.specialVisible &&
-      gridContextShotComposite.specialText === 'Shot Composite WTW' &&
+      gridContextShotComposite.specialText === 'Shot Composite W to W' &&
       gridContextShotComposite.chipVisible &&
       gridContextShotComposite.chipText === 'Chip Composite' &&
       gridContextShotComposite.selectedIdxs.join(',') === gridContextBefore.selectedIdxs.join(',') &&
@@ -4538,7 +4584,7 @@ const { createRunner } = require('./e2e_playwright_session');
       };
     });
     expect(gridContextShotLocalWeighted.exists &&
-      gridContextShotLocalWeighted.text === 'Shot Composite WTW' &&
+      gridContextShotLocalWeighted.text === 'Shot Composite W to W' &&
       gridContextShotLocalWeighted.captured?.selectionMode === 'shot' &&
       gridContextShotLocalWeighted.captured?.shotLocalSquareWeighted === true &&
       gridContextShotLocalWeighted.captured?.selectedChipCount === gridCoordShot.chipCount &&

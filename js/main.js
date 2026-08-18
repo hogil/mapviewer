@@ -5698,6 +5698,18 @@ class WaferMapViewer {
 
         const onMouseUp = (e) => {
             if (!dragData.selecting) return;
+            if (typeof e?.button === 'number' && e.button !== 0) {
+                dragData.selecting = false;
+                dragData.active = false;
+                dragData.start = null;
+                document.body.style.userSelect = '';
+                if (document.body.style.cursor === 'crosshair') {
+                    document.body.style.cursor = '';
+                }
+                dragOverlay.style.display = 'none';
+                stopMouseTracking();
+                return;
+            }
 
             // 상태 초기화
 
@@ -14913,7 +14925,14 @@ class WaferMapViewer {
 
     _getGridSelectedRegionCompositeContext(options = {}) {
         if (this.isCompositeMode || this.gridMode !== true) return null;
-        const sourceImages = this._getGridSelectedImagePaths();
+        let sourceImages = this._getGridSelectedImagePaths();
+        if (!sourceImages.length && Number.isInteger(this.contextMenuTargetIndex)) {
+            const imageList = (this.currentGridImages?.length ? this.currentGridImages : this.selectedImages) || [];
+            const targetPath = imageList[this.contextMenuTargetIndex];
+            if (targetPath) {
+                sourceImages = [targetPath];
+            }
+        }
         if (!sourceImages.length) {
             return null;
         }
@@ -14988,7 +15007,7 @@ class WaferMapViewer {
             this._ensureGridContextMenuItem(contextMenu, 'grid-shot-local-square-weighted-create'),
             shotContext,
             {
-                text: 'Shot Composite WTW',
+                text: 'Shot Composite W to W',
                 title: '선택 wafer의 Shot을 shot-local grid로 누적해 square weighted average 한 장을 만듭니다.',
                 contextOptions: { mode: 'shot', includeAllWhenEmpty: true },
                 shotLocalSquareWeighted: true,
