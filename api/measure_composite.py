@@ -317,6 +317,8 @@ def _collect_and_aggregate(
             agg = sum(vals)
         elif eff_agg == "count":
             agg = float(len(vals))
+        elif eff_agg == "median":
+            agg = float(np.median(vals)) if vals else 0.0
         else:  # average
             agg = sum(vals) / len(vals) if vals else 0.0
         result[key] = agg
@@ -668,6 +670,8 @@ def create_measure_data_only(
             value_map[key] = sum(vals)
         elif eff_agg == "count":
             value_map[key] = float(len(vals))
+        elif eff_agg == "median":
+            value_map[key] = float(np.median(vals)) if vals else 0.0
         else:
             value_map[key] = sum(vals) / len(vals) if vals else 0.0
 
@@ -860,6 +864,8 @@ def create_measure_composite(
             value_map[key] = sum(vals)
         elif eff_agg == "count":
             value_map[key] = float(len(vals))
+        elif eff_agg == "median":
+            value_map[key] = float(np.median(vals)) if vals else 0.0
         else:
             value_map[key] = sum(vals) / len(vals) if vals else 0.0
 

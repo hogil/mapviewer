@@ -1281,6 +1281,8 @@ async def get_files(request: Request):
     prefer = request.query_params.get("prefer")
     forwarded = await _maybe_forward_to_full_app("get_files", path, prefer)
     if forwarded is not None:
+        if isinstance(forwarded, Response):
+            return forwarded
         return JSONResponse(forwarded)
 
     try:

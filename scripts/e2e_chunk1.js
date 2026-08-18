@@ -3085,9 +3085,17 @@ const { createRunner } = require('./e2e_playwright_session');
       display: getComputedStyle(document.getElementById('context-mc-submenu')).display,
       itemCount: document.querySelectorAll('#context-mc-submenu .failbit-item').length,
       checkboxCount: document.querySelectorAll('#context-mc-submenu .failbit-item input[type="checkbox"]').length,
+      aggregationLabels: Array.from(document.querySelectorAll('#context-mc-submenu button[data-mc-aggregation]'))
+        .map((button) => button.textContent.trim()),
+      activeAggregation: Array.from(document.querySelectorAll('#context-mc-submenu button[data-mc-aggregation]'))
+        .find((button) => button.style.background.includes('47, 111, 237') || button.style.background === 'rgb(47, 111, 237)')
+        ?.dataset.mcAggregation || '',
     }));
     expect(mcSubmenuState.display !== 'none', `mc submenu hidden=${JSON.stringify(mcSubmenuState)}`);
     expect(mcSubmenuState.checkboxCount > 0, `mc submenu empty=${JSON.stringify(mcSubmenuState)}`);
+    expect(mcSubmenuState.aggregationLabels.join('|') === 'SUM|MED' &&
+      mcSubmenuState.activeAggregation === 'sum',
+      `mc aggregation toggle=${JSON.stringify(mcSubmenuState)}`);
     append(`[CM] initial mc ${JSON.stringify(mcSubmenuState)}\n`);
     const meaCreate = page.locator('#context-mea-create');
     const meaBox = await meaCreate.boundingBox();

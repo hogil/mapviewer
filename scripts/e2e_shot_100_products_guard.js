@@ -235,6 +235,8 @@ function buildProduct(spec, index) {
     let selectedChecks = 0;
     let compositeChecks = 0;
     let compositeSlotChecks = 0;
+    let positionNoScopeChecks = 0;
+    let positionScopedChecks = 0;
     for (const group of annotator.shotBoundaryGroups.values()) {
       checkedGroups += 1;
       const chips = group.chips || [];
@@ -356,15 +358,101 @@ function buildProduct(spec, index) {
         annotator.selectedChipsOrder = [];
         annotator.selectedChips.add(group.indices[0]);
         annotator.selectedChipsOrder.push(group.indices[0]);
-        const selection = annotator.getSelectedShotGroupSelections()[0];
-        if (!selection || selection.selectedChips.length !== chips.length) {
+        const selection = annotator.getSelectedChipData();
+        if (selection.length !== chips.length) {
           productFailures.push({
             reason: 'selected-shot-expansion',
             shotId: group.shotId,
             expected: chips.length,
-            got: selection?.selectedChips?.length || 0,
+            got: selection.length,
           });
           break;
+        }
+      }
+    }
+
+    if (!productFailures.length) {
+      annotator.selectionMode = 'chip';
+      annotator.selectedChips.clear();
+      annotator.selectedChipsOrder = [];
+      viewer.coordinateSelectionLists = null;
+      const referenceIndex = product.chips.findIndex((chip) =>
+        Number.isInteger(annotator.getShotPositionForChip(chip))
+      );
+      const referencePosition = referenceIndex >= 0
+        ? annotator.getShotPositionForChip(product.chips[referenceIndex])
+        : null;
+      if (!Number.isInteger(referencePosition)) {
+        productFailures.push({ reason: 'shot-position-reference-missing' });
+      } else {
+        const expected = product.chips
+          .map((chip, index) => ({ chip, index }))
+          .filter(({ chip }) => annotator.isChipSelectable(chip) &&
+            annotator.getShotPositionForChip(chip) === referencePosition)
+          .map(({ index }) => index);
+        const result = viewer._applyCoordinateSelectionShotPickerSelection([referenceIndex]);
+        const selected = [...annotator.selectedChips];
+        const selectedByShot = new Map();
+        selected.forEach((index) => {
+          const selectedGroup = annotator._getShotGroupForChip(product.chips[index]);
+          const key = selectedGroup ? String(selectedGroup.groupKey ?? selectedGroup.shotId) : '';
+          selectedByShot.set(key, (selectedByShot.get(key) || 0) + 1);
+        });
+        positionNoScopeChecks += 1;
+        if (!result || annotator.selectionMode !== 'chip' ||
+            selected.length !== expected.length ||
+            selected.some((index) => annotator.getShotPositionForChip(product.chips[index]) !== referencePosition) ||
+            [...selectedByShot.values()].some((count) => count !== 1)) {
+          productFailures.push({
+            reason: 'shot-position-no-scope',
+            expectedPosition: referencePosition,
+            expectedCount: expected.length,
+            selectedCount: selected.length,
+            selectionMode: annotator.selectionMode,
+            perShotCounts: [...selectedByShot.values()].slice(0, 10),
+            result,
+          });
+        }
+      }
+    }
+
+    if (!productFailures.length) {
+      const fullGroups = [...annotator.shotBoundaryGroups.values()]
+        .filter((group) => (group.indices || []).length === spec.cols * spec.rows);
+      if (fullGroups.length < 2) {
+        productFailures.push({ reason: 'shot-position-scope-needs-two-full-shots', fullGroups: fullGroups.length });
+      } else {
+        const scopedGroups = fullGroups.slice(0, 2);
+        const referenceIndex = scopedGroups[0].indices[0];
+        const referencePosition = annotator.getShotPositionForChip(product.chips[referenceIndex]);
+        annotator.selectionMode = 'shot';
+        annotator.selectedChips = new Set(scopedGroups.flatMap((group) => group.indices || []));
+        annotator.selectedChipsOrder = [...annotator.selectedChips];
+        viewer.coordinateSelectionLists = null;
+        const result = viewer._applyCoordinateSelectionShotPickerSelection([referenceIndex]);
+        const selected = [...annotator.selectedChips];
+        const selectedByShot = new Map();
+        selected.forEach((index) => {
+          const selectedGroup = annotator._getShotGroupForChip(product.chips[index]);
+          const key = selectedGroup ? String(selectedGroup.groupKey ?? selectedGroup.shotId) : '';
+          selectedByShot.set(key, (selectedByShot.get(key) || 0) + 1);
+        });
+        positionScopedChecks += 1;
+        if (!result || annotator.selectionMode !== 'chip' ||
+            selected.length !== scopedGroups.length ||
+            selectedByShot.size !== scopedGroups.length ||
+            selected.some((index) => annotator.getShotPositionForChip(product.chips[index]) !== referencePosition) ||
+            [...selectedByShot.values()].some((count) => count !== 1)) {
+          productFailures.push({
+            reason: 'shot-position-scoped',
+            expectedPosition: referencePosition,
+            expectedShotCount: scopedGroups.length,
+            selectedCount: selected.length,
+            selectedShotCount: selectedByShot.size,
+            selectionMode: annotator.selectionMode,
+            perShotCounts: [...selectedByShot.values()],
+            result,
+          });
         }
       }
     }
@@ -393,6 +481,8 @@ function buildProduct(spec, index) {
       selectedChecks,
       compositeChecks,
       compositeSlotChecks,
+      positionNoScopeChecks,
+      positionScopedChecks,
       failureCount: productFailures.length,
     };
     return {

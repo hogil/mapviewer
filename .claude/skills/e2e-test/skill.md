@@ -6577,3 +6577,25 @@ return {
 - Grid top legend stays on one line. `.legend-item-grid` entries may shrink their own label/count text with ellipsis, but top and bottom legend groups must not overlap each other or push into the grid control buttons/search area.
 - Do not pass this by loosening waits or hiding the panel. The guard should compare element bounding boxes and `scrollWidth/clientWidth` for non-wrapping controls, while allowing the summary rows to wrap vertically inside their scroll area.
 - Files: `index.html`, `css/style.css`, `scripts/e2e_chunk2.js`.
+
+#### BUG-37: Label Explorer delete state and forwarded `/api/files` guard
+- Deleting a class or label from Label Explorer must not clear unrelated grid/single content or collapse unrelated open label folders. The only allowed visible changes are the deleted class folder disappearing, or the deleted label rows/count changing inside already-open folders.
+- `scripts/e2e_chunk3.js` record `label-wafer-crud` must take before/after snapshots around right-click selected Class delete and selected Label delete. Compare `gridMode`, `viewMode`, `selectedImagePath`, `currentGridImages`, `firstGridImage`, and `visibleWraps`; if any changes when the deleted item is not the active content, FAIL.
+- Right-click on a Label Explorer class folder must select that class and expose `선택한 Class 삭제` and `선택한 Label 삭제`. Right-click on a label image must select that label and expose `선택한 Label 삭제`; chip mode may additionally expose `Wafer 보기` and `Lot 보기`.
+- Deleted class `/api/files?path=classification/<class>` and `/api/files?path=classification_chips/<class>` checks should return stable 404 JSON, not bootstrap/full-app 500. If an ASGI `JSONResponse is not JSON serializable` traceback appears, treat it as a bootstrap forwarding regression.
+- Files: `api/main.py`, `js/main.js`, `scripts/e2e_chunk3.js`.
+
+#### BUG-38: Grid Coord Shot Composite and Measure median guard
+- Grid mode bottom legend must show `Coord`, `Shot`, and `Border` controls together. `Coord` opens the selected wafer in `gridImage` mode, opens `#chip-coordinate-select-modal`, and preserves the originally selected grid wafer paths in `_pendingGridRegionComposite.sourceImages`.
+- Creating a selected Shot Composite after entering through grid `Coord` must send all originally selected wafer paths in `/api/composite-map` `image_paths`, not just the representative single image. The pending grid source must be cleared after the composite starts/completes so later single-image composites do not reuse stale grid selections.
+- While the Coord modal is open with typed/quick-picked rows, late `gridImage` load cleanup must not call selection sync that clears the coordinate list. If this regresses, selected Shot count stays at 0 and the modal rows return to blanks before `/api/composite-map`.
+- M.Comp creation must expose `SUM`/`MED` aggregation controls. `MED` applies only to FBT/QVL measure items; BIN and SYSTEMATIC still send `count`, and Failbit grade composite still uses `/api/composite-map`.
+- `scripts/e2e_chunk1.js` record `8,9,10,11` must verify the M.Comp submenu exposes `SUM|MED` with `sum` active by default. `scripts/e2e_chunk2.js` record `selected-region-composite` must verify grid Coord controls, two selected wafer source paths in selected Shot Composite payload, pending-source cleanup, visible grid before/after state, and `/api/measure-composite-data` median values against raw positions values.
+- Files: `js/main.js`, `js/chip-annotator.js`, `api/full_app.py`, `api/measure_composite.py`, `scripts/e2e_chunk1.js`, `scripts/e2e_chunk2.js`.
+
+#### BUG-39: Shot Position picker chip-only selection guard
+- A single Shot Position picker click must never leave `selectionMode='shot'` or visually select an entire Shot. It must select only chips whose Shot Position matches the clicked position.
+- With no Shot X/Y scope, clicking position `0` must select that position across the full wafer: `mode=chip`, `selectedPositions=[0]`, and no selected chip with any other position.
+- With two Shot X/Y rows already selected, clicking one picker cell must narrow to the same position inside those two Shots only: `mode=chip`, `chips=2`, one selected chip per scoped Shot, and exactly one checked picker cell.
+- Guard: `scripts/e2e_chunk2.js` record `coordinate-selection-cells` covers the real P001 UI path. `scripts/e2e_shot_100_products_guard.js` covers 100 synthetic products with varied shot shape, origin, rotation, and partial Shot geometry; it must include both no-scope and two-Shot scoped Shot Position checks.
+- Files: `js/main.js`, `scripts/e2e_chunk2.js`, `scripts/e2e_shot_100_products_guard.js`.

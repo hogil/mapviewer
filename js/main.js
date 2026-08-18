@@ -10184,7 +10184,8 @@ class WaferMapViewer {
             const colIndex = Number(input.dataset.coordinateCol);
             if (!Number.isInteger(rowIndex) || !Number.isInteger(colIndex) || colIndex >= columns) return;
             if (!rows[rowIndex]) rows[rowIndex] = Array(columns).fill('');
-            rows[rowIndex][colIndex] = String(input.value || '').trim();
+            const domValue = String(input.value || '').trim();
+            if (domValue || !rows[rowIndex][colIndex]) rows[rowIndex][colIndex] = domValue;
         });
         return rows.map((row) => row || Array(columns).fill(''));
     }
@@ -10619,14 +10620,100 @@ class WaferMapViewer {
         this._renderCoordinateSelectionLists();
     }
 
+    _getCoordinateSelectionShotScopeIndices() {
+        const state = this.coordinateSelectionLists?.shot;
+        const annotator = this.chipAnnotator;
+        if (!annotator) return null;
+        if (annotator.selectionMode === 'shot' && annotator.selectedChips?.size > 0) {
+            const selectedScope = new Set();
+            [...(annotator._getSelectedShotGroups?.() || [])].forEach((group) => {
+                annotator._filterSelectableIndices?.(group.indices || [])
+                    .forEach((index) => selectedScope.add(index));
+            });
+            if (selectedScope.size) return selectedScope;
+        }
+        if (!state?.hasInput) return null;
+        const parsed = this._getLiveCoordinateSelectionList('shot');
+        if (parsed.error || !parsed.rows?.length) return null;
+        const scope = new Set();
+        const groups = [...(annotator.shotBoundaryGroups?.values?.() || [])];
+        parsed.rows.forEach((row) => {
+            const group = groups.find((candidate) => {
+                const layout = annotator.getLayoutRowForChip?.(candidate.chips?.[0]);
+                return Number(layout?.shot_x_pos) === Number(row.x) &&
+                    Number(layout?.shot_y_pos) === Number(row.y);
+            });
+            annotator._filterSelectableIndices?.(group?.indices || [])
+                .forEach((index) => scope.add(index));
+        });
+        return scope.size ? scope : null;
+    }
+
     _applyCoordinateSelectionShotPickerSelection(indices, selected = null) {
-        const result = this.chipAnnotator?.setShotChipSelections?.(indices, selected);
-        if (!result) return null;
-        if (result.selectedCount === 0) this._clearCoordinateSelectionCoordinateLists();
+        const annotator = this.chipAnnotator;
+        if (!annotator?.chips?.length) return null;
+        const referenceIndices = [...new Set((Array.isArray(indices) ? indices : [indices])
+            .map(Number)
+            .filter((index) => Number.isInteger(index) && index >= 0 && index < annotator.chips.length))];
+        if (!referenceIndices.length) return null;
+        const positions = new Set(referenceIndices
+            .map((index) => annotator.getShotPositionForChip?.(annotator.chips?.[index]))
+            .filter((position) => Number.isInteger(position)));
+        if (!positions.size) return null;
+        const shotScope = this._getCoordinateSelectionShotScopeIndices();
+        const matchedIndices = [];
+        annotator.chips.forEach((chip, index) => {
+            if (!chip || annotator.isChipSelectable?.(chip) === false) return;
+            if (shotScope && !shotScope.has(index)) return;
+            const position = annotator.getShotPositionForChip?.(chip);
+            if (positions.has(position)) matchedIndices.push(index);
+        });
+        if (!matchedIndices.length) return null;
+
+        const previousSelection = new Set(annotator.selectedChips || []);
+        const previousOrder = Array.isArray(annotator.selectedChipsOrder) ? annotator.selectedChipsOrder : [];
+        let nextSelection;
+        if (selected === true) {
+            nextSelection = new Set(previousSelection);
+            matchedIndices.forEach((index) => nextSelection.add(index));
+        } else if (selected === false) {
+            nextSelection = new Set(previousSelection);
+            matchedIndices.forEach((index) => nextSelection.delete(index));
+        } else {
+            nextSelection = new Set(matchedIndices);
+        }
+
+        annotator.selectionMode = 'chip';
+        annotator.selectedChips = nextSelection;
+        const nextOrder = selected === true
+            ? [
+                ...previousOrder.filter((index) => nextSelection.has(index)),
+                ...matchedIndices.filter((index) => nextSelection.has(index) && !previousOrder.includes(index)),
+            ]
+            : matchedIndices.filter((index) => nextSelection.has(index));
+        annotator.selectedChipsOrder = nextOrder.length
+            ? nextOrder
+            : Array.from(nextSelection);
+
+        annotator.render();
+        annotator.updateSelectedChipsList();
+        if (nextSelection.size === 0) this._clearCoordinateSelectionCoordinateLists();
+        const selectedShotKeys = new Set();
+        nextSelection.forEach((index) => {
+            const group = annotator._getShotGroupForChip?.(annotator.chips?.[index]);
+            if (group) selectedShotKeys.add(String(group.groupKey ?? group.shotId));
+        });
         this._setCoordinateSelectionError('');
         this._updateCoordinateSelectionSummary();
         this._renderCoordinateSelectionShotPicker();
-        return result;
+        return {
+            selected: selected !== false,
+            selectedCount: nextSelection.size,
+            selectedShotCount: selectedShotKeys.size,
+            matchedCount: matchedIndices.length,
+            positions: Array.from(positions),
+            scopedToShots: !!shotScope,
+        };
     }
 
     bindCoordinateSelectionEvents() {
@@ -12415,8 +12502,19 @@ class WaferMapViewer {
                     .map((chip) => [`${chip.x_abs}:${chip.y_abs}`, chip])
             ).values()];
         }
+        const pendingGridRegion = hasRegionSelection && this._pendingGridRegionComposite &&
+            Array.isArray(this._pendingGridRegionComposite.sourceImages) &&
+            this._pendingGridRegionComposite.sourceImages.length > 0 &&
+            (!this._pendingGridRegionComposite.targetPath ||
+                this.normalizePath(this._pendingGridRegionComposite.targetPath) === this.normalizePath(this.selectedImagePath))
+            ? this._pendingGridRegionComposite
+            : null;
         const selected = hasRegionSelection
-            ? (this.selectedImagePath ? [this.selectedImagePath] : [])
+            ? (Array.isArray(options.sourceImages) && options.sourceImages.length > 0
+                ? [...new Set(options.sourceImages)]
+                : pendingGridRegion
+                    ? [...new Set(pendingGridRegion.sourceImages)]
+                    : (this.selectedImagePath ? [this.selectedImagePath] : []))
             : this.getSelectedImagesForModal();
         if (!selected.length) {
             this._closeCompositeMeasureFloatingPanels();
@@ -12574,6 +12672,10 @@ class WaferMapViewer {
 
             alert('Composite Map 생성에 실패했습니다.');
 
+        } finally {
+            if (pendingGridRegion) {
+                this._pendingGridRegionComposite = null;
+            }
         }
     }
 
@@ -13328,6 +13430,37 @@ class WaferMapViewer {
             const btnWrap = document.createElement('div');
             btnWrap.className = 'mc-generate-wrap';
             btnWrap.style.cssText = 'padding:6px 8px;border-top:1px solid #444;';
+            if (!this._mcMeasureAggregation) this._mcMeasureAggregation = 'sum';
+            const aggWrap = document.createElement('div');
+            aggWrap.className = 'mc-aggregation-toggle';
+            aggWrap.style.cssText = 'display:flex;gap:4px;margin-bottom:6px;';
+            const updateAggregationButtons = () => {
+                aggWrap.querySelectorAll('button[data-mc-aggregation]').forEach(btn => {
+                    const active = btn.dataset.mcAggregation === (this._mcMeasureAggregation || 'sum');
+                    btn.style.background = active ? '#2f6fed' : '#222';
+                    btn.style.borderColor = active ? '#1c50b5' : '#555';
+                    btn.style.color = active ? '#fff' : '#ccc';
+                });
+            };
+            [
+                { value: 'sum', label: 'SUM', title: 'FBT/QVL Measure Composite를 합계로 생성' },
+                { value: 'median', label: 'MED', title: 'FBT/QVL Measure Composite를 median 값으로 생성' },
+            ].forEach(({ value, label, title }) => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.dataset.mcAggregation = value;
+                btn.textContent = label;
+                btn.title = title;
+                btn.style.cssText = 'flex:1;padding:4px 0;border:1px solid #555;border-radius:3px;cursor:pointer;font-size:11px;font-weight:600;';
+                btn.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    this._mcMeasureAggregation = value;
+                    updateAggregationButtons();
+                });
+                aggWrap.appendChild(btn);
+            });
+            updateAggregationButtons();
+            btnWrap.appendChild(aggWrap);
             const genBtn = document.createElement('button');
             genBtn.className = 'mc-generate-btn';
             genBtn.textContent = '생성 (0)';
@@ -13419,7 +13552,7 @@ class WaferMapViewer {
                     ? (item.mode === 'systematic' ? item.binTypes : [item.binType])
                     : null;
                 const item_key = isBinMode ? null : item.itemKey;
-                const aggregation = isBinMode ? 'count' : 'sum';
+                const aggregation = isBinMode ? 'count' : (this._mcMeasureAggregation === 'median' ? 'median' : 'sum');
 
                 const res = await fetch(this._withCurrentLoginId('/api/measure-composite'), {
                     method: 'POST',
@@ -13550,12 +13683,12 @@ class WaferMapViewer {
             ? (mode === 'systematic' && Array.isArray(binType) ? binType : [binType])
             : null;
         const item_key = isBinMode ? null : itemKey;
-        const aggregation = isBinMode ? 'count' : 'sum';
+        const aggregation = isBinMode ? 'count' : (this._mcMeasureAggregation === 'median' ? 'median' : 'sum');
 
         const modeLabel = mode === 'systematic'
             ? `SYSTEMATIC_${bin_types?.join(',') || 'none'}_count`
             : mode === 'bin' ? `BIN${binType}`
-            : mode === 'f' ? `FBT_${itemKey}_sum` : `QVL_${itemKey}_sum`;
+            : mode === 'f' ? `FBT_${itemKey}_${aggregation}` : `QVL_${itemKey}_${aggregation}`;
 
         // Page management
         let targetPageId = this.pageManager?.activePageId || null;
@@ -14480,7 +14613,7 @@ class WaferMapViewer {
         submenu.style.maxHeight = `${Math.max(80, bottomLimit - itemRect.top)}px`;
 
         if (list) {
-            list.style.maxHeight = `${Math.max(120, bottomLimit - itemRect.top - 92)}px`;
+            list.style.maxHeight = `${Math.max(120, bottomLimit - itemRect.top - 124)}px`;
         }
 
         requestAnimationFrame(() => {
@@ -14497,7 +14630,7 @@ class WaferMapViewer {
             }
             if (list) {
                 const submenuTop = submenu.getBoundingClientRect().top;
-                const newMaxH = bottomLimit - submenuTop - 92;
+                const newMaxH = bottomLimit - submenuTop - 124;
                 list.style.maxHeight = `${Math.max(120, newMaxH)}px`;
             }
         });
@@ -20097,22 +20230,21 @@ class WaferMapViewer {
         this.classListPromise = null;
 
         // 삭제된 클래스만 이미지 캐시 무효화
-        for (const n of names) delete this.classToImgListCache?.[n];
-        await this.refreshClassList(true);
-        await this.refreshLabelExplorer(names);
-
-        // 🔥 삭제된 class의 이미지가 그리드/단일뷰에 남아있으면 초기화
-        if (this.gridMode || this.selectedImagePath) {
-            const currentPath = this.selectedImagePath || '';
-            const isDeletedClassImage = names.some(cls => currentPath.includes(`classification/${cls}/`) || currentPath.includes(`classification_chips/${cls}/`));
-            const gridHasDeletedClass = this.currentGridImages?.some(p => names.some(cls => p.includes(`classification/${cls}/`) || p.includes(`classification_chips/${cls}/`)));
-            if (isDeletedClassImage || gridHasDeletedClass) {
-                this.hideGrid();
-                this.hideImage();
-                this.labelSelection.selected = [];
-                this.labelSelection.selectedClasses = [];
+        for (const n of names) {
+            delete this.classToImgListCache?.[n];
+            if (this.labelSelection?.openFolders) {
+                delete this.labelSelection.openFolders[n];
             }
         }
+        if (this.labelSelection) {
+            const deleted = new Set(names);
+            this.labelSelection.selectedClasses = (this.labelSelection.selectedClasses || [])
+                .filter(cls => !deleted.has(cls));
+            this.labelSelection.selected = (this.labelSelection.selected || [])
+                .filter(key => !deleted.has(String(key).split('/')[0]));
+        }
+        await this.refreshClassList(true);
+        await this.refreshLabelExplorer(names);
 
         this.loadDirectoryContents(null, this.dom.fileExplorer);
 
@@ -20224,6 +20356,15 @@ class WaferMapViewer {
         }
 
         return [];
+    }
+
+    _getGridSelectedImagePaths() {
+        if (!this.gridMode) return [];
+        const imageList = (this.currentGridImages?.length ? this.currentGridImages : this.selectedImages) || [];
+        const indices = Array.isArray(this.gridSelectedIdxs) ? this.gridSelectedIdxs : [];
+        return [...new Set(indices
+            .map(idx => imageList[idx])
+            .filter(Boolean))];
     }
 
     toggleLabelSelection(labelDiv) {
@@ -21277,28 +21418,6 @@ class WaferMapViewer {
             labelSelection.selectedClasses = [];
             this.updateLabelExplorerSelection();
 
-            // 🔥 Delete Label 후 자동으로 이전 상태로 복원
-            // savedViewState가 있으면 복원, 없으면 초기 화면으로
-            // (Label Explorer는 savedViewState를 업데이트하지 않으므로,
-            //  savedViewState가 있다면 무조건 Wafer Map Explorer의 상태임)
-            
-            if (this.savedViewState) {
-                try {
-                    await this.restoreSavedViewState();
-                } catch (error) {
-                    console.warn('⚠️ [DELETE] 복원 중 오류 발생 - 초기 화면으로:', error);
-                    // 오류 발생 시 초기 화면으로
-                    this.hideGrid();
-                    this.hideImage();
-                    this.clearLabelExplorerSelection();
-                }
-            } else {
-                // savedViewState가 없으면 초기 화면으로
-                this.hideGrid();
-                this.hideImage();
-                this.clearLabelExplorerSelection();
-            }
-
             this.debugLog(`⏱ Delete Label 전체: ${(performance.now()-t0).toFixed(1)}ms`);
         };
 
@@ -21528,6 +21647,20 @@ class WaferMapViewer {
                 this.updateClassManagerButtons();
             };
 
+            folderSummary.oncontextmenu = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (!labelSelection.selectedClasses.includes(cls)) {
+                    labelSelection.selectedClasses = [cls];
+                    labelSelection.selected = [];
+                    labelSelection.lastClickedClass = cls;
+                    this._updateLabelExplorerContentFast();
+                    this.updateLabelExplorerSelection();
+                }
+                this.showLabelExplorerChipContextMenu(e, null, cls);
+                return false;
+            };
+
             li.appendChild(folderSummary);
 
             // 이미지 리스트(펼쳐진 경우만)
@@ -21612,7 +21745,7 @@ class WaferMapViewer {
                     imgBtn.oncontextmenu = (e) => {
                         e.preventDefault();
                         e.stopPropagation();
-                        this.showLabelExplorerChipContextMenu(e, `${cls}/${img.name}`);
+                        this.showLabelExplorerChipContextMenu(e, `${cls}/${img.name}`, cls);
                     };
 
                     // 🔥 Drag 범위 선택 이벤트 추가
@@ -22128,7 +22261,7 @@ class WaferMapViewer {
                             imgBtn.oncontextmenu = (e) => {
                                 e.preventDefault();
                                 e.stopPropagation();
-                                this.showLabelExplorerChipContextMenu(e, labelKey);
+                                this.showLabelExplorerChipContextMenu(e, labelKey, cls);
                             };
 
                             // 🔥 Drag 범위 선택 이벤트 추가 (동적 생성된 버튼)
@@ -22454,19 +22587,6 @@ class WaferMapViewer {
 
                                 // 클래스 매니저 버튼 상태 업데이트
                                 this.updateClassManagerButtons();
-
-                                // 🔥 개별 Delete 후 복원 처리
-                                const grid = document.getElementById('image-grid');
-                                const isLabelExplorerGrid = grid && grid.hasAttribute('data-label-explorer-grid');
-
-                                if (isLabelExplorerGrid) {
-                                    // Label Explorer Grid인 경우: savedViewState 무시하고 초기 화면으로
-                                    this.savedViewState = null;
-                                    this.clearLabelExplorerSelection();
-                                } else if (this.savedViewState) {
-                                    // Wafer Map Explorer인 경우: savedViewState로 복원
-                                    await this.restoreSavedViewState();
-                                }
                             };
 
                             imgLi.appendChild(delBtn);
@@ -28329,6 +28449,29 @@ class WaferMapViewer {
         return `${prefix}/${normalizedPath}`;
     }
 
+    async deleteLabelExplorerSelectedClasses() {
+        const names = [...(this.labelSelection?.selectedClasses || [])].filter(Boolean);
+        if (names.length === 0) {
+            alert('삭제할 Class를 선택해주세요.');
+            return;
+        }
+        if (!this.classSelection) this.classSelection = { selected: [], lastClicked: null };
+        this.classSelection.selected = names;
+        this.classSelection.lastClicked = names[names.length - 1] || null;
+        this.selectedClass = names.length === 1 ? names[0] : null;
+        this.updateClassListSelection?.();
+        await this.deleteSelectedClasses();
+    }
+
+    async deleteSelectedLabelExplorerLabels() {
+        const batchDeleteBtn = document.getElementById('label-explorer-batch-delete-btn');
+        if (batchDeleteBtn && typeof batchDeleteBtn.onclick === 'function') {
+            await batchDeleteBtn.onclick();
+            return;
+        }
+        alert('삭제할 Label을 선택해주세요.');
+    }
+
     hideLabelExplorerChipContextMenu() {
         const existingMenu = document.getElementById('label-chip-context-menu');
         if (existingMenu) {
@@ -28336,13 +28479,25 @@ class WaferMapViewer {
         }
     }
 
-    showLabelExplorerChipContextMenu(event, key) {
-        if (this.classMode !== 'chip') {
-            this.clearLabelExplorerSelection();
-            return;
-        }
-
+    showLabelExplorerChipContextMenu(event, key, className = null) {
         this.hideLabelExplorerChipContextMenu();
+
+        if (!this.labelSelection) {
+            this.labelSelection = { selected: [], selectedClasses: [], openFolders: {} };
+        }
+        const labelSelection = this.labelSelection;
+        const targetClass = className || (typeof key === 'string' ? key.split('/')[0] : '');
+        if (key && !labelSelection.selected.includes(key)) {
+            labelSelection.selected = [key];
+            labelSelection.selectedClasses = [];
+            labelSelection.lastClicked = key;
+            this.updateLabelExplorerSelection();
+        } else if (!key && targetClass && !labelSelection.selectedClasses.includes(targetClass)) {
+            labelSelection.selectedClasses = [targetClass];
+            labelSelection.selected = [];
+            labelSelection.lastClickedClass = targetClass;
+            this.updateLabelExplorerSelection();
+        }
 
         const menu = document.createElement('div');
         menu.id = 'label-chip-context-menu';
@@ -28374,8 +28529,26 @@ class WaferMapViewer {
             menu.appendChild(item);
         };
 
-        appendItem('Wafer 보기', () => this.openChipLabelWaferView(key));
-        appendItem('Lot 보기', () => this.openChipLabelLotView(key));
+        if (this.classMode === 'chip' && key) {
+            appendItem('Wafer 보기', () => this.openChipLabelWaferView(key));
+            appendItem('Lot 보기', () => this.openChipLabelLotView(key));
+        }
+        if ((this.labelSelection?.selectedClasses || []).length > 0) {
+            appendItem('선택한 Class 삭제', async () => {
+                await this.deleteLabelExplorerSelectedClasses();
+            });
+        }
+        if (
+            (this.labelSelection?.selected || []).length > 0 ||
+            (this.labelSelection?.selectedClasses || []).length > 0
+        ) {
+            appendItem('선택한 Label 삭제', async () => {
+                await this.deleteSelectedLabelExplorerLabels();
+            });
+        }
+        appendItem('선택 해제', () => {
+            this.clearLabelExplorerSelection();
+        });
 
         document.body.appendChild(menu);
 
@@ -32575,6 +32748,64 @@ class WaferMapViewer {
         this.updateBottomButtonUI();
     }
 
+    async _waitForGridCoordinateTargetReady(timeoutMs = 30000) {
+        const startedAt = Date.now();
+        while (Date.now() - startedAt < timeoutMs) {
+            if (this.chipAnnotator && Array.isArray(this.chipAnnotator.chips) && this.chipAnnotator.chips.length > 0) {
+                return true;
+            }
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        return false;
+    }
+
+    async openGridCoordinateSelection(options = {}) {
+        if (!this.gridMode) {
+            if (options.showShotBoundary && this.chipAnnotator) {
+                this.chipAnnotator.setShotBoundaryVisible(!this.chipAnnotator.shotBoundaryVisible);
+            }
+            if (options.openModal !== false) {
+                this.openCoordinateSelectionModal();
+            }
+            return;
+        }
+
+        const selectedPaths = this._getGridSelectedImagePaths();
+        if (!selectedPaths.length) {
+            this.showToast?.('Coord를 적용할 wafer를 먼저 선택하세요.', 1800);
+            return;
+        }
+
+        const imageList = (this.currentGridImages?.length ? this.currentGridImages : this.selectedImages) || [];
+        const firstPath = selectedPaths[0];
+        let targetIndex = imageList.findIndex(path => this.normalizePath(path) === this.normalizePath(firstPath));
+        if (targetIndex < 0) targetIndex = Array.isArray(this.gridSelectedIdxs) ? this.gridSelectedIdxs[0] : 0;
+        if (!Number.isInteger(targetIndex) || targetIndex < 0 || targetIndex >= imageList.length) {
+            this.showToast?.('선택한 wafer를 열 수 없습니다.', 1800);
+            return;
+        }
+
+        this._pendingGridRegionComposite = {
+            sourceImages: [...selectedPaths],
+            targetPath: imageList[targetIndex],
+            startedAt: Date.now(),
+        };
+        this.showToast?.(`선택 wafer ${selectedPaths.length}개 기준 Coord 선택`, 1800);
+        this.enterGridImageViewMode(targetIndex);
+
+        const ready = await this._waitForGridCoordinateTargetReady();
+        if (!ready) {
+            this.showToast?.('현재 wafer의 좌표 정보가 아직 준비되지 않았습니다.', 2200);
+            return;
+        }
+        if (options.showShotBoundary && this.chipAnnotator && !this.chipAnnotator.shotBoundaryVisible) {
+            this.chipAnnotator.setShotBoundaryVisible(true);
+        }
+        if (options.openModal !== false) {
+            this.openCoordinateSelectionModal();
+        }
+    }
+
     /**
      * Render color legend for grid mode (horizontal layout)
      */
@@ -32754,8 +32985,10 @@ class WaferMapViewer {
         } else if (userData.bottom && typeof userData.bottom === 'object') {
             // 🔥 BOTTOM_KEYS 순서 보장하여 렌더링 (키 순서가 환경에 따라 달라질 수 있음)
             const BOTTOM_KEYS = this._getBottomLegendKeysForPath('');
-            // Border button (left of Normal, same style as legend-item-grid)
+            // Grid controls (same compact style as the existing Border button)
             const borderActive = this.borderNormalize;
+            html += `<button id="grid-coordinate-select-open-btn" class="grid-btn" style="cursor:pointer;padding:2px 6px;border-radius:3px;font-size:11px;background:#222;border:1px solid #444;color:#ccc;flex-shrink:0;user-select:none;margin-right:4px;" title="Coord: 선택 wafer의 좌표 선택 패널 열기">Coord</button>`;
+            html += `<button id="grid-shot-boundary-btn" class="grid-btn" style="cursor:pointer;padding:2px 6px;border-radius:3px;font-size:11px;background:#222;border:1px solid #444;color:#ccc;flex-shrink:0;user-select:none;margin-right:4px;" title="Shot: 선택 wafer를 열고 shot 경계 표시">Shot</button>`;
             html += `<button id="grid-border-normalize-btn" class="grid-btn${borderActive ? ' is-active' : ''}" style="cursor:pointer;padding:2px 6px;border-radius:3px;font-size:11px;background:${borderActive ? '#2f6fed' : '#222'};border:1px solid ${borderActive ? '#1c50b5' : '#444'};color:${borderActive ? '#fff' : '#ccc'};flex-shrink:0;user-select:none;margin-right:4px;">Border</button>`;
             const bottomHtml = BOTTOM_KEYS.map((label, index) => {
                 // 🔥 "Border" 키가 있는 경우 "Normal"로 매핑 (Ubuntu 서버 호환성)
@@ -32799,6 +33032,20 @@ class WaferMapViewer {
         html += '</div>';
 
         this.dom.gridColorLegendBottom.innerHTML = html;
+        const gridCoordBtn = document.getElementById('grid-coordinate-select-open-btn');
+        if (gridCoordBtn) {
+            gridCoordBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                void this.openGridCoordinateSelection({ openModal: true });
+            });
+        }
+        const gridShotBtn = document.getElementById('grid-shot-boundary-btn');
+        if (gridShotBtn) {
+            gridShotBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                void this.openGridCoordinateSelection({ openModal: false, showShotBoundary: true });
+            });
+        }
         // Attach border button handler
         const gridBorderBtn = document.getElementById('grid-border-normalize-btn');
         if (gridBorderBtn) {

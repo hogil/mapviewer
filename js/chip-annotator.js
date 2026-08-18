@@ -2562,7 +2562,9 @@ export class ChipAnnotator {
         const notifyViewer = options?.notifyViewer !== false;
 
         const viewer = this.viewer;
-        if (viewer.isCoordinateSelectionOpen && !viewer.coordinateSelectionSuppressSelectionSync) {
+        const hasCoordinateListInput = viewer.coordinateSelectionLists &&
+            Object.values(viewer.coordinateSelectionLists).some((state) => state?.hasInput);
+        if (viewer.isCoordinateSelectionOpen && !viewer.coordinateSelectionSuppressSelectionSync && !hasCoordinateListInput) {
             viewer._syncCoordinateSelectionListsFromSelectedChips?.();
         }
 

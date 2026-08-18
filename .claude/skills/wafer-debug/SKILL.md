@@ -199,3 +199,16 @@ argument-hint: [증상-설명]
 - 원인: `viewerContainer`의 `dblclick`이 패널 자식 이벤트까지 받아 `gridImage` 종료를 실행했다. Border는 서버 PLTE 치환 뒤 client overlay에서 최대 3px 선을 추가했다. Shot의 기존 Chip이 전부 선택된 경우 canonical boundary 전체를 채우는 shortcut이 있었다.
 - 수정 패턴: 네 고정 패널 내부 더블클릭을 navigation 전에 차단한다. Border는 PNG PLTE 인덱스 10을 11~23에 복사하는 서버 경로만 사용하고 client geometry를 만들지 않는다. Shot 외곽선은 canonical 크기를 유지하되 선택 채움은 실제 선택 Chip rect만 순회한다.
 - E2E 신호: `layout-chip-coordinates`가 네 패널 더블클릭과 확대·pan 6회 후 visibility/path/mode를 확인하고, Chip 1개 partial Shot의 빈 슬롯 픽셀이 변하지 않는지 검사한다. `systematic-measure-single-lot-wafer`는 Border 전후 IDAT와 overlay hash 동일, PLTE 11~23만 Normal 색으로 바뀌는지 검사한다.
+
+### Grid Coord Shot Composite / Measure median (2026-08-18)
+
+- 증상: grid에서 wafer 여러 장을 선택하고 Coord로 Shot을 고른 뒤 Composite를 만들 때 단일 대표 wafer만 source로 쓰이거나, gridImage 로드 후처리의 늦은 selection sync가 coordinate list를 비우면 사용자가 고른 wafer/Shot selection이 사라진 것처럼 보인다. `med` aggregation은 failbit palette/class가 아니라 FBT/QVL measure 값에서만 의미가 있다.
+- 수정 패턴: grid bottom legend의 `Coord`, `Shot`, `Border` 버튼은 같이 보여야 한다. grid `Coord`는 선택 wafer 목록을 `_pendingGridRegionComposite.sourceImages`로 보존한 뒤 대표 wafer를 `gridImage`로 열고 기존 coordinate modal을 사용한다. coordinate modal에 입력 state가 있으면 chip selection 자동 sync가 그 입력을 덮지 않는다. selected Shot/Chip Composite는 pending source를 `image_paths`로 보내고 completion 후 cleanup한다. M.Comp `MED`는 FBT/QVL 요청에만 `aggregation=median`을 보낸다.
+- E2E 신호: `selected-region-composite`는 grid controls visible, 선택 wafer 2개 payload, pending cleanup, median data-only 결과를 확인한다. `8,9,10,11`은 M.Comp submenu의 `SUM|MED` toggle을 확인한다.
+
+### Shot Position picker chip-only selection (2026-08-18)
+
+- 증상: coordinate modal의 Shot Position cell 하나를 눌렀는데 해당 position chip만 남지 않고 Shot 전체가 선택된 것처럼 보인다.
+- 원인 후보: `js/main.js::_applyCoordinateSelectionShotPickerSelection()`이 `chip-annotator.js::setShotChipSelections()`를 호출하면 `selectionMode='shot'`로 강제되어 렌더/데이터 경로가 Shot 단위로 확장된다.
+- 수정 패턴: Shot Position picker는 클릭된 position 번호를 직접 chip index로 변환하고 `selectionMode='chip'`으로 저장한다. Shot X/Y row나 기존 Shot selection이 있으면 그 scope 안에서만 같은 position을 선택하고, scope가 없으면 wafer 전체의 같은 position을 선택한다.
+- E2E 신호: `coordinate-selection-cells`는 scope 없음 position 0 선택과 Shot 두 개 scope 내 position 1개 선택을 모두 확인해야 한다. `scripts/e2e_shot_100_products_guard.js`는 100개 synthetic product에서 같은 Shot Position 계약을 반복 확인해야 한다.

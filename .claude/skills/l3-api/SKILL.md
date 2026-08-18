@@ -178,3 +178,16 @@ return Response(content=data, headers={
 - 원인: MY LOT batch paste/search가 `/api/search`에 `q`, `lot_multi`, `lot_wafer`를 함께 보내면 `SearchService.search()`의 `q + lot_multi` 분기가 먼저 실행되어 `lot_wafer` pair 필터를 적용하지 않았다. 프론트의 `updateGroupEntries()`도 wafer 모드에서 저장된 pair를 LOT-only로 재검색해 그룹을 전체 LOT wafer로 확장할 수 있었다.
 - 수정 패턴: `query_for_search`가 `lot_filter` 또는 `lot_wafer_pairs`와 결합되면 둘 다에서 LOT 후보를 만들고, indexed hit와 live fallback 모두 같은 `lot_wafer_pairs` 필터를 통과시킨다. MY LOT wafer update/save는 LOT/Wafer pair 단위로만 검색하고, 검색 결과 0건을 LOT 전체 검색으로 fallback하지 않는다. Numeric wafer는 leading zero를 제거해 `5 == 05`로 처리한다.
 - 평가: 같은 LOT에서 여러 wafer 중 일부 pair만 붙여넣고 저장한 뒤 Wafer 그룹 Grid를 열었을 때 선택 pair 외 wafer가 없어야 한다. `/api/search?...lot_wafer=LOT:5...`는 파일명 wafer `05`를 찾아야 한다.
+
+### Bootstrap forwarded Response handling (2026-08-18)
+
+- 증상: full app lazy load 후 `/api/files?path=classification/<deleted-class>`가 404 대신 `Exception in ASGI application`과 `TypeError: Object of type JSONResponse is not JSON serializable`을 낼 수 있었다.
+- 원인: `api/main.py::get_files()`가 full app handler에서 이미 생성한 Starlette `JSONResponse`를 다시 `JSONResponse(forwarded)`로 감쌌다.
+- 수정 패턴: bootstrap route가 `_maybe_forward_to_full_app()` 결과를 받을 때, 결과가 `Response`이면 그대로 반환하고 dict/list 같은 JSON-serializable 값만 `JSONResponse`로 감싼다. `/api/files`처럼 bootstrap과 full app이 같은 route를 공유하는 경로는 deleted/missing classification folder 404 응답을 직접 확인한다.
+- 평가: `scripts/e2e_chunk3.js` record `label-wafer-crud`는 삭제된 class folder의 `/api/files`가 stable 404인지 확인한다.
+
+### Grid Coord Shot Composite와 Measure median (2026-08-18)
+
+- 증상: grid에서 여러 wafer를 선택한 뒤 Coord로 Shot을 고르고 Composite를 만들면 대표 단일 이미지 하나만 source로 쓰이거나, gridImage 로드 후처리가 늦게 빈 selection sync를 실행해 coordinate list가 비워질 수 있었다. Measure Composite의 `med` 요구는 failbit/class index가 아니라 FBT/QVL 같은 measure 값에서 처리해야 한다.
+- 수정 패턴: frontend는 grid Coord 진입 시 선택 wafer 목록을 `_pendingGridRegionComposite.sourceImages`에 보존하고, selected Shot/Chip Composite payload의 `image_paths`로 사용한 뒤 cleanup한다. Coord modal에 입력 state가 있으면 `chipAnnotator.updateSelectedChipsList()`의 자동 sync가 coordinate list를 덮지 않아야 한다. `/api/measure-composite`와 `/api/measure-composite-data`는 `aggregation=median`을 허용하고, `api/measure_composite.py`는 chip 좌표별 value list의 median을 계산한다. BIN/SYSTEMATIC은 계속 `count`를 `sum`으로 변환하고, failbit grade composite 경로는 변경하지 않는다.
+- 평가: `scripts/e2e_chunk2.js` record `selected-region-composite`는 grid Coord selected Shot payload의 source image 2개와 pending cleanup을 확인하고, 브라우저에서 `/api/measure-composite-data` median 결과를 raw positions median과 비교한다.

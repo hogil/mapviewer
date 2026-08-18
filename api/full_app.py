@@ -11434,7 +11434,7 @@ class MeasureCompositeRequest(BaseModel):
     mode: str                                           # 'bin' | 'systematic' | 'f' | 'q'
     item_key: Optional[str] = None                      # FBT/QVL item key (e.g., "2342")
     bin_types: Optional[List[str]] = None               # BIN mode: ["285", "286", ...]
-    aggregation: str = "average"                        # 'count' | 'sum' | 'average'
+    aggregation: str = "average"                        # 'count' | 'sum' | 'average' | 'median'
     scheme: Optional[str] = None
     color_source: Optional[str] = None                  # 'composite' → composite tab colors
 
@@ -11523,6 +11523,8 @@ async def measure_composite_data_endpoint(
     image_paths = [_to_relative_path(p) for p in payload.image_paths]
     if not image_paths:
         raise HTTPException(status_code=400, detail="image_paths required")
+    if payload.aggregation not in ("count", "sum", "average", "median"):
+        raise HTTPException(status_code=400, detail="aggregation은 'count', 'sum', 'average', 'median' 중 하나여야 합니다.")
 
     login_id = _current_login_id(req)
     resolved_scheme = login_id or ANONYMOUS_LOGIN_ID
@@ -11567,8 +11569,8 @@ async def create_measure_composite_endpoint(
     if payload.mode in ("f", "q") and not payload.item_key:
         raise HTTPException(status_code=400, detail="FBT/QVL 모드에서는 item_key가 필요합니다.")
 
-    if payload.aggregation not in ("count", "sum", "average"):
-        raise HTTPException(status_code=400, detail="aggregation은 'count', 'sum', 'average' 중 하나여야 합니다.")
+    if payload.aggregation not in ("count", "sum", "average", "median"):
+        raise HTTPException(status_code=400, detail="aggregation은 'count', 'sum', 'average', 'median' 중 하나여야 합니다.")
 
     # 절대경로 → 상대경로 변환
     image_paths = [_to_relative_path(p) for p in image_paths]

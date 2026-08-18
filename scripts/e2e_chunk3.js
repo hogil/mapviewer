@@ -1252,8 +1252,32 @@ const { createRunner } = require('./e2e_playwright_session');
       { names: classNames },
       { timeout: 20000 }
     );
+    const deletedFolderResponses = await page.evaluate(async ({ expectedMode, names }) => {
+      const dirName = expectedMode === 'chip' ? 'classification_chips' : 'classification';
+      const results = [];
+      for (const name of names) {
+        const labelPath = `${dirName}/${name}`;
+        const response = await fetch(`/api/files?path=${encodeURIComponent(labelPath)}`, {
+          cache: 'no-store',
+          credentials: 'same-origin',
+        });
+        const text = await response.text();
+        results.push({
+          name,
+          path: labelPath,
+          status: response.status,
+          body: text.slice(0, 300),
+        });
+      }
+      return results;
+    }, { expectedMode: mode, names: classNames });
+    expect(
+      deletedFolderResponses.every((result) => result.status === 404),
+      `deleted class /api/files should be stable 404, not bootstrap/full-app 500=${JSON.stringify(deletedFolderResponses)}`
+    );
     return {
       selectedBeforeDelete,
+      deletedFolderResponses,
       after: await getClassificationUiState(classNames),
     };
   }
@@ -1481,6 +1505,35 @@ const { createRunner } = require('./e2e_playwright_session');
     }, className);
   }
 
+  async function getViewerVisualSnapshot(label) {
+    return await page.evaluate((snapshotLabel) => {
+      const grid = document.getElementById('image-grid');
+      const wrapper = grid?.closest('.grid-scroll-wrapper') || grid?.parentElement;
+      const wraps = Array.from(document.querySelectorAll('#image-grid .grid-thumb-wrap'));
+      const visibleWraps = wraps.filter((wrap) => {
+        const rect = wrap.getBoundingClientRect();
+        const style = getComputedStyle(wrap);
+        return style.display !== 'none' &&
+          style.visibility !== 'hidden' &&
+          rect.width > 0 &&
+          rect.height > 0;
+      });
+      return {
+        label: snapshotLabel,
+        role: window.viewer?.pageManager?.getActivePage?.()?.role || null,
+        gridMode: window.viewer?.gridMode === true,
+        viewMode: window.viewer?.viewMode || null,
+        selectedImagePath: String(window.viewer?.selectedImagePath || '').replace(/\\/g, '/'),
+        currentGridImages: window.viewer?.currentGridImages?.length || 0,
+        firstGridImage: String(window.viewer?.currentGridImages?.[0] || '').replace(/\\/g, '/'),
+        wraps: wraps.length,
+        visibleWraps: visibleWraps.length,
+        gridDisplay: grid ? getComputedStyle(grid).display : null,
+        wrapperDisplay: wrapper ? getComputedStyle(wrapper).display : null,
+      };
+    }, label);
+  }
+
   async function waitForOpenLabelFolderCount(className, expectedCount, comparator = 'eq') {
     try {
       await page.waitForFunction(
@@ -1544,6 +1597,52 @@ const { createRunner } = require('./e2e_playwright_session');
     await page.mouse.click(box.x, box.y);
     await sleep(1200);
     return box;
+  }
+
+  async function rightClickLabelFolderMenu(className) {
+    const locator = await getLabelFolderLocator(className);
+    await locator.click({ button: 'right', timeout: 10000 });
+    await page.waitForFunction(
+      () => {
+        const menu = document.getElementById('label-chip-context-menu');
+        return !!menu && getComputedStyle(menu).display !== 'none';
+      },
+      null,
+      { timeout: 10000 }
+    );
+    return await page.evaluate(() => ({
+      text: document.getElementById('label-chip-context-menu')?.innerText || '',
+      selectedClasses: [...(window.viewer?.labelSelection?.selectedClasses || [])],
+      selectedLabels: [...(window.viewer?.labelSelection?.selected || [])],
+    }));
+  }
+
+  async function rightClickLabelImageMenu(className, index = 0) {
+    const box = await getLabelImageButtonBox(className, index, false);
+    expect(!!box, `label image context target missing: ${className}[${index}]`);
+    await page.mouse.click(box.x, box.y, { button: 'right' });
+    await page.waitForFunction(
+      () => {
+        const menu = document.getElementById('label-chip-context-menu');
+        return !!menu && getComputedStyle(menu).display !== 'none';
+      },
+      null,
+      { timeout: 10000 }
+    );
+    return await page.evaluate(() => ({
+      text: document.getElementById('label-chip-context-menu')?.innerText || '',
+      selectedClasses: [...(window.viewer?.labelSelection?.selectedClasses || [])],
+      selectedLabels: [...(window.viewer?.labelSelection?.selected || [])],
+    }));
+  }
+
+  async function clickLabelContextMenuItem(text) {
+    await page
+      .locator('#label-chip-context-menu .context-menu-item')
+      .filter({ hasText: text })
+      .first()
+      .click({ timeout: 10000 });
+    await sleep(1200);
   }
 
   async function selectLabelFoldersViaUi(mode, classNames) {
@@ -2752,6 +2851,91 @@ const { createRunner } = require('./e2e_playwright_session');
           folderAOpenBeforeAdd,
           openFolderAddDialogs,
           folderAOpenAfterAdd,
+        })}`
+      );
+
+      await ensureLabelFolderOpen(classes.folderB, 2);
+      const folderBOpenBeforeContextClassDelete = await waitForOpenLabelFolderCount(classes.folderB, 2);
+      const classContextAdd = await addClassesViaUi('wafer', [classes.classSingle]);
+      expect(
+        classContextAdd.present.includes(classes.classSingle),
+        `wafer context class add failed=${JSON.stringify(classContextAdd)}`
+      );
+      const classContextVisualBefore = await getViewerVisualSnapshot('before-context-class-delete');
+      const classContextMenu = await rightClickLabelFolderMenu(classes.classSingle);
+      expect(
+        classContextMenu.text.includes('선택한 Class 삭제') &&
+          classContextMenu.selectedClasses.includes(classes.classSingle),
+        `wafer label folder context class menu invalid=${JSON.stringify(classContextMenu)}`
+      );
+      const classContextDeleteDialogs = await withAutoDialogs(async () => {
+        await clickLabelContextMenuItem('선택한 Class 삭제');
+      });
+      await page.waitForFunction(
+        (targetClass) => !Array.from(document.querySelectorAll('#label-explorer-list li > div'))
+          .map((node) => (node.textContent || '').replace(/[▸▾]/g, '').trim())
+          .includes(targetClass),
+        classes.classSingle,
+        { timeout: 20000 }
+      );
+      const contextClassDeleteState = await getClassificationUiState([classes.classSingle, classes.folderA, classes.folderB]);
+      const folderAOpenAfterContextClassDelete = await waitForOpenLabelFolderCount(classes.folderA, folderAOpenAfterAdd.count, 'gte');
+      const folderBOpenAfterContextClassDelete = await waitForOpenLabelFolderCount(classes.folderB, folderBOpenBeforeContextClassDelete.count);
+      const classContextVisualAfter = await getViewerVisualSnapshot('after-context-class-delete');
+      expect(
+        contextClassDeleteState.absent.includes(classes.classSingle) &&
+          folderAOpenAfterContextClassDelete.open &&
+          folderBOpenAfterContextClassDelete.open &&
+          folderAOpenAfterContextClassDelete.count >= folderAOpenAfterAdd.count &&
+          folderBOpenAfterContextClassDelete.count === folderBOpenBeforeContextClassDelete.count &&
+          classContextVisualAfter.gridMode === classContextVisualBefore.gridMode &&
+          classContextVisualAfter.viewMode === classContextVisualBefore.viewMode &&
+          classContextVisualAfter.selectedImagePath === classContextVisualBefore.selectedImagePath &&
+          classContextVisualAfter.currentGridImages === classContextVisualBefore.currentGridImages &&
+          classContextVisualAfter.firstGridImage === classContextVisualBefore.firstGridImage &&
+          classContextVisualAfter.visibleWraps === classContextVisualBefore.visibleWraps,
+        `wafer label context class delete did not preserve open folders=${JSON.stringify({
+          classContextMenu,
+          classContextDeleteDialogs,
+          contextClassDeleteState,
+          folderAOpenAfterContextClassDelete,
+          folderBOpenAfterContextClassDelete,
+          classContextVisualBefore,
+          classContextVisualAfter,
+        })}`
+      );
+
+      await ensureLabelFolderOpen(classes.labelAdd, 1);
+      const contextLabelDeleteBefore = await waitForOpenLabelFolderCount(classes.labelAdd, labelAddFiles.count, 'gte');
+      const labelContextVisualBefore = await getViewerVisualSnapshot('before-context-label-delete');
+      const labelContextMenu = await rightClickLabelImageMenu(classes.labelAdd, 0);
+      expect(
+        labelContextMenu.text.includes('선택한 Label 삭제') &&
+          labelContextMenu.selectedLabels.length === 1 &&
+          labelContextMenu.selectedLabels[0].startsWith(`${classes.labelAdd}/`),
+        `wafer label image context delete menu invalid=${JSON.stringify(labelContextMenu)}`
+      );
+      const labelContextDeleteDialogs = await withAutoDialogs(async () => {
+        await clickLabelContextMenuItem('선택한 Label 삭제');
+      });
+      const contextLabelDeleteAfter = await waitForOpenLabelFolderCount(classes.labelAdd, contextLabelDeleteBefore.count - 1);
+      const labelContextVisualAfter = await getViewerVisualSnapshot('after-context-label-delete');
+      expect(
+        contextLabelDeleteAfter.open &&
+          contextLabelDeleteAfter.count === contextLabelDeleteBefore.count - 1 &&
+          labelContextVisualAfter.gridMode === labelContextVisualBefore.gridMode &&
+          labelContextVisualAfter.viewMode === labelContextVisualBefore.viewMode &&
+          labelContextVisualAfter.selectedImagePath === labelContextVisualBefore.selectedImagePath &&
+          labelContextVisualAfter.currentGridImages === labelContextVisualBefore.currentGridImages &&
+          labelContextVisualAfter.firstGridImage === labelContextVisualBefore.firstGridImage &&
+          labelContextVisualAfter.visibleWraps === labelContextVisualBefore.visibleWraps,
+        `wafer label context delete did not remove only one label=${JSON.stringify({
+          labelContextMenu,
+          labelContextDeleteDialogs,
+          contextLabelDeleteBefore,
+          contextLabelDeleteAfter,
+          labelContextVisualBefore,
+          labelContextVisualAfter,
         })}`
       );
 
