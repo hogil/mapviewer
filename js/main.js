@@ -505,6 +505,7 @@ class WaferMapViewer {
         this.contextMenuJustShown = false;
         this.contextMenuTargetIndex = null;
         this.contextMenuTargetPath = null;
+        this._gridContextSelectionGuardUntil = 0;
         this._lastPointerClient = { x: null, y: null };
         this._contextMenuHoverManagerBound = false;
         this.compositeProgressOverlay = null;
@@ -5659,6 +5660,12 @@ class WaferMapViewer {
         };
 
         const handleTapSelection = (event) => {
+            const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+                ? performance.now()
+                : Date.now();
+            if (now < (this._gridContextSelectionGuardUntil || 0)) {
+                return;
+            }
             if (typeof event?.button === 'number' && event.button !== 0) {
                 return;
             }
@@ -14606,13 +14613,38 @@ class WaferMapViewer {
         if (meaSubmenu) meaSubmenu._meaBuilt = false;
     }
 
+    _prepareGridContextMenuSelection(clickedIdx) {
+        const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+            ? performance.now()
+            : Date.now();
+        this._gridContextSelectionGuardUntil = now + 500;
+        const pending = this._pendingGridPlainClickSelection;
+        if (pending && Number.isInteger(pending.idx)) {
+            const selected = Array.isArray(this.gridSelectedIdxs) ? this.gridSelectedIdxs : [];
+            this.contextMenuJustShown = false;
+            if (!selected.includes(clickedIdx) && pending.idx === clickedIdx) {
+                this._clearPendingGridPlainClickSelection?.({ apply: true });
+            } else {
+                this._clearPendingGridPlainClickSelection?.({ apply: false });
+            }
+        }
+        this.contextMenuJustShown = true;
+    }
+
     _syncSelectionForGridContextTarget(clickedIdx) {
         if (!this.gridMode || !Number.isInteger(clickedIdx) || !Array.isArray(this.currentGridImages)) return;
         if (clickedIdx < 0 || clickedIdx >= this.currentGridImages.length) return;
 
         const selected = Array.isArray(this.gridSelectedIdxs) ? this.gridSelectedIdxs : [];
         if (selected.includes(clickedIdx)) {
-            this.updateSelectedGridImagesList();
+            const normalized = selected
+                .filter((idx) => Number.isInteger(idx) && idx >= 0 && idx < this.currentGridImages.length)
+                .filter((idx, index, arr) => arr.indexOf(idx) === index)
+                .sort((a, b) => a - b);
+            this.gridSelectedIdxs = normalized;
+            this.gridSelectedSet = new Set(normalized);
+            this.gridLastClickedIdx = clickedIdx;
+            this.updateGridSelection();
             return;
         }
 
@@ -14944,14 +14976,11 @@ class WaferMapViewer {
             mode: 'shot',
             includeAllWhenEmpty: true,
         });
-        const shotLabel = shotContext
-            ? `${shotContext.usedAllRegion ? '전체' : '선택'} Shot Composite Map 만들기 (${shotContext.selectedUnitCount}개)`
-            : '';
         this._configureGridCompositeContextItem(
             this._ensureGridContextMenuItem(contextMenu, 'grid-selected-region-composite-create'),
             shotContext,
             {
-                text: shotLabel,
+                text: 'Shot Composite',
                 contextOptions: { mode: 'shot', includeAllWhenEmpty: true },
             }
         );
@@ -14959,9 +14988,7 @@ class WaferMapViewer {
             this._ensureGridContextMenuItem(contextMenu, 'grid-shot-local-square-weighted-create'),
             shotContext,
             {
-                text: shotContext
-                    ? `Shot-local Square Weighted Avg 만들기 (${shotContext.usedAllRegion ? '전체 Shot' : `${shotContext.selectedUnitCount}개 Shot`})`
-                    : '',
+                text: 'Shot Composite WTW',
                 title: '선택 wafer의 Shot을 shot-local grid로 누적해 square weighted average 한 장을 만듭니다.',
                 contextOptions: { mode: 'shot', includeAllWhenEmpty: true },
                 shotLocalSquareWeighted: true,
@@ -14976,9 +15003,7 @@ class WaferMapViewer {
             this._ensureGridContextMenuItem(contextMenu, 'grid-chip-composite-create'),
             chipContext,
             {
-                text: chipContext
-                    ? `${chipContext.usedAllRegion ? '전체' : '선택'} Chip Composite Map 만들기 (${chipContext.selectedUnitCount}개)`
-                    : '',
+                text: 'Chip Composite',
                 contextOptions: { mode: 'chip', includeAllWhenEmpty: true },
             }
         );
@@ -24454,8 +24479,7 @@ class WaferMapViewer {
         wrap.oncontextmenu = (e) => {
             e.preventDefault();
             e.stopPropagation();
-            this._clearPendingGridPlainClickSelection?.({ apply: false });
-            this.contextMenuJustShown = true;
+            this._prepareGridContextMenuSelection?.(idx);
             this.showContextMenu(e, idx);
         };
 
@@ -26317,9 +26341,13 @@ class WaferMapViewer {
         // 그리드의 선택 상태만 업데이트 (전체 재렌더링 없음)
         const grid = document.getElementById('image-grid');
         const wraps = grid.querySelectorAll('.grid-thumb-wrap');
-        wraps.forEach((wrap, idx) => {
-            const isSelected = this.gridSelectedIdxs.includes(idx);
-            wrap.className = 'grid-thumb-wrap' + (isSelected ? ' selected' : '');
+        const selectedSet = this.gridSelectedSet instanceof Set
+            ? this.gridSelectedSet
+            : new Set(Array.isArray(this.gridSelectedIdxs) ? this.gridSelectedIdxs : []);
+        wraps.forEach((wrap, fallbackIdx) => {
+            const parsedIdx = Number.parseInt(wrap.dataset?.index ?? '', 10);
+            const idx = Number.isInteger(parsedIdx) ? parsedIdx : fallbackIdx;
+            wrap.classList.toggle('selected', selectedSet.has(idx));
         });
 
         // 🔥 Wafer Map Explorer에서만 savedViewState 업데이트 (Label Explorer 제외)
@@ -32868,6 +32896,15 @@ class WaferMapViewer {
         const pixelHeight = cssHeight;
         if (canvas.width !== pixelWidth) canvas.width = pixelWidth;
         if (canvas.height !== pixelHeight) canvas.height = pixelHeight;
+        const normalizedPath = this.normalizePath(imagePath);
+        if (
+            canvas.dataset.shotOverlayRendered === 'true' &&
+            canvas.dataset.shotOverlayPath === normalizedPath &&
+            Number(canvas.dataset.shotOverlayWidth || '0') === pixelWidth &&
+            Number(canvas.dataset.shotOverlayHeight || '0') === pixelHeight
+        ) {
+            return;
+        }
 
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
@@ -32879,6 +32916,9 @@ class WaferMapViewer {
         if (!data?.groups?.length || !(data.canvasWidth > 0) || !(data.canvasHeight > 0)) {
             canvas.dataset.shotOverlayRendered = 'false';
             canvas.dataset.shotBoundaryCount = '0';
+            canvas.dataset.shotOverlayPath = normalizedPath;
+            canvas.dataset.shotOverlayWidth = String(pixelWidth);
+            canvas.dataset.shotOverlayHeight = String(pixelHeight);
             return;
         }
 
@@ -32902,6 +32942,9 @@ class WaferMapViewer {
 
         canvas.dataset.shotOverlayRendered = drawn > 0 ? 'true' : 'false';
         canvas.dataset.shotBoundaryCount = String(drawn);
+        canvas.dataset.shotOverlayPath = normalizedPath;
+        canvas.dataset.shotOverlayWidth = String(pixelWidth);
+        canvas.dataset.shotOverlayHeight = String(pixelHeight);
     }
 
     async renderGridShotBoundaryOverlays() {
@@ -32912,11 +32955,6 @@ class WaferMapViewer {
         const requestSeq = (this._gridShotBoundaryRenderSeq || 0) + 1;
         this._gridShotBoundaryRenderSeq = requestSeq;
         const wraps = this._getVisibleGridShotBoundaryWraps();
-        const visibleSet = new Set(wraps);
-        document.querySelectorAll('.grid-shot-boundary-overlay').forEach((canvas) => {
-            const wrap = canvas.closest('.grid-thumb-wrap');
-            if (!visibleSet.has(wrap)) canvas.remove();
-        });
         await Promise.allSettled(wraps.map((wrap) =>
             this._renderGridShotBoundaryOverlayForWrap(wrap, requestSeq)
         ));
@@ -35952,8 +35990,7 @@ class WaferMapViewer {
         wrap.oncontextmenu = e => {
             e.preventDefault();
             e.stopPropagation();
-            this._clearPendingGridPlainClickSelection?.({ apply: false });
-            this.contextMenuJustShown = true;
+            this._prepareGridContextMenuSelection?.(idx);
             this.showContextMenu(e, idx);
         };
 

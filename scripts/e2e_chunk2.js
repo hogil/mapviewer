@@ -4124,6 +4124,63 @@ const { createRunner } = require('./e2e_playwright_session');
       gridShotOverlay.selectedPaths.join('|') === gridShotBefore.selectedPaths.join('|') &&
       gridShotOverlay.selectedChipCount === gridShotBefore.selectedChipCount,
       `grid Shot overlay must not change wafer/coord selection before=${JSON.stringify(gridShotBefore)} after=${JSON.stringify(gridShotOverlay)}`);
+    const gridShotScrollPersist = await page.evaluate(async () => {
+      const v = window.viewer;
+      const wrapper = document.querySelector('.grid-scroll-wrapper');
+      const rendered = Array.from(document.querySelectorAll('.grid-shot-boundary-overlay'))
+        .find((canvas) => canvas.dataset.shotOverlayRendered === 'true' &&
+          Number(canvas.dataset.shotBoundaryCount || '0') > 0);
+      const wrap = rendered?.closest?.('.grid-thumb-wrap');
+      if (!v || !wrapper || !rendered || !wrap) {
+        return { ok: false, reason: 'missing rendered shot overlay' };
+      }
+      const targetIndex = Number(wrap.dataset.index);
+      const targetPath = String(wrap.dataset.path || '').replace(/\\/g, '/');
+      rendered.dataset.e2eShotPersistMarker = 'keep';
+      const original = v._getGridShotBoundaryData;
+      const calls = [];
+      v._getGridShotBoundaryData = async function(imagePath) {
+        calls.push(String(imagePath || '').replace(/\\/g, '/'));
+        return original.call(this, imagePath);
+      };
+      try {
+        const startTop = wrapper.scrollTop;
+        wrapper.scrollTop = Math.min(
+          Math.max(0, wrapper.scrollHeight - wrapper.clientHeight),
+          startTop + Math.max(wrapper.clientHeight * 2, 800)
+        );
+        wrapper.dispatchEvent(new Event('scroll', { bubbles: true }));
+        v._scheduleGridShotBoundaryOverlayRender?.(0);
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        wrap.scrollIntoView({ block: 'center', inline: 'nearest' });
+        wrapper.dispatchEvent(new Event('scroll', { bubbles: true }));
+        v._scheduleGridShotBoundaryOverlayRender?.(0);
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      } finally {
+        v._getGridShotBoundaryData = original;
+      }
+      const targetWrap = document.querySelector(`#image-grid .grid-thumb-wrap[data-index="${targetIndex}"]`);
+      const targetCanvas = targetWrap?.querySelector?.('.grid-shot-boundary-overlay');
+      const targetCalls = calls.filter((imagePath) => imagePath === targetPath).length;
+      return {
+        ok: true,
+        targetIndex,
+        targetPath,
+        markerKept: targetCanvas?.dataset?.e2eShotPersistMarker === 'keep',
+        rendered: targetCanvas?.dataset?.shotOverlayRendered || '',
+        boundaryCount: Number(targetCanvas?.dataset?.shotBoundaryCount || '0'),
+        targetCalls,
+        totalCalls: calls.length,
+        buttonPressed: document.getElementById('grid-shot-boundary-btn')?.getAttribute('aria-pressed') || '',
+      };
+    });
+    expect(gridShotScrollPersist.ok &&
+      gridShotScrollPersist.markerKept &&
+      gridShotScrollPersist.rendered === 'true' &&
+      gridShotScrollPersist.boundaryCount > 0 &&
+      gridShotScrollPersist.targetCalls === 0 &&
+      gridShotScrollPersist.buttonPressed === 'true',
+      `grid Shot overlay must persist across scroll=${JSON.stringify(gridShotScrollPersist)}`);
     const gridShotCanonicalEdge = await page.evaluate(async ({ imagePath }) => {
       const data = await window.viewer?._getGridShotBoundaryData?.(imagePath);
       const partials = (data?.groups || []).filter((group) =>
@@ -4351,6 +4408,15 @@ const { createRunner } = require('./e2e_playwright_session');
       gridCoordAfter.modalHidden,
       `grid coord after=${JSON.stringify(gridCoordAfter)}`);
 
+    const gridContextBefore = await page.evaluate(() => ({
+      selectedIdxs: [...(window.viewer?.gridSelectedIdxs || [])].sort((a, b) => a - b),
+      selectedPaths: (window.viewer?._getGridSelectedImagePaths?.() || [])
+        .map((imagePath) => String(imagePath || '').replace(/\\/g, '/'))
+        .sort(),
+      selectedWraps: Array.from(document.querySelectorAll('#image-grid .grid-thumb-wrap.selected'))
+        .map((wrap) => Number(wrap.dataset.index))
+        .sort((a, b) => a - b),
+    }));
     await page.locator('#image-grid .grid-thumb-wrap').nth(target.index).click({ button: 'right' });
     await page.waitForFunction(
       () => {
@@ -4402,11 +4468,18 @@ const { createRunner } = require('./e2e_playwright_session');
         chipVisible: !!chipItem && getComputedStyle(chipItem).display !== 'none',
         captured,
         menuHidden: getComputedStyle(document.getElementById('grid-context-menu')).display === 'none',
+        selectedIdxs: [...(v?.gridSelectedIdxs || [])].sort((a, b) => a - b),
+        selectedPaths: (v?._getGridSelectedImagePaths?.() || [])
+          .map((imagePath) => String(imagePath || '').replace(/\\/g, '/'))
+          .sort(),
+        selectedWraps: Array.from(document.querySelectorAll('#image-grid .grid-thumb-wrap.selected'))
+          .map((wrap) => Number(wrap.dataset.index))
+          .sort((a, b) => a - b),
       };
     });
     expect(gridContextShotComposite.exists &&
       gridContextShotComposite.visible &&
-      gridContextShotComposite.text.includes('선택 Shot Composite Map 만들기') &&
+      gridContextShotComposite.text === 'Shot Composite' &&
       gridContextShotComposite.captured?.selectionMode === 'shot' &&
       gridContextShotComposite.captured?.selectedChipCount === gridCoordShot.chipCount &&
       gridContextShotComposite.captured?.sourceCount === 2 &&
@@ -4415,11 +4488,14 @@ const { createRunner } = require('./e2e_playwright_session');
       gridContextShotComposite.captured?.firstShotHasSlots === true &&
       gridContextShotComposite.captured?.shotLocalSquareWeighted === false &&
       gridContextShotComposite.specialVisible &&
-      gridContextShotComposite.specialText.includes('Shot-local Square Weighted Avg 만들기') &&
+      gridContextShotComposite.specialText === 'Shot Composite WTW' &&
       gridContextShotComposite.chipVisible &&
-      gridContextShotComposite.chipText.includes('선택 Chip Composite Map 만들기') &&
+      gridContextShotComposite.chipText === 'Chip Composite' &&
+      gridContextShotComposite.selectedIdxs.join(',') === gridContextBefore.selectedIdxs.join(',') &&
+      gridContextShotComposite.selectedPaths.join('|') === gridContextBefore.selectedPaths.join('|') &&
+      gridContextShotComposite.selectedWraps.join(',') === gridContextBefore.selectedWraps.join(',') &&
       gridContextShotComposite.menuHidden,
-      `grid context selected shot composite=${JSON.stringify(gridContextShotComposite)}`);
+      `grid context selected shot composite before=${JSON.stringify(gridContextBefore)} after=${JSON.stringify(gridContextShotComposite)}`);
 
     await page.locator('#image-grid .grid-thumb-wrap').nth(target.index).click({ button: 'right' });
     await page.waitForFunction(
@@ -4462,7 +4538,7 @@ const { createRunner } = require('./e2e_playwright_session');
       };
     });
     expect(gridContextShotLocalWeighted.exists &&
-      gridContextShotLocalWeighted.text.includes('Shot-local Square Weighted Avg 만들기') &&
+      gridContextShotLocalWeighted.text === 'Shot Composite WTW' &&
       gridContextShotLocalWeighted.captured?.selectionMode === 'shot' &&
       gridContextShotLocalWeighted.captured?.shotLocalSquareWeighted === true &&
       gridContextShotLocalWeighted.captured?.selectedChipCount === gridCoordShot.chipCount &&
