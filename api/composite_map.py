@@ -1820,6 +1820,25 @@ def _value_range_for_map(
     return v_min, v_max
 
 
+def _selected_composite_value_mask(
+    grade_counts: np.ndarray,
+    base_indices: np.ndarray,
+    invalid_mask: Optional[np.ndarray] = None,
+    idx_8_mask: Optional[np.ndarray] = None,
+    selected_region: bool = False,
+) -> np.ndarray:
+    chip_inner_mask = (base_indices == 0)
+    if selected_region:
+        mask = (grade_counts.sum(axis=0) > 0) & chip_inner_mask
+    else:
+        mask = chip_inner_mask.copy()
+    if idx_8_mask is not None:
+        mask &= ~idx_8_mask.astype(bool, copy=False)
+    if invalid_mask is not None:
+        mask &= ~invalid_mask.astype(bool, copy=False)
+    return mask
+
+
 def _interpolate_percentile_colors(
     percentiles: np.ndarray,
     color_array: np.ndarray,
@@ -2143,7 +2162,7 @@ def _render_sum_map_palette(
 
     denom = v_max - v_min
     if denom <= 0:
-        grad_idx = np.full(calc_values.shape, COMPOSITE_GRADIENT_END if v_max > 0 else COMPOSITE_GRADIENT_START, dtype=np.uint8)
+        grad_idx = np.full(calc_values.shape, COMPOSITE_GRADIENT_START, dtype=np.uint8)
     else:
         scaled = (calc_values - v_min) / denom
         grad_idx = np.clip(
@@ -2317,6 +2336,7 @@ def _persist_square_map_data(
     grade_counts: Optional[np.ndarray] = None,
     invalid_mask: Optional[np.ndarray] = None,
     idx_8_mask: Optional[np.ndarray] = None,
+    only_low_mask: Optional[np.ndarray] = None,
     image_count: Optional[int] = None,
     color_scheme: Optional[str] = None,
     colors: Optional[Sequence[str]] = None,
@@ -2351,6 +2371,8 @@ def _persist_square_map_data(
         save_payload["invalid_mask"] = invalid_mask.astype(bool, copy=False)
     if idx_8_mask is not None:
         save_payload["idx_8_mask"] = idx_8_mask.astype(bool, copy=False)
+    if only_low_mask is not None:
+        save_payload["only_low_mask"] = only_low_mask.astype(bool, copy=False)
     if image_count is not None:
         save_payload["source_image_count"] = np.array(image_count, dtype=np.uint32)
     if color_scheme:
@@ -2453,6 +2475,7 @@ def recolor_saved_sum_maps(
         grade_counts = data.get("grade_counts")
         invalid_mask = data.get("invalid_mask")
         idx_8_mask = data.get("idx_8_mask")
+        only_low_mask = data.get("only_low_mask")
         image_count_arr = data.get("source_image_count")
         source_image_count = int(image_count_arr.item()) if image_count_arr is not None else None
         color_scheme_arr = data.get("color_scheme")
@@ -2460,6 +2483,7 @@ def recolor_saved_sum_maps(
     grade_counts_arr = grade_counts.astype(np.uint16, copy=False) if grade_counts is not None else None
     invalid_mask_arr = invalid_mask.astype(bool, copy=False) if invalid_mask is not None else None
     idx_8_mask_arr = idx_8_mask.astype(bool, copy=False) if idx_8_mask is not None else None
+    only_low_mask_arr = only_low_mask.astype(bool, copy=False) if only_low_mask is not None else None
     cached_scheme = None
     if color_scheme_arr is not None:
         try:
@@ -2468,12 +2492,13 @@ def recolor_saved_sum_maps(
             cached_scheme = None
 
     chip_inner_mask = (base_indices == 0)
+    recompute_low_mask = only_low_mask_arr if only_low_mask_arr is not None else chip_inner_mask
 
     if grade_counts_arr is not None:
         try:
             square_mean_map, weighted_map, calc_mask, weighted_mask = _recompute_square_maps_from_counts(
                 grade_counts=grade_counts_arr,
-                only_low_mask=chip_inner_mask,
+                only_low_mask=recompute_low_mask,
                 invalid_mask=invalid_mask_arr,
                 idx_8_mask=idx_8_mask_arr,
                 image_count=source_image_count,
@@ -2547,6 +2572,7 @@ def recolor_saved_sum_maps(
             grade_counts=grade_counts_arr,
             invalid_mask=invalid_mask_arr,
             idx_8_mask=idx_8_mask_arr,
+            only_low_mask=recompute_low_mask,
             image_count=source_image_count,
             color_scheme=settings.scheme,
             colors=colors_to_use,
@@ -2578,7 +2604,7 @@ def recolor_saved_sum_maps(
                     selected_grades=list(grade_tuple),
                     invalid_mask=invalid_mask_arr,
                     idx_8_mask=idx_8_mask_arr,
-                    only_low_mask=chip_inner_mask,
+                    only_low_mask=recompute_low_mask,
                     image_count=source_image_count,
                     include_unselected_in_denominator=False,
                 )
@@ -2634,46 +2660,55 @@ def recolor_saved_sum_maps(
 
 
 
+def _build_gradient_stat_for_map(
+    data_map: np.ndarray,
+    mask_arr: np.ndarray,
+    value_min: Optional[float],
+    value_max: Optional[float],
+) -> Optional[Dict[str, Any]]:
+    if value_min is None or value_max is None or value_max <= value_min:
+        return None
+    bin_edges = np.linspace(float(value_min), float(value_max), 11)
+    counts, _ = np.histogram(data_map[mask_arr], bins=bin_edges)
+    total = int(counts.sum())
+    if total == 0:
+        return None
+    ranges = []
+    for i in range(10):
+        c = int(counts[i])
+        pct = round(c / total * 100, 1) if total > 0 else 0.0
+        ranges.append({"label": f"{i*10}~{(i+1)*10}%", "percent": pct, "count": c})
+    return {"ranges": ranges, "total_pixels": total}
+
+
+def _write_gradient_stats_payload(output_dir: Path, stats: Dict[str, Any]) -> None:
+    if not stats:
+        return
+    import json as _json
+    json_path = output_dir / "gradient_stats.json"
+
+    def _write():
+        try:
+            json_path.write_text(_json.dumps(stats, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+
+    threading.Thread(target=_write, daemon=True).start()
+
+
 def _save_gradient_stats(
     output_dir: Path,
     variants: List[Tuple],
     precomputed_ranges: Dict[int, Tuple[Optional[float], Optional[float]]],
 ) -> None:
-    """Gradient 범례용 pixel 분포 통계를 JSON으로 저장 (~500 bytes).
-    단일뷰에서 average map의 0~10%...90~100% 범례 퍼센트/갯수를 표시하는 데 사용.
-
-    성능 최적화: float64 변환+정규화 대신 np.histogram(range=) 직접 사용으로
-    10000×10000 이미지 기준 7.6초 → ~100ms (메모리 복사 제거)
-    """
-    import json as _json
+    """Gradient 범례용 pixel 분포 통계를 JSON으로 저장 (~500 bytes)."""
     stats: Dict[str, Any] = {}
-    for vi, (filename, variant_type, _, data_map, mask_arr) in enumerate(variants):
+    for vi, (filename, _variant_type, _, data_map, mask_arr) in enumerate(variants):
         v_min, v_max = precomputed_ranges.get(vi, (None, None))
-        if v_min is None or v_max is None or v_max <= v_min:
-            continue
-        # np.histogram(range=)로 정규화 없이 직접 10-bin 히스토그램
-        # data_map[mask_arr]의 float64 변환+정규화+clip 단계를 모두 제거
-        bin_edges = np.linspace(float(v_min), float(v_max), 11)
-        counts, _ = np.histogram(data_map[mask_arr], bins=bin_edges)
-        total = int(counts.sum())
-        if total == 0:
-            continue
-        ranges = []
-        for i in range(10):
-            c = int(counts[i])
-            pct = round(c / total * 100, 1) if total > 0 else 0.0
-            ranges.append({"label": f"{i*10}~{(i+1)*10}%", "percent": pct, "count": c})
-        stem = Path(filename).stem
-        stats[stem] = {"ranges": ranges, "total_pixels": total}
-
-    if stats:
-        json_path = output_dir / "gradient_stats.json"
-        def _write():
-            try:
-                json_path.write_text(_json.dumps(stats, ensure_ascii=False), encoding="utf-8")
-            except Exception:
-                pass
-        threading.Thread(target=_write, daemon=True).start()
+        stat = _build_gradient_stat_for_map(data_map, mask_arr, v_min, v_max)
+        if stat:
+            stats[Path(filename).stem] = stat
+    _write_gradient_stats_payload(output_dir, stats)
 
 
 def _save_sum_map_variants(
@@ -2859,6 +2894,7 @@ def _save_sum_map_variants(
             grade_counts=grade_counts,
             invalid_mask=invalid_mask,
             idx_8_mask=idx_8_mask,
+            only_low_mask=only_low_mask,
             image_count=image_count,
             color_scheme=settings.scheme,
             colors=resolved_colors,
@@ -2948,7 +2984,7 @@ def _compute_maps_from_counts(
     return square_mean_map, weighted_map, calc_mask, weighted_mask
 
 
-def _save_shot_local_square_weighted_map(
+def _render_shot_local_square_weighted_entry(
     output_dir: Path,
     palette_list: Optional[Sequence[int]],
     invalid_mask: Optional[np.ndarray],
@@ -2958,7 +2994,10 @@ def _save_shot_local_square_weighted_map(
     grade_counts: np.ndarray,
     only_low_mask: Optional[np.ndarray],
     image_count: int,
-) -> List[Dict[str, str]]:
+    filename: str,
+    display_name: str,
+    gradient_stats: Optional[Dict[str, Any]] = None,
+) -> Dict[str, str]:
     selected_grades = list(range(min(int(grade_counts.shape[0]), 8)))
     _square_mean_map, weighted_map, _calc_mask, weighted_mask = _compute_maps_from_counts(
         grade_counts=grade_counts,
@@ -2971,7 +3010,7 @@ def _save_shot_local_square_weighted_map(
 
     palette = _build_palette_list(palette_list)
     sum_palette = _build_sum_map_palette(palette, gradient_scheme="default")
-    target = output_dir / "shot_local_square_weighted_average.png"
+    target = output_dir / filename
     vmin, vmax = _value_range_for_map(weighted_map, weighted_mask, clamp_min_to_zero=True)
     idx_arr = _render_sum_map_palette(
         base_indices=base_indices,
@@ -2981,17 +3020,88 @@ def _save_shot_local_square_weighted_map(
         value_max=vmax,
     )
     actual_path, rel_path = _save_palette_png(idx_arr, sum_palette, target)
-    _save_gradient_stats(
-        output_dir,
-        [(actual_path.name, "shot_local_weighted_square_mean", "Shot-local Square Weighted Avg", weighted_map, weighted_mask)],
-        {0: (vmin, vmax)},
-    )
-    return [{
+    if gradient_stats is not None:
+        stat = _build_gradient_stat_for_map(weighted_map, weighted_mask, vmin, vmax)
+        if stat:
+            gradient_stats[Path(actual_path.name).stem] = stat
+    return {
         "path": rel_path,
         "type": "shot_local_weighted_square_mean",
-        "display_name": "Shot-local Square Weighted Avg",
+        "display_name": display_name,
         "filename": actual_path.name,
-    }]
+    }
+
+
+def _save_shot_local_square_weighted_maps_for_sources(
+    image_paths: Sequence[str],
+    output_dir: Path,
+    palette_list: Optional[Sequence[int]],
+    base_indices: np.ndarray,
+    scheme: Optional[str],
+    geometry: Dict[str, Any],
+    source_width: int,
+    source_height: int,
+    loader_mode: str,
+    max_workers: Optional[int],
+    batch_size: int,
+) -> Tuple[List[Dict[str, str]], int]:
+    outputs: List[Dict[str, str]] = []
+    processed_total = 0
+    seen_filenames: set[str] = set()
+    gradient_stats: Dict[str, Any] = {}
+
+    for rel_path in image_paths:
+        grade_counts, has_0_7, has_8_13, all_invalid, processed_count = _accumulate_selected_geometry_from_images(
+            [rel_path],
+            geometry,
+            width=source_width,
+            height=source_height,
+            loader_mode=loader_mode,
+            max_workers=max_workers,
+            batch_size=max(1, batch_size),
+        )
+        if processed_count <= 0:
+            continue
+
+        processed_total += processed_count
+        idx_8_mask = has_8_13 & ~has_0_7
+        invalid_mask = all_invalid
+        selected_mask = _selected_composite_value_mask(
+            grade_counts=grade_counts,
+            base_indices=base_indices,
+            invalid_mask=invalid_mask,
+            idx_8_mask=idx_8_mask,
+            selected_region=True,
+        )
+        source_name = Path(str(rel_path).replace("\\", "/")).name or "shot_local_square_weighted_average.png"
+        if not source_name.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+            source_name = f"{Path(source_name).stem or 'shot_local_square_weighted_average'}.png"
+        filename = source_name
+        if filename in seen_filenames:
+            stem = Path(source_name).stem
+            suffix = Path(source_name).suffix or ".png"
+            counter = 2
+            while filename in seen_filenames:
+                filename = f"{stem}_{counter}{suffix}"
+                counter += 1
+        seen_filenames.add(filename)
+        outputs.append(_render_shot_local_square_weighted_entry(
+            output_dir=output_dir,
+            palette_list=palette_list,
+            invalid_mask=invalid_mask,
+            base_indices=base_indices,
+            idx_8_mask=idx_8_mask,
+            scheme=scheme,
+            grade_counts=grade_counts,
+            only_low_mask=selected_mask,
+            image_count=int(geometry.get("shot_count") or 1),
+            filename=filename,
+            display_name=Path(source_name).stem or source_name,
+            gradient_stats=gradient_stats,
+        ))
+
+    _write_gradient_stats_payload(output_dir, gradient_stats)
+    return outputs, processed_total
 
 
 def create_composite_heatmaps(
@@ -3303,6 +3413,14 @@ def create_composite_heatmaps(
     invalid_mask = all_invalid
     invalid_mask_bool = invalid_mask.astype(bool, copy=False) if invalid_mask is not None else None
     chip_inner_mask = (base_indices == 0)
+    selected_value_mask = _selected_composite_value_mask(
+        grade_counts=grade_counts,
+        base_indices=base_indices,
+        invalid_mask=invalid_mask_bool,
+        idx_8_mask=idx_8_13_only,
+        selected_region=bool(shot_geometry or chip_geometry),
+    )
+    sum_map_low_mask = selected_value_mask if (shot_geometry or chip_geometry) else chip_inner_mask
     _mark("mask_and_base_setup", t)
 
     heatmaps: List[Dict[str, Any]] = []
@@ -3325,9 +3443,9 @@ def create_composite_heatmaps(
         m = grade_presence[idx].copy()
         if invalid_mask_bool is not None:
             m &= ~invalid_mask_bool
-        m &= chip_inner_mask
+        m &= selected_value_mask if (shot_geometry or chip_geometry) else chip_inner_mask
         _heatmap_masks.append(m)
-    selection_chip_inner_pixels = int(np.count_nonzero(chip_inner_mask))
+    selection_chip_inner_pixels = int(np.count_nonzero(selected_value_mask))
     selection_grade_pixel_counts = [int(np.count_nonzero(mask)) for mask in _heatmap_masks]
     selection_top_grades = [
         {
@@ -3371,17 +3489,22 @@ def create_composite_heatmaps(
     shot_local_square_weighted = bool(shot_local_square_weighted and shot_geometry)
 
     if shot_local_square_weighted:
-        sum_map_entries = _save_shot_local_square_weighted_map(
+        sum_map_entries, source_weighted_count = _save_shot_local_square_weighted_maps_for_sources(
+            image_paths=image_paths,
             output_dir=output_dir,
             palette_list=palette_bytes,
-            invalid_mask=invalid_mask,
             base_indices=base_indices,
-            idx_8_mask=idx_8_13_only,
             scheme=scheme,
-            grade_counts=grade_counts,
-            only_low_mask=chip_inner_mask,
-            image_count=composite_sample_count,
+            geometry=shot_geometry,
+            source_width=source_width,
+            source_height=source_height,
+            loader_mode=loader_mode,
+            max_workers=max_workers,
+            batch_size=effective_batch,
         )
+        if source_weighted_count > 0:
+            processed_count = source_weighted_count
+            composite_sample_count = processed_count * shot_geometry["shot_count"]
         if sum_map_entries:
             sum_map_rel_path = sum_map_entries[0]["path"]
     else:
@@ -3396,7 +3519,7 @@ def create_composite_heatmaps(
                     _save_sum_map_variants,
                     None, output_dir, palette_bytes,
                     invalid_mask, base_indices, idx_8_13_only, scheme,
-                    "", False, grade_counts, chip_inner_mask, None, composite_sample_count,
+                    "", False, grade_counts, sum_map_low_mask, None, composite_sample_count,
                 )
 
             # heatmap 결과 수집
@@ -3429,6 +3552,7 @@ def create_composite_heatmaps(
                 grade_counts=grade_counts,
                 invalid_mask=invalid_mask,
                 idx_8_mask=idx_8_13_only,
+                only_low_mask=sum_map_low_mask,
                 image_count=composite_sample_count,
                 color_scheme=scheme or ANONYMOUS_LOGIN_ID,
             )
@@ -3776,7 +3900,9 @@ def create_subset_map(
         grade_counts = data.get("grade_counts")
         invalid_mask = data.get("invalid_mask")
         idx_8_mask = data.get("idx_8_mask")
-        only_low_mask = data.get("calc_mask")  # 0-7만 있는 포인트 마스크
+        only_low_mask = data.get("only_low_mask")
+        if only_low_mask is None:
+            only_low_mask = data.get("calc_mask")  # 0-7만 있는 포인트 마스크
         image_count_arr = data.get("source_image_count")
         source_image_count = int(image_count_arr.item()) if image_count_arr is not None else None
         color_scheme_arr = data.get("color_scheme")
@@ -3790,6 +3916,7 @@ def create_subset_map(
     invalid_mask_arr = None
     idx_8_mask_arr = None
     chip_inner_mask = (base_indices == 0)
+    subset_low_mask = only_low_mask.astype(bool, copy=False) if only_low_mask is not None else chip_inner_mask
 
     # Subset Map 계산 (chip 내부만 계산 대상으로 제한)
     square_mean_map, weighted_map, calc_mask, weighted_mask = _compute_maps_from_counts(
@@ -3797,7 +3924,7 @@ def create_subset_map(
         selected_grades=selected_grades,
         invalid_mask=invalid_mask_arr,
         idx_8_mask=idx_8_mask_arr,
-        only_low_mask=chip_inner_mask,
+        only_low_mask=subset_low_mask,
         image_count=source_image_count,
         include_unselected_in_denominator=False,
     )

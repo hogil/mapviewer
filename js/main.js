@@ -2237,18 +2237,24 @@ class WaferMapViewer {
         };
     }
 
-    async restoreGridCoordinateSelectionState(selectionState, pageId = null) {
-        if (!selectionState || !this.gridMode || this.viewMode === 'gridImage') return false;
-        const targetPath = selectionState.targetPath || selectionState.pendingGridRegionComposite?.targetPath || null;
-        if (!targetPath) return false;
-        const isActivePage = () => !pageId || !this.pageManager || this.pageManager.activePageId === pageId;
-        if (!isActivePage()) return false;
+    _hasActiveGridCoordinateSelection() {
+        const annotator = this.chipAnnotator;
+        return this.gridMode === true &&
+            this.viewMode !== 'gridImage' &&
+            !!this._pendingGridRegionComposite &&
+            annotator?.selectedChips instanceof Set &&
+            annotator.selectedChips.size > 0;
+    }
 
-        const ready = await this._prepareGridCoordinateSelectionTarget(targetPath);
-        if (!ready || !isActivePage() || !this.gridMode || this.viewMode === 'gridImage') return false;
+    _applyGridCoordinateSelectionStateToAnnotator(selectionState, targetPath = null, options = {}) {
+        if (!selectionState || !this.gridMode || this.viewMode === 'gridImage') return false;
+        const resolvedTargetPath = targetPath || selectionState.targetPath || selectionState.pendingGridRegionComposite?.targetPath || null;
+        if (!resolvedTargetPath) return false;
 
         const annotator = this.chipAnnotator;
         if (!annotator || !Array.isArray(annotator.chips) || annotator.chips.length === 0) return false;
+        if (selectionState.targetPath && !this._sameImagePath(selectionState.targetPath, resolvedTargetPath)) return false;
+
         const coordToIndex = new Map();
         annotator.chips.forEach((chip, index) => {
             const x = Number(chip?.x_abs);
@@ -2273,16 +2279,36 @@ class WaferMapViewer {
         annotator.shotBoundaryVisible = selectionState.shotBoundaryVisible === true;
         annotator.selectedChips = new Set(nextOrder);
         annotator.selectedChipsOrder = [...nextOrder];
-        this._gridCoordinateTargetPath = targetPath;
-        const pending = this._serializeGridRegionCompositeState(selectionState.pendingGridRegionComposite);
-        if (pending) {
-            this._pendingGridRegionComposite = pending;
+        this._gridCoordinateTargetPath = resolvedTargetPath;
+        if (options.restorePending !== false) {
+            const pending = this._serializeGridRegionCompositeState(selectionState.pendingGridRegionComposite);
+            if (pending) {
+                this._pendingGridRegionComposite = pending;
+            }
         }
         annotator.render?.();
         annotator.updateSelectedChipsList?.();
         this._syncShotBoundaryButtonUI?.();
         this._scheduleGridCoordinateSelectionOverlayRender?.(0);
         return true;
+    }
+
+    async restoreGridCoordinateSelectionState(selectionState, pageId = null) {
+        if (!selectionState || !this.gridMode || this.viewMode === 'gridImage') return false;
+        const targetPath = selectionState.targetPath || selectionState.pendingGridRegionComposite?.targetPath || null;
+        if (!targetPath) return false;
+        const isActivePage = () => !pageId || !this.pageManager || this.pageManager.activePageId === pageId;
+        if (!isActivePage()) return false;
+
+        const ready = await this._prepareGridCoordinateSelectionTarget(targetPath, {
+            preserveSelectionState: selectionState,
+            restorePending: true,
+        });
+        if (!ready || !isActivePage() || !this.gridMode || this.viewMode === 'gridImage') return false;
+
+        return this._applyGridCoordinateSelectionStateToAnnotator(selectionState, targetPath, {
+            restorePending: true,
+        });
     }
 
     captureActivePageState(options = {}) {
@@ -5797,6 +5823,11 @@ class WaferMapViewer {
                 return;
             } else if (!event.ctrlKey && !event.metaKey) {
                 this._clearPendingGridPlainClickSelection?.({ apply: false });
+                if (this._hasActiveGridCoordinateSelection?.()) {
+                    this.clearGridSelectionMarks({ hidePanel: true, updateContext: true });
+                    this._scheduleGridCoordinateSelectionOverlayRender?.(0);
+                    return;
+                }
                 this.clearGridSelection();
             }
         };
@@ -15171,7 +15202,7 @@ class WaferMapViewer {
             shotContext,
             {
                 text: 'Shot Composite W to W',
-                title: '선택 wafer의 Shot을 shot-local grid로 누적해 square weighted average 한 장을 만듭니다.',
+                title: '선택 wafer별 Shot을 shot-local grid로 누적해 square weighted average 결과를 만듭니다.',
                 contextOptions: { mode: 'shot', includeAllWhenEmpty: true },
                 shotLocalSquareWeighted: true,
             }
@@ -34044,7 +34075,7 @@ class WaferMapViewer {
         return false;
     }
 
-    async _prepareGridCoordinateSelectionTarget(targetPath) {
+    async _prepareGridCoordinateSelectionTarget(targetPath, options = {}) {
         const path = String(targetPath || '').trim();
         if (!path) return false;
         const annotator = await this._getChipAnnotator?.();
@@ -34052,15 +34083,29 @@ class WaferMapViewer {
         const requestId = (this._gridCoordinatePrepareRequestId || 0) + 1;
         this._gridCoordinatePrepareRequestId = requestId;
         const isStale = () => this._gridCoordinatePrepareRequestId !== requestId;
+        const preserveSelectionState = options.preserveSelectionState || null;
+        const shouldPreserveSelection = !!preserveSelectionState &&
+            (!preserveSelectionState.targetPath || this._sameImagePath(preserveSelectionState.targetPath, path));
 
-        annotator.clearSelection?.(false);
+        if (!shouldPreserveSelection) {
+            annotator.clearSelection?.(false);
+        }
         annotator.clearLayoutData?.({ resetVisibility: false });
         const loaded = await annotator.loadPositions(path, { loadAnnotations: false, render: false });
         if (!loaded || isStale()) return false;
         await this._loadLayoutForImage(path, null, isStale);
         if (isStale()) return false;
-        annotator.clearSelection?.(false);
         this._gridCoordinateTargetPath = path;
+        if (shouldPreserveSelection) {
+            const restored = this._applyGridCoordinateSelectionStateToAnnotator(preserveSelectionState, path, {
+                restorePending: options.restorePending !== false,
+            });
+            if (!restored) {
+                annotator.clearSelection?.(false);
+            }
+        } else {
+            annotator.clearSelection?.(false);
+        }
         return Array.isArray(annotator.chips) && annotator.chips.length > 0 &&
             annotator.shotBoundaryGroups?.size > 0;
     }
@@ -34100,9 +34145,16 @@ class WaferMapViewer {
             return;
         }
 
+        const previousCoordState = this.captureGridCoordinateSelectionState?.();
+        const targetPath = imageList[targetIndex];
+        const preserveCoordState = previousCoordState &&
+            this._sameImagePath(previousCoordState.targetPath, targetPath)
+            ? previousCoordState
+            : null;
+
         this._pendingGridRegionComposite = {
             sourceImages: [...dedupedSourcePaths],
-            targetPath: imageList[targetIndex],
+            targetPath,
             gridModeSource: true,
             selectedOnly: selectedPaths.length > 0,
             startedAt: Date.now(),
@@ -34114,7 +34166,10 @@ class WaferMapViewer {
             1800
         );
 
-        const ready = await this._prepareGridCoordinateSelectionTarget(imageList[targetIndex]);
+        const ready = await this._prepareGridCoordinateSelectionTarget(targetPath, {
+            preserveSelectionState: preserveCoordState,
+            restorePending: false,
+        });
         if (!ready) {
             this.showToast?.('현재 wafer의 좌표 정보가 아직 준비되지 않았습니다.', 2200);
             return;

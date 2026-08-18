@@ -341,6 +341,13 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
 - E2E guard: `scripts/e2e_chunk2.js` record `selected-region-composite`는 Shot Position `0,1,2` 선택 후 grid 우클릭 `Shot Composite` payload가 unique slot 3개, group당 최대 3 chip, selected source wafer 2개만 갖는지 확인한다. 같은 record는 Composite 전 page state를 저장한 뒤 selection/pending/overlay를 지우고 wafer state를 복원했을 때 `gridMode=true`, 선택 chip count/position/source wafer/grid selection/coord overlay가 그대로 돌아오는지 확인한다.
 - 파일: `js/main.js`, `api/composite_map.py`, `scripts/e2e_chunk2.js`
 
+#### BUG-43: Selected quantile mask / Grid Coord blank-click / W-to-W output 회귀 (2026-08-19)
+- 증상: selected Chip/Shot Composite의 square/weighted map에서 선택하지 않은 canonical slot의 0값이 quantile 색상 범위에 섞일 수 있었고, 단일 선택처럼 값 범위가 한 점이면 팔레트 끝색으로 표시될 수 있었다. Grid Coord 선택 후 빈 grid 공간을 클릭하거나 composite 탭 왕복 뒤 Coord 창을 다시 열면 선택 chip/overlay가 사라질 수 있었다. Grid `Shot Composite W to W`는 wafer 3개를 선택해도 한 장짜리 `shot_local_square_weighted_average.png`처럼 보일 수 있었다.
+- 원인: `api/composite_map.py::create_composite_heatmaps()`가 selected geometry에서도 `base_indices == 0` 전체를 sum/selection denominator로 사용했고, `_render_sum_map_palette()`의 degenerate range 분기가 최대 gradient index를 강제했다. `js/main.js::handleTapSelection()`은 coord selection 활성 상태의 빈공간 click에도 `clearGridSelection()`을 호출했고, `_prepareGridCoordinateSelectionTarget()`은 modal reopen마다 selection을 무조건 clear했다. W-to-W backend 저장 함수는 전체 source 누적 결과 한 장만 고정 파일명으로 저장했다.
+- 수정 계약: selected geometry의 quantile/stat/cache/subset/recolor 계산은 실제 `grade_counts`가 있는 selected-value mask만 사용하고, `value_min == value_max`이면 gradient 시작색을 사용한다. Grid blank click은 coord selection과 pending source를 유지한 채 wafer selection mark만 지울 수 있다. Coord modal reopen과 page restore는 같은 targetPath의 selection coords를 positions/layout 재준비 후 재적용해야 한다. W-to-W는 선택 wafer마다 shot-local weighted map을 만들고 output filename은 source basename을 유지한다.
+- E2E guard: `scripts/e2e_chunk2.js` record `selected-region-composite`는 Grid Coord 후 빈공간 click과 modal reopen에서 selected chip count/pending source/overlay가 유지되는지 확인한다. 같은 record는 3개 wafer로 `shot_local_square_weighted=true` API를 호출해 `sum_maps.length == 3`, `heatmaps.length == 0`, `composite_sample_count == wafer_count * selected_shot_count`, output filenames가 source basenames와 같은지 확인한다.
+- 파일: `api/composite_map.py`, `js/main.js`, `scripts/e2e_chunk2.js`
+
 ### Available skills
 - deploy-check: Ubuntu 프로덕션 배포 전 점검을 수행한다. 배포 전 민감정보, 설정, SSL/SAML, 환경변수, 운영 체크리스트를 확인할 때 사용한다. (file: D:/project/mapviewer/.claude/skills/deploy-check/SKILL.md)
 - e2e-test: L3 Tracker 전체 기능 E2E 테스트를 Playwright 브라우저 자동화로 수행한다. `/e2e-test`, `E2E 테스트`, `전체 테스트`, `기능 테스트 돌려줘` 같은 요청에 반응한다. (file: D:/project/mapviewer/.claude/skills/e2e-test/skill.md)

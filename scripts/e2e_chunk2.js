@@ -3858,6 +3858,15 @@ const { createRunner } = require('./e2e_playwright_session');
       return index < 0 ? null : { index, imagePath: images[index] };
     }, { firstIndex: target.index });
     expect(gridCoordSecond, 'grid coord second selected wafer missing');
+    const gridCoordThird = await page.evaluate(({ firstIndex, secondIndex }) => {
+      const images = window.viewer?.currentGridImages || [];
+      const index = images.findIndex((imagePath, idx) =>
+        idx !== firstIndex && idx !== secondIndex &&
+        String(imagePath || '').replace(/\\/g, '/').includes('/P001/')
+      );
+      return index < 0 ? null : { index, imagePath: images[index] };
+    }, { firstIndex: target.index, secondIndex: gridCoordSecond.index });
+    expect(gridCoordThird, 'grid coord third selected wafer missing');
 
     const measureMedianCheck = await page.evaluate(async ({ imagePaths }) => {
       const loadPositions = async (imagePath) => {
@@ -4407,6 +4416,76 @@ const { createRunner } = require('./e2e_playwright_session');
       gridCoordAfter.coordOverlayRendered > 0 &&
       gridCoordAfter.modalHidden,
       `grid coord after=${JSON.stringify(gridCoordAfter)}`);
+
+    const gridCoordBlankClick = await page.evaluate(() => {
+      const grid = document.getElementById('image-grid');
+      const before = {
+        selectedChipCount: window.viewer?.chipAnnotator?.selectedChips?.size || 0,
+        pendingSourceCount: window.viewer?._pendingGridRegionComposite?.sourceImages?.length || 0,
+        renderedOverlayCount: Array.from(document.querySelectorAll('.grid-coordinate-selection-overlay'))
+          .filter((canvas) => canvas.dataset.coordinateOverlayRendered === 'true').length,
+      };
+      grid?.dispatchEvent(new MouseEvent('click', {
+        button: 0,
+        buttons: 0,
+        clientX: 1,
+        clientY: 1,
+        bubbles: true,
+        cancelable: true,
+      }));
+      window.viewer?._scheduleGridCoordinateSelectionOverlayRender?.(0);
+      const after = {
+        gridMode: window.viewer?.gridMode === true,
+        viewMode: window.viewer?.viewMode || null,
+        selectedChipCount: window.viewer?.chipAnnotator?.selectedChips?.size || 0,
+        pendingSourceCount: window.viewer?._pendingGridRegionComposite?.sourceImages?.length || 0,
+        selectedPaths: window.viewer?._getGridSelectedImagePaths?.() || [],
+        renderedOverlayCount: Array.from(document.querySelectorAll('.grid-coordinate-selection-overlay'))
+          .filter((canvas) => canvas.dataset.coordinateOverlayRendered === 'true').length,
+      };
+      return { before, after };
+    });
+    await sleep(200);
+    const gridCoordBlankClickAfterPaint = await page.evaluate(() => ({
+      renderedOverlayCount: Array.from(document.querySelectorAll('.grid-coordinate-selection-overlay'))
+        .filter((canvas) => canvas.dataset.coordinateOverlayRendered === 'true').length,
+      maxOverlayChipCount: Math.max(0, ...Array.from(document.querySelectorAll('.grid-coordinate-selection-overlay'))
+        .filter((canvas) => canvas.dataset.coordinateOverlayRendered === 'true')
+        .map((canvas) => Number(canvas.dataset.coordinateSelectedChipCount || '0'))),
+    }));
+    expect(gridCoordBlankClick.after.gridMode &&
+      (gridCoordBlankClick.after.viewMode === null || gridCoordBlankClick.after.viewMode === '') &&
+      gridCoordBlankClick.after.selectedChipCount === gridCoordBlankClick.before.selectedChipCount &&
+      gridCoordBlankClick.after.pendingSourceCount === gridCoordBlankClick.before.pendingSourceCount &&
+      gridCoordBlankClickAfterPaint.renderedOverlayCount > 0 &&
+      gridCoordBlankClickAfterPaint.maxOverlayChipCount === gridCoordShot.chipCount,
+      `grid blank click must not clear coord=${JSON.stringify({ gridCoordBlankClick, gridCoordBlankClickAfterPaint })}`);
+
+    await setSelection([target.index, gridCoordSecond.index]);
+    await page.locator('#grid-coordinate-select-open-btn').click();
+    await page.waitForFunction(
+      (chipCount) => window.viewer?.isCoordinateSelectionOpen === true &&
+        getComputedStyle(document.getElementById('chip-coordinate-select-modal')).display !== 'none' &&
+        window.viewer?.chipAnnotator?.selectedChips?.size === chipCount,
+      gridCoordShot.chipCount,
+      { timeout: 20000 }
+    );
+    const gridCoordReopen = await page.evaluate(() => ({
+      gridMode: window.viewer?.gridMode === true,
+      viewMode: window.viewer?.viewMode || null,
+      selectedChipCount: window.viewer?.chipAnnotator?.selectedChips?.size || 0,
+      pendingSourceCount: window.viewer?._pendingGridRegionComposite?.sourceImages?.length || 0,
+      modalVisible: getComputedStyle(document.getElementById('chip-coordinate-select-modal')).display !== 'none',
+      selectedPaths: window.viewer?._getGridSelectedImagePaths?.() || [],
+    }));
+    expect(gridCoordReopen.gridMode &&
+      (gridCoordReopen.viewMode === null || gridCoordReopen.viewMode === '') &&
+      gridCoordReopen.selectedChipCount === gridCoordShot.chipCount &&
+      gridCoordReopen.pendingSourceCount === 2 &&
+      gridCoordReopen.modalVisible &&
+      gridCoordReopen.selectedPaths.length === 2,
+      `grid coord modal reopen must preserve selection=${JSON.stringify(gridCoordReopen)}`);
+    await page.locator('#chip-coordinate-select-close').click();
 
     const gridContextBefore = await page.evaluate(() => ({
       selectedIdxs: [...(window.viewer?.gridSelectedIdxs || [])].sort((a, b) => a - b),
@@ -5448,6 +5527,71 @@ const { createRunner } = require('./e2e_playwright_session');
       multiShotResult.positionsCanvas?.height === multiShotResult.result.height,
       `multi-shot canonical result=${JSON.stringify(multiShotResult)}`);
 
+    const shotLocalWtwResult = await page.evaluate(async ({ imagePaths, shotGroups }) => {
+      const groups = Array.isArray(shotGroups) ? shotGroups : [];
+      if (imagePaths.length !== 3 || groups.length !== 2) {
+        throw new Error(`shot-local WTW fixture changed=${JSON.stringify({ imagePaths, groups: groups.length })}`);
+      }
+      const selectedChipCoords = [...new Map(
+        groups.flatMap((group) => group.chip_coords).map((chip) => [`${chip.x_abs}:${chip.y_abs}`, chip])
+      ).values()];
+      await fetch('/api/composite-cleanup', { method: 'POST', cache: 'no-store' });
+      const startResponse = await fetch('/api/composite-map', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          image_paths: imagePaths,
+          selection_mode: 'shot',
+          selected_chip_coords: selectedChipCoords,
+          selected_shot_groups: groups,
+          shot_local_square_weighted: true,
+        }),
+        cache: 'no-store',
+      });
+      if (!startResponse.ok) throw new Error(await startResponse.text());
+      const started = await startResponse.json();
+      const deadline = Date.now() + 180000;
+      let status = null;
+      while (Date.now() < deadline) {
+        const response = await fetch(`/api/composite-map/status/${encodeURIComponent(started.task_id)}`, { cache: 'no-store' });
+        status = await response.json();
+        if (status.status === 'completed' || status.status === 'failed') break;
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+      if (status?.status !== 'completed') throw new Error(`shot-local WTW status=${JSON.stringify(status)}`);
+      const result = status.result || {};
+      const sourceNames = imagePaths.map((imagePath) => String(imagePath || '').replace(/\\/g, '/').split('/').pop());
+      const sumMaps = Array.isArray(result.sum_maps) ? result.sum_maps : [];
+      const filenames = sumMaps.map((entry) => entry.filename || String(entry.path || '').split('/').pop());
+      return {
+        sourceNames,
+        result: {
+          image_count: result.image_count,
+          composite_sample_count: result.composite_sample_count,
+          selected_shot_count: result.selected_shot_count,
+          selected_chip_count: result.selected_chip_count,
+          shot_local_square_weighted: result.shot_local_square_weighted === true,
+          heatmapCount: Array.isArray(result.heatmaps) ? result.heatmaps.length : 0,
+          sumMapCount: sumMaps.length,
+          filenames,
+          hasShotLocalFilename: filenames.some((filename) => /shot_local/i.test(filename)),
+        },
+      };
+    }, {
+      imagePaths: [target.imagePath, gridCoordSecond.imagePath, gridCoordThird.imagePath],
+      shotGroups: uiShotRequestBody.selected_shot_groups,
+    });
+    expect(shotLocalWtwResult.result.image_count === 3 &&
+      shotLocalWtwResult.result.composite_sample_count === 6 &&
+      shotLocalWtwResult.result.selected_shot_count === 2 &&
+      shotLocalWtwResult.result.selected_chip_count === 24 &&
+      shotLocalWtwResult.result.shot_local_square_weighted &&
+      shotLocalWtwResult.result.heatmapCount === 0 &&
+      shotLocalWtwResult.result.sumMapCount === 3 &&
+      shotLocalWtwResult.result.filenames.join('|') === shotLocalWtwResult.sourceNames.join('|') &&
+      !shotLocalWtwResult.result.hasShotLocalFilename,
+      `shot-local WTW must output one original-named image per wafer=${JSON.stringify(shotLocalWtwResult)}`);
+
     return {
       target,
       selectionTarget: {
@@ -5476,6 +5620,7 @@ const { createRunner } = require('./e2e_playwright_session');
       multiShotImageWidth: multiShotResult.result?.width || 0,
       multiShotImageHeight: multiShotResult.result?.height || 0,
       multiShotPositionsCount: multiShotResult.positionsChipCount || 0,
+      shotLocalWtwResult,
     };
   });
 
