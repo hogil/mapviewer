@@ -4351,6 +4351,64 @@ const { createRunner } = require('./e2e_playwright_session');
       gridCoordAfter.modalHidden,
       `grid coord after=${JSON.stringify(gridCoordAfter)}`);
 
+    await page.locator('#image-grid .grid-thumb-wrap').nth(target.index).click({ button: 'right' });
+    await page.waitForFunction(
+      () => {
+        const menu = document.getElementById('grid-context-menu');
+        const item = document.getElementById('grid-selected-region-composite-create');
+        return menu && item &&
+          getComputedStyle(menu).display !== 'none' &&
+          getComputedStyle(item).display !== 'none';
+      },
+      null,
+      { timeout: 10000 }
+    );
+    const gridContextShotComposite = await page.evaluate(() => {
+      const v = window.viewer;
+      const item = document.getElementById('grid-selected-region-composite-create');
+      const original = v?.handleCompositeCreate;
+      let captured = null;
+      if (v && item && typeof original === 'function') {
+        v.handleCompositeCreate = (options = {}) => {
+          captured = {
+            selectionMode: options.selectionMode || '',
+            selectedChipCount: Array.isArray(options.selectedChips) ? options.selectedChips.length : 0,
+            sourceCount: Array.isArray(options.sourceImages) ? options.sourceImages.length : 0,
+            shotGroupCount: Array.isArray(options.selectedShotGroups) ? options.selectedShotGroups.length : 0,
+            firstShotChipCount: Array.isArray(options.selectedShotGroups?.[0]?.chip_coords)
+              ? options.selectedShotGroups[0].chip_coords.length
+              : 0,
+            firstShotHasSlots: Array.isArray(options.selectedShotGroups?.[0]?.chip_coords) &&
+              options.selectedShotGroups[0].chip_coords.every((chip) =>
+                Number.isInteger(Number(chip.slot_x)) && Number.isInteger(Number(chip.slot_y))),
+          };
+        };
+        try {
+          item.click();
+        } finally {
+          v.handleCompositeCreate = original;
+        }
+      }
+      return {
+        exists: !!item,
+        text: item?.textContent?.trim() || '',
+        visible: !!item && getComputedStyle(item).display !== 'none',
+        captured,
+        menuHidden: getComputedStyle(document.getElementById('grid-context-menu')).display === 'none',
+      };
+    });
+    expect(gridContextShotComposite.exists &&
+      gridContextShotComposite.visible &&
+      gridContextShotComposite.text.includes('선택 Shot Composite Map 만들기') &&
+      gridContextShotComposite.captured?.selectionMode === 'shot' &&
+      gridContextShotComposite.captured?.selectedChipCount === gridCoordShot.chipCount &&
+      gridContextShotComposite.captured?.sourceCount === 2 &&
+      gridContextShotComposite.captured?.shotGroupCount === 1 &&
+      gridContextShotComposite.captured?.firstShotChipCount === gridCoordShot.chipCount &&
+      gridContextShotComposite.captured?.firstShotHasSlots === true &&
+      gridContextShotComposite.menuHidden,
+      `grid context selected shot composite=${JSON.stringify(gridContextShotComposite)}`);
+
     const gridDblBefore = await page.evaluate(() => ({
       selectedIdxs: [...(window.viewer?.gridSelectedIdxs || [])].sort((a, b) => a - b),
       selectedPaths: (window.viewer?._getGridSelectedImagePaths?.() || [])

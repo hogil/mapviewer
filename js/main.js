@@ -14761,6 +14761,136 @@ class WaferMapViewer {
         }
     }
 
+    _buildSelectedRegionCompositeContext(sourceImages = []) {
+        const annotator = this.chipAnnotator;
+        if (!annotator || !(annotator.selectedChips instanceof Set) || annotator.selectedChips.size === 0) {
+            return null;
+        }
+
+        const orderedIndices = Array.isArray(annotator.selectedChipsOrder)
+            ? annotator.selectedChipsOrder.filter(index => annotator.selectedChips.has(index))
+            : [];
+        const orderedSet = new Set(orderedIndices);
+        const selectedIndices = [
+            ...orderedIndices,
+            ...Array.from(annotator.selectedChips).filter(index => !orderedSet.has(index)),
+        ];
+        const selectedChipCoords = [...new Map(
+            selectedIndices
+                .map(index => annotator.chips?.[index])
+                .filter(Boolean)
+                .map(chip => ({
+                    x_abs: Number(chip.x_abs),
+                    y_abs: Number(chip.y_abs),
+                }))
+                .filter(chip => Number.isFinite(chip.x_abs) && Number.isFinite(chip.y_abs))
+                .map(chip => [`${chip.x_abs}:${chip.y_abs}`, chip])
+        ).values()];
+        if (!selectedChipCoords.length) return null;
+
+        const selectedMode = annotator.selectionMode === 'shot' ? 'shot' : 'chip';
+        const selectedShotGroups = selectedMode === 'shot'
+            ? [...(annotator.getSelectedShotGroupSelections?.() || annotator._getSelectedShotGroups?.() || [])]
+                .map((group) => {
+                    const shotShape = annotator.getShotGridShape?.() ||
+                        annotator.getShotCompositeGridShape?.();
+                    const groupChips = Array.isArray(group?.selectedChips) ? group.selectedChips : group?.chips;
+                    return {
+                        shot_id: String(group?.shotId ?? '').trim(),
+                        chip_coords: (Array.isArray(groupChips) ? groupChips : [])
+                            .map((chip) => {
+                                const x = Number(chip?.x_abs);
+                                const y = Number(chip?.y_abs);
+                                const slotInfo = annotator._getShotGridSlotInfo?.(chip, shotShape) ||
+                                    annotator._getShotRawGridSlotInfo?.(chip, shotShape);
+                                return {
+                                    x_abs: x,
+                                    y_abs: y,
+                                    ...(slotInfo ? { slot_x: slotInfo.slotX, slot_y: slotInfo.slotY } : {}),
+                                };
+                            })
+                            .filter((chip) => Number.isFinite(chip.x_abs) && Number.isFinite(chip.y_abs)),
+                        ...(shotShape ? { shot_shape: shotShape } : {}),
+                    };
+                })
+                .filter((group) => group.shot_id && group.chip_coords.length > 0)
+            : [];
+        const selectedUnit = selectedMode === 'shot' ? 'Shot' : 'Chip';
+        const selectedUnitCount = selectedMode === 'shot' && selectedShotGroups.length > 0
+            ? selectedShotGroups.length
+            : selectedChipCoords.length;
+        const dedupedSources = [...new Map(
+            (Array.isArray(sourceImages) ? sourceImages : [])
+                .filter(Boolean)
+                .map(path => [this.normalizePath(path), path])
+                .filter(([key]) => !!key)
+        ).values()];
+
+        return {
+            selectedChips: selectedChipCoords,
+            selectionMode: selectedMode,
+            selectedShotGroups,
+            selectedUnit,
+            selectedUnitCount,
+            sourceImages: dedupedSources,
+        };
+    }
+
+    _getGridSelectedRegionCompositeContext() {
+        if (this.isCompositeMode || this.gridMode !== true) return null;
+        const pending = this._pendingGridRegionComposite;
+        if (!pending || pending.gridModeSource !== true ||
+            !Array.isArray(pending.sourceImages) || pending.sourceImages.length === 0) {
+            return null;
+        }
+        const context = this._buildSelectedRegionCompositeContext(pending.sourceImages);
+        return context && context.sourceImages.length > 0 ? context : null;
+    }
+
+    _updateGridSelectedRegionCompositeContextItem(contextMenu) {
+        if (!contextMenu) return;
+        let item = document.getElementById('grid-selected-region-composite-create');
+        if (!item) {
+            item = document.createElement('div');
+            item.id = 'grid-selected-region-composite-create';
+            item.className = 'context-menu-item';
+            item.style.cssText = 'padding: 8px 12px; color: #fff; cursor: pointer; font-size: 14px; display: none;';
+            item.onmouseenter = () => { item.style.background = '#3a3a3a'; };
+            item.onmouseleave = () => { item.style.background = ''; };
+            const insertBefore = document.getElementById('context-mea-create') ||
+                document.getElementById('context-composite-return') ||
+                contextMenu.firstChild;
+            contextMenu.insertBefore(item, insertBefore);
+        }
+
+        const context = this._getGridSelectedRegionCompositeContext();
+        if (!context) {
+            item.style.setProperty('display', 'none', 'important');
+            item.onclick = null;
+            return;
+        }
+
+        item.style.setProperty('display', 'block', 'important');
+        item.textContent = `선택 ${context.selectedUnit} Composite Map 만들기 (${context.selectedUnitCount}개)`;
+        item.title = '현재 Grid Coord 선택 영역만 Composite Map으로 만듭니다.';
+        item.onclick = (clickEvent) => {
+            clickEvent?.preventDefault?.();
+            clickEvent?.stopPropagation?.();
+            const latestContext = this._getGridSelectedRegionCompositeContext();
+            this.hideContextMenu();
+            if (!latestContext) {
+                this.showToast?.('Composite Map을 만들 Grid Coord 선택 영역이 없습니다.', 1800);
+                return;
+            }
+            this.handleCompositeCreate({
+                selectedChips: latestContext.selectedChips,
+                selectionMode: latestContext.selectionMode,
+                selectedShotGroups: latestContext.selectedShotGroups,
+                sourceImages: latestContext.sourceImages,
+            });
+        };
+    }
+
     showContextMenu(event, clickedIdx) {
         const contextMenu = document.getElementById('grid-context-menu');
 
@@ -14787,6 +14917,7 @@ class WaferMapViewer {
         }
 
         this.updateContextMenuState();
+        this._updateGridSelectedRegionCompositeContextItem(contextMenu);
         this._markGridContextSubmenusStale();
 
         contextMenu.style.display = 'block';
