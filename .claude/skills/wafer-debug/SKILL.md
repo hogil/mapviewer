@@ -226,3 +226,10 @@ argument-hint: [증상-설명]
 - 원인 후보: `openGridCoordinateSelection()`이 selected paths만 source로 삼고 no-selection fallback을 막는다. single-view `Coord` 버튼은 grid-origin source 범위를 만들지 않는다. thumbnail Shot overlay canvas가 DPR 배율로 커진다. coordinate live apply가 입력 중 sync를 완전히 막아 active list는 보존되지만 반대 list도 비어 있다.
 - 수정 패턴: grid `Coord`는 선택이 있으면 선택 wafer만, 없으면 `currentGridImages` 전체를 pending source로 저장한다. grid-origin single `Coord`도 동일 source를 보장한다. single Shot/Border 버튼은 grid state와 같이 갱신한다. thumbnail overlay backing pixel은 CSS 크기와 같게 둔다. live apply 후 active list를 제외한 Shot/Chip/Shot Position list를 selected chips에서 다시 채운다.
 - E2E 신호: `selected-region-composite`는 no-selection Coord source count가 current grid count와 같은지, single Shot/Coord/Border가 grid state와 이어지는지, overlay canvas pixel size가 CSS size와 같은지 확인한다. `coordinate-selection-cells`는 Shot X/Y 입력 후 Chip/Position, Chip X/Y 입력 후 Shot/Position 리스트가 갱신되는지 확인한다.
+
+### Coordinate modal direct Shot Composite (2026-08-18)
+
+- 증상: grid `Coord`로 Shot을 선택한 뒤 모달 안에서 바로 Shot Composite를 실행할 수 없고, 모달을 닫은 뒤 canvas 우클릭 메뉴를 다시 열어야 한다.
+- 원인 후보: `handleCompositeCreate()`는 selected Shot/Chip payload와 pending grid source를 받을 수 있지만, coordinate modal에는 live selection을 확정하고 같은 payload를 호출하는 command가 없다.
+- 수정 패턴: `#chip-coordinate-select-composite`는 click 시 pending live apply를 즉시 flush하고, `_getSelectedRegionCompositeOptions()`로 현재 selected Shot/Chip payload를 만들며, grid-origin single-view에서는 `_ensureGridImageCoordinateCompositeSource()` 후 `handleCompositeCreate()`를 호출한다. 버튼 enabled/text는 `_updateCoordinateSelectionSummary()`에서 갱신한다.
+- E2E 신호: `selected-region-composite`는 grid에서 wafer 2개 선택 → `Coord` → Shot quick-pick 후 modal composite button이 `mode=shot`으로 활성화되고, 버튼 클릭으로 `/api/composite-map`에 2개 source image와 1개 selected shot group이 전달되는지 확인한다.

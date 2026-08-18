@@ -3688,6 +3688,7 @@
 
         .coordinate-select-buttons {
             justify-content: flex-end;
+            flex-wrap: wrap;
             gap: 8px;
         }
 

@@ -334,6 +334,13 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
 - E2E guard: `scripts/e2e_chunk2.js` record `selected-region-composite`는 no-selection grid `Coord`가 전체 loaded grid count를 `image_paths` source로 보존하고, single-view의 Shot/Coord/Border 버튼이 grid state와 연동되는지 확인한다. 같은 record는 grid Shot overlay canvas `width/height`가 CSS 크기와 같은지 확인한다. `coordinate-selection-cells`는 Shot X/Y 입력 후 Chip X/Y 48쌍과 Shot Position 24개가 채워지는지, Chip X/Y 입력 후 Shot X/Y 1쌍과 Shot Position 1개가 채워지는지 확인한다.
 - 파일: `js/main.js`, `scripts/e2e_chunk2.js`
 
+#### BUG-42: 좌표 모달 Shot Composite 직접 실행 회귀 (2026-08-18)
+- 증상: grid `Coord`로 대표 단일 wafer를 열어 Shot을 선택한 뒤에도 사용자는 좌표 모달을 닫고 캔버스 우클릭 메뉴를 다시 열어야만 Shot Composite를 만들 수 있었다. 이 과정에서 선택 state와 grid-origin source scope가 분리되어 보일 수 있었다.
+- 원인: `_pendingGridRegionComposite.sourceImages`와 `handleCompositeCreate()`의 selected Shot/Chip payload 연결은 있었지만, `#chip-coordinate-select-modal` 안에는 현재 live coordinate selection을 확정하고 같은 payload로 Composite를 호출하는 action이 없었다.
+- 수정 계약: 좌표 모달은 `#chip-coordinate-select-composite` 버튼을 제공한다. 클릭 시 대기 중인 coordinate live apply를 즉시 처리하고, 오류가 없으면 `_getSelectedRegionCompositeOptions()`로 현재 selected Shot/Chip payload를 만들며, grid-origin single-view에서는 `_ensureGridImageCoordinateCompositeSource()`로 source wafer 범위를 보장한 뒤 `handleCompositeCreate()`를 호출한다. 버튼 상태는 `_updateCoordinateSelectionSummary()`와 함께 선택 없음/Shot/Chip mode를 반영한다.
+- E2E guard: `scripts/e2e_chunk2.js` record `selected-region-composite`는 grid에서 wafer 2개 선택 → `Coord` → Shot quick-pick 후 `#chip-coordinate-select-composite` 버튼이 `mode=shot`으로 활성화되는지 확인하고, 버튼 클릭으로 `/api/composite-map` payload의 `image_paths.length=2`, `selection_mode=shot`, `selected_shot_groups.length=1`을 요구한다.
+- 파일: `index.html`, `css/style.css`, `js/main.js`, `scripts/e2e_chunk2.js`
+
 ### Available skills
 - deploy-check: Ubuntu 프로덕션 배포 전 점검을 수행한다. 배포 전 민감정보, 설정, SSL/SAML, 환경변수, 운영 체크리스트를 확인할 때 사용한다. (file: D:/project/mapviewer/.claude/skills/deploy-check/SKILL.md)
 - e2e-test: L3 Tracker 전체 기능 E2E 테스트를 Playwright 브라우저 자동화로 수행한다. `/e2e-test`, `E2E 테스트`, `전체 테스트`, `기능 테스트 돌려줘` 같은 요청에 반응한다. (file: D:/project/mapviewer/.claude/skills/e2e-test/skill.md)

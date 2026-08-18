@@ -4205,23 +4205,27 @@ const { createRunner } = require('./e2e_playwright_session');
       dropdownHidden: document.querySelector('[data-coordinate-quick-dropdown="shot"]')?.hidden ?? null,
       optionCount: document.querySelectorAll('[data-coordinate-quick-dropdown="shot"] button[data-coordinate-quick-option]').length,
       selectedQuickOptions: document.querySelectorAll('[data-coordinate-quick-dropdown="shot"] button[aria-selected="true"]').length,
+      compositeButton: {
+        exists: !!document.getElementById('chip-coordinate-select-composite'),
+        disabled: document.getElementById('chip-coordinate-select-composite')?.disabled ?? null,
+        text: document.getElementById('chip-coordinate-select-composite')?.textContent?.trim() || '',
+        mode: document.getElementById('chip-coordinate-select-composite')?.dataset?.selectionMode || '',
+      },
       activeElement: document.activeElement?.outerHTML?.slice(0, 180) || '',
       shotCells: [...document.querySelectorAll('#chip-coordinate-select-shot-tbody input[data-coordinate-row]')]
         .map((input) => input.value),
     }));
-    expect(gridCoordQuickReady, `grid coord quick pick=${JSON.stringify(gridCoordQuickPick)} state=${JSON.stringify(gridCoordQuickState)}`);
-    await page.locator('#chip-coordinate-select-close').click();
+    expect(gridCoordQuickReady &&
+      gridCoordQuickState.compositeButton.exists &&
+      gridCoordQuickState.compositeButton.disabled === false &&
+      gridCoordQuickState.compositeButton.mode === 'shot' &&
+      gridCoordQuickState.compositeButton.text.includes('Shot'),
+      `grid coord quick pick=${JSON.stringify(gridCoordQuickPick)} state=${JSON.stringify(gridCoordQuickState)}`);
     const gridCoordRequestPromise = page.waitForRequest(
       (request) => request.url().includes('/api/composite-map') && request.method() === 'POST',
       { timeout: 10000 }
     );
-    await page.mouse.click(gridCoordShot.screenX, gridCoordShot.screenY, { button: 'right' });
-    await page.waitForFunction(
-      () => !!document.querySelector('#chip-context-menu #chip-composite-create'),
-      null,
-      { timeout: 10000 }
-    );
-    await page.locator('#chip-context-menu #chip-composite-create').click();
+    await page.locator('#chip-coordinate-select-composite').click();
     const gridCoordRequest = await gridCoordRequestPromise;
     const gridCoordRequestBody = JSON.parse(gridCoordRequest.postData() || '{}');
     expect(gridCoordRequestBody.selection_mode === 'shot' &&
