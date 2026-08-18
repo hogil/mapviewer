@@ -320,6 +320,13 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
 - E2E guard: `scripts/e2e_chunk2.js` record `coordinate-selection-cells`는 scope 없이 position 0을 클릭했을 때 `mode=chip`, `selectedPositions=[0]`, 전체 wafer의 해당 position chip만 선택되는지 확인한다. Shot 두 개를 먼저 선택한 뒤 picker cell 하나를 클릭했을 때 `mode=chip`, `chips=2`, 각 Shot당 1개 chip, picker checked 1개인지 확인한다. `scripts/e2e_shot_100_products_guard.js`는 100개 synthetic product에서 scope 없음/두 Shot scope Shot Position 선택을 모두 확인하고, 각 제품에서 Shot당 1 chip만 선택되는지 검사한다.
 - 파일: `js/main.js`, `scripts/e2e_chunk2.js`, `scripts/e2e_shot_100_products_guard.js`
 
+#### BUG-40: Grid Shot 버튼과 썸네일 Shot 경계 overlay 회귀 (2026-08-18)
+- 증상: grid mode의 `Shot` 버튼은 현재 렌더된 wafer 썸네일 위에 Shot 경계만 보여야 하는데, `Coord` 경로처럼 선택 wafer를 단일보기로 열거나 chip/shot 선택 상태를 건드릴 수 있었다. 한 row/column Shot 구조에서는 synthetic 회전 제품에서 Shot 경계 방향도 잘못 추론될 수 있었다.
+- 원인: `#grid-shot-boundary-btn`가 `openGridCoordinateSelection({ openModal:false, showShotBoundary:true })`를 호출해 grid thumbnail overlay와 Coord/Shot Composite selection 흐름이 분리되어 있지 않았다. `ChipAnnotator._inferGridScreenTransform()`은 기준 full Shot 안에 X 또는 Y 인접 chip이 없는 `2×1`, `1×2` 같은 구조에서 한 축 벡터를 얻지 못하면 전치 회전을 판정하지 못했다.
+- 수정 계약: grid `Shot`은 `gridShotBoundaryVisible`만 토글하고 `.grid-shot-boundary-overlay` canvas를 현재 로드되어 보이는 `.grid-thumb-wrap`에만 그린다. 이 동작은 `gridSelectedIdxs`, `gridSelectedSet`, `selectedImagePath`, `viewMode`, `chipAnnotator.selectedChips`, coordinate modal 표시 상태를 바꾸면 안 된다. grid `Coord`는 계속 선택 wafer를 대표 단일보기로 열어 Shot Composite selection을 만든다. 단일 이미지 Shot 경계는 기존 `ChipAnnotator` overlay를 사용하고 grid thumbnail overlay와 상태를 공유하지 않는다. 기준 Shot만으로 screen transform의 한 축을 추론할 수 없으면 전체 chip entries로 보강한다.
+- E2E guard: `scripts/e2e_chunk2.js` record `selected-region-composite`는 grid에서 wafer 2개가 선택된 상태로 `Shot`을 눌러 overlay canvas의 실제 nontransparent pixel과 boundary count가 생기는지 확인하고, 전후 `gridMode`, `viewMode`, 선택 wafer path/index, chip selection, coordinate modal hidden 상태가 변하지 않는지 검사한다. `scripts/e2e_shot_100_products_guard.js`는 100개 synthetic product에서 `1×2`, `2×1`을 포함한 24개 Shot shape, 19개 slot-count variant, 5개 size profile, 4개 rotation, 8개 wafer shape, chip 수 311~4850 범위를 확인한다.
+- 파일: `js/main.js`, `js/chip-annotator.js`, `css/style.css`, `scripts/e2e_chunk2.js`, `scripts/e2e_shot_100_products_guard.js`
+
 ### Available skills
 - deploy-check: Ubuntu 프로덕션 배포 전 점검을 수행한다. 배포 전 민감정보, 설정, SSL/SAML, 환경변수, 운영 체크리스트를 확인할 때 사용한다. (file: D:/project/mapviewer/.claude/skills/deploy-check/SKILL.md)
 - e2e-test: L3 Tracker 전체 기능 E2E 테스트를 Playwright 브라우저 자동화로 수행한다. `/e2e-test`, `E2E 테스트`, `전체 테스트`, `기능 테스트 돌려줘` 같은 요청에 반응한다. (file: D:/project/mapviewer/.claude/skills/e2e-test/skill.md)

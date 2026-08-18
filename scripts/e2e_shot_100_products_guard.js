@@ -19,21 +19,36 @@ function positiveModulo(value, size) {
   return ((value % size) + size) % size;
 }
 
+const SHOT_SHAPES = [
+  [1, 2], [2, 1], [2, 3], [3, 2], [3, 3], [3, 4],
+  [4, 3], [4, 4], [4, 6], [5, 4], [5, 5], [6, 4],
+  [6, 5], [6, 6], [7, 4], [7, 5], [8, 4], [8, 7],
+  [9, 4], [9, 6], [10, 4], [10, 5], [12, 4], [12, 6],
+];
+
+const SIZE_PROFILES = [
+  { name: 'tiny', baseW: 16, baseH: 15, colMul: 3, rowMul: 3 },
+  { name: 'small', baseW: 23, baseH: 21, colMul: 4, rowMul: 3 },
+  { name: 'mid', baseW: 31, baseH: 30, colMul: 4, rowMul: 4 },
+  { name: 'large', baseW: 43, baseH: 35, colMul: 5, rowMul: 4 },
+  { name: 'wide', baseW: 54, baseH: 45, colMul: 5, rowMul: 5 },
+];
+
 function productSpec(index) {
-  const colsSeq = [2, 3, 4, 5, 6, 7, 8, 9, 4, 6];
-  const rowsSeq = [3, 4, 6, 4, 4, 5, 3, 7, 8, 6];
   const rotSeq = [5, 7, 3, 0];
   const waferSeq = ['circle', 'ellipse-x', 'ellipse-y', 'flat-top', 'flat-bottom', 'notch-left', 'notch-right', 'diamond'];
-  const cols = colsSeq[index % colsSeq.length];
-  const rows = rowsSeq[(index * 3) % rowsSeq.length];
-  const width = 28 + (index % 11) + cols * 4;
-  const height = 27 + ((index * 7) % 13) + rows * 4;
+  const [cols, rows] = SHOT_SHAPES[index % SHOT_SHAPES.length];
+  const profile = SIZE_PROFILES[Math.floor(index / SHOT_SHAPES.length) % SIZE_PROFILES.length];
+  const width = profile.baseW + (index % 9) + cols * profile.colMul;
+  const height = profile.baseH + ((index * 7) % 11) + rows * profile.rowMul;
   const xStart = 26 + (index % 13); // fail-map style abs grid commonly starts near 30
   const yStart = 27 + ((index * 5) % 11);
   return {
     processId: `S${String(index).padStart(3, '0')}`,
     cols,
     rows,
+    shapeKey: `${cols}x${rows}`,
+    sizeProfile: profile.name,
     originX: xStart + ((index * 2) % cols),
     originY: yStart + ((index * 3) % rows),
     xStart,
@@ -156,6 +171,62 @@ function buildProduct(spec, index) {
   return { chips, rows, canvasW, canvasH, xMin, xMax, yMin, yMax };
 }
 
+function chipCountBucket(count) {
+  if (count < 500) return '<500';
+  if (count < 1000) return '500-999';
+  if (count < 2000) return '1000-1999';
+  if (count < 4000) return '2000-3999';
+  return '4000+';
+}
+
+function summarizeCoverage(cases) {
+  const chipCounts = cases.map(({ product }) => product.chips.length);
+  const shotShapes = [...new Set(cases.map(({ spec }) => spec.shapeKey))].sort((left, right) => {
+    const [lc, lr] = left.split('x').map(Number);
+    const [rc, rr] = right.split('x').map(Number);
+    return lc * lr - rc * rr || lc - rc || lr - rr;
+  });
+  const shotSlotCounts = [...new Set(cases.map(({ spec }) => spec.cols * spec.rows))].sort((a, b) => a - b);
+  const chipBuckets = [...new Set(chipCounts.map(chipCountBucket))];
+  return {
+    productCount: cases.length,
+    shotShapes,
+    shotShapeCount: shotShapes.length,
+    shotSlotCounts,
+    shotSlotCountVariants: shotSlotCounts.length,
+    sizeProfiles: [...new Set(cases.map(({ spec }) => spec.sizeProfile))].sort(),
+    rotations: [...new Set(cases.map(({ spec }) => spec.rotCode))].sort((a, b) => a - b),
+    waferShapes: [...new Set(cases.map(({ spec }) => spec.waferShape))].sort(),
+    chipCount: {
+      min: Math.min(...chipCounts),
+      max: Math.max(...chipCounts),
+      unique: new Set(chipCounts).size,
+      buckets: chipBuckets,
+      sample: chipCounts.slice(0, 20),
+    },
+  };
+}
+
+function coverageFailures(coverage) {
+  const failures = [];
+  if (coverage.productCount < 100) failures.push({ reason: 'coverage-product-count', expectedAtLeast: 100, got: coverage.productCount });
+  if (coverage.shotShapeCount < 20) failures.push({ reason: 'coverage-shot-shapes', expectedAtLeast: 20, got: coverage.shotShapeCount, shapes: coverage.shotShapes });
+  if (coverage.shotSlotCountVariants < 14) failures.push({ reason: 'coverage-shot-slot-counts', expectedAtLeast: 14, got: coverage.shotSlotCountVariants, slotCounts: coverage.shotSlotCounts });
+  if (coverage.sizeProfiles.length < 5) failures.push({ reason: 'coverage-size-profiles', expectedAtLeast: 5, got: coverage.sizeProfiles.length, sizeProfiles: coverage.sizeProfiles });
+  if (coverage.rotations.length < 4) failures.push({ reason: 'coverage-rotations', expected: [0, 3, 5, 7], got: coverage.rotations });
+  if (coverage.waferShapes.length < 8) failures.push({ reason: 'coverage-wafer-shapes', expectedAtLeast: 8, got: coverage.waferShapes.length, waferShapes: coverage.waferShapes });
+  if (coverage.chipCount.unique < 60) failures.push({ reason: 'coverage-chip-count-unique', expectedAtLeast: 60, got: coverage.chipCount.unique });
+  if (coverage.chipCount.min >= 500 || coverage.chipCount.max < 4000) {
+    failures.push({ reason: 'coverage-chip-count-range', expected: 'min<500 and max>=4000', got: coverage.chipCount });
+  }
+  ['<500', '500-999', '1000-1999', '2000-3999', '4000+'].forEach((bucket) => {
+    if (!coverage.chipCount.buckets.includes(bucket)) {
+      failures.push({ reason: 'coverage-chip-count-bucket', missing: bucket, buckets: coverage.chipCount.buckets });
+    }
+  });
+  return failures;
+}
+
 (async () => {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
@@ -173,7 +244,17 @@ function buildProduct(spec, index) {
 
   const specs = Array.from({ length: PRODUCT_COUNT }, (_, index) => productSpec(index));
   const cases = specs.map((spec, index) => ({ spec, product: buildProduct(spec, index) }));
+  const coverage = summarizeCoverage(cases);
+  const coverageProblems = coverageFailures(coverage);
   const results = { summaries: [], failures: [] };
+  if (coverageProblems.length) {
+    results.failures.push({
+      processId: 'coverage',
+      failureCount: coverageProblems.length,
+      coverage,
+      failures: coverageProblems,
+    });
+  }
   for (const testCase of cases) {
     const productResult = await page.evaluate((testCase) => {
     const viewer = window.viewer;
@@ -237,6 +318,8 @@ function buildProduct(spec, index) {
     let compositeSlotChecks = 0;
     let positionNoScopeChecks = 0;
     let positionScopedChecks = 0;
+    let positionNoScopeMultiChecks = 0;
+    let positionScopedMultiChecks = 0;
     for (const group of annotator.shotBoundaryGroups.values()) {
       checkedGroups += 1;
       const chips = group.chips || [];
@@ -413,6 +496,48 @@ function buildProduct(spec, index) {
             result,
           });
         }
+        if (!productFailures.length) {
+          const secondReferenceIndex = product.chips.findIndex((chip) => {
+            const position = annotator.getShotPositionForChip(chip);
+            return Number.isInteger(position) && position !== referencePosition;
+          });
+          if (secondReferenceIndex < 0) {
+            productFailures.push({ reason: 'shot-position-no-scope-second-reference-missing' });
+          } else {
+            const secondPosition = annotator.getShotPositionForChip(product.chips[secondReferenceIndex]);
+            const expectedPositions = new Set([referencePosition, secondPosition]);
+            const expectedMulti = product.chips
+              .map((chip, index) => ({ chip, index }))
+              .filter(({ chip }) => annotator.isChipSelectable(chip) &&
+                expectedPositions.has(annotator.getShotPositionForChip(chip)))
+              .map(({ index }) => index);
+            const addResult = viewer._applyCoordinateSelectionShotPickerSelection([secondReferenceIndex], true);
+            const multiSelected = [...annotator.selectedChips];
+            const multiPositions = new Set(multiSelected
+              .map((index) => annotator.getShotPositionForChip(product.chips[index])));
+            const removeResult = viewer._applyCoordinateSelectionShotPickerSelection([secondReferenceIndex], false);
+            const removedSelected = [...annotator.selectedChips];
+            positionNoScopeMultiChecks += 1;
+            if (!addResult || !removeResult ||
+                annotator.selectionMode !== 'chip' ||
+                multiSelected.length !== expectedMulti.length ||
+                multiPositions.size !== 2 ||
+                ![...expectedPositions].every((position) => multiPositions.has(position)) ||
+                removedSelected.length !== expected.length ||
+                removedSelected.some((index) => annotator.getShotPositionForChip(product.chips[index]) !== referencePosition)) {
+              productFailures.push({
+                reason: 'shot-position-no-scope-ctrl-multi',
+                expectedPositions: [...expectedPositions],
+                expectedMultiCount: expectedMulti.length,
+                multiSelectedCount: multiSelected.length,
+                multiPositions: [...multiPositions],
+                removedSelectedCount: removedSelected.length,
+                addResult,
+                removeResult,
+              });
+            }
+          }
+        }
       }
     }
 
@@ -454,6 +579,62 @@ function buildProduct(spec, index) {
             result,
           });
         }
+        if (!productFailures.length) {
+          const secondReferenceIndex = scopedGroups[0].indices.find((index) => {
+            const position = annotator.getShotPositionForChip(product.chips[index]);
+            return Number.isInteger(position) && position !== referencePosition;
+          });
+          if (!Number.isInteger(secondReferenceIndex)) {
+            productFailures.push({ reason: 'shot-position-scoped-second-reference-missing' });
+          } else {
+            const secondPosition = annotator.getShotPositionForChip(product.chips[secondReferenceIndex]);
+            const expectedPositions = new Set([referencePosition, secondPosition]);
+            const addResult = viewer._applyCoordinateSelectionShotPickerSelection([secondReferenceIndex], true);
+            const multiSelected = [...annotator.selectedChips];
+            const multiByShot = new Map();
+            multiSelected.forEach((index) => {
+              const group = annotator._getShotGroupForChip(product.chips[index]);
+              const key = group ? String(group.groupKey ?? group.shotId) : '';
+              multiByShot.set(key, (multiByShot.get(key) || 0) + 1);
+            });
+            const multiPositions = new Set(multiSelected
+              .map((index) => annotator.getShotPositionForChip(product.chips[index])));
+            const removeResult = viewer._applyCoordinateSelectionShotPickerSelection([secondReferenceIndex], false);
+            const removedSelected = [...annotator.selectedChips];
+            const removedByShot = new Map();
+            removedSelected.forEach((index) => {
+              const group = annotator._getShotGroupForChip(product.chips[index]);
+              const key = group ? String(group.groupKey ?? group.shotId) : '';
+              removedByShot.set(key, (removedByShot.get(key) || 0) + 1);
+            });
+            positionScopedMultiChecks += 1;
+            if (!addResult || !removeResult ||
+                annotator.selectionMode !== 'chip' ||
+                multiSelected.length !== scopedGroups.length * 2 ||
+                multiByShot.size !== scopedGroups.length ||
+                [...multiByShot.values()].some((count) => count !== 2) ||
+                multiPositions.size !== 2 ||
+                ![...expectedPositions].every((position) => multiPositions.has(position)) ||
+                removedSelected.length !== scopedGroups.length ||
+                removedByShot.size !== scopedGroups.length ||
+                [...removedByShot.values()].some((count) => count !== 1) ||
+                removedSelected.some((index) => annotator.getShotPositionForChip(product.chips[index]) !== referencePosition)) {
+              productFailures.push({
+                reason: 'shot-position-scoped-ctrl-multi',
+                expectedPositions: [...expectedPositions],
+                expectedShotCount: scopedGroups.length,
+                multiSelectedCount: multiSelected.length,
+                multiShotCount: multiByShot.size,
+                multiPerShotCounts: [...multiByShot.values()],
+                multiPositions: [...multiPositions],
+                removedSelectedCount: removedSelected.length,
+                removedPerShotCounts: [...removedByShot.values()],
+                addResult,
+                removeResult,
+              });
+            }
+          }
+        }
       }
     }
 
@@ -483,6 +664,8 @@ function buildProduct(spec, index) {
       compositeSlotChecks,
       positionNoScopeChecks,
       positionScopedChecks,
+      positionNoScopeMultiChecks,
+      positionScopedMultiChecks,
       failureCount: productFailures.length,
     };
     return {
@@ -499,6 +682,7 @@ function buildProduct(spec, index) {
     productCount: PRODUCT_COUNT,
     passed: results.failures.length === 0,
     failureCount: results.failures.length,
+    coverage,
     failures: results.failures,
     summaries: results.summaries,
   };
@@ -508,6 +692,7 @@ function buildProduct(spec, index) {
     passed: report.passed,
     productCount: report.productCount,
     failureCount: report.failureCount,
+    coverage: report.coverage,
     reportPath,
     firstFailures: report.failures.slice(0, 5),
   }, null, 2));

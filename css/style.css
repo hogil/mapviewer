@@ -2225,6 +2225,16 @@
             image-rendering: crisp-edges;
             image-rendering: high-quality;
         }
+
+        .grid-shot-boundary-overlay {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 2;
+            border-radius: 4px;
+        }
         
         .grid-thumb-img.lazy,
         .grid-thumb-img:not(.lazy) {

@@ -6599,3 +6599,11 @@ return {
 - With two Shot X/Y rows already selected, clicking one picker cell must narrow to the same position inside those two Shots only: `mode=chip`, `chips=2`, one selected chip per scoped Shot, and exactly one checked picker cell.
 - Guard: `scripts/e2e_chunk2.js` record `coordinate-selection-cells` covers the real P001 UI path. `scripts/e2e_shot_100_products_guard.js` covers 100 synthetic products with varied shot shape, origin, rotation, and partial Shot geometry; it must include both no-scope and two-Shot scoped Shot Position checks.
 - Files: `js/main.js`, `scripts/e2e_chunk2.js`, `scripts/e2e_shot_100_products_guard.js`.
+
+#### BUG-40: Grid Shot thumbnail overlay separation guard
+- In grid mode, `#grid-shot-boundary-btn` is a thumbnail Shot-boundary overlay toggle only. It must not open `#chip-coordinate-select-modal`, enter `gridImage`/single view, mutate selected wafer indices/paths, or create chip/shot selection state for Shot Composite.
+- The overlay is drawn with `.grid-shot-boundary-overlay` canvas on currently visible and loaded `.grid-thumb-wrap` elements. PASS requires real nontransparent canvas pixels and `data-shot-boundary-count > 0`, not only `gridShotBoundaryVisible=true`.
+- `Coord` remains the only grid button that opens a selected representative wafer for coordinate selection and selected Shot Composite source preservation. Do not merge the `Shot` and `Coord` handlers.
+- One-row or one-column Shot fixtures such as `2×1` and `1×2` must still infer display rotation correctly. If the reference full Shot lacks one adjacent axis, `ChipAnnotator._getShotGridGeometry()` should infer the screen transform from broader chip entries.
+- Guard: `scripts/e2e_chunk2.js` record `selected-region-composite` checks overlay pixels and unchanged grid/selection/modal state before continuing into grid Coord Shot Composite. `scripts/e2e_shot_100_products_guard.js` must pass 100 synthetic products covering 24 Shot shapes, 19 slot-count variants, 5 size profiles, 4 rotations, 8 wafer shapes, and chip counts from `<500` through `4000+`.
+- Files: `js/main.js`, `js/chip-annotator.js`, `css/style.css`, `scripts/e2e_chunk2.js`, `scripts/e2e_shot_100_products_guard.js`.

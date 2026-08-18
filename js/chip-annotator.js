@@ -443,6 +443,8 @@ export class ChipAnnotator {
         });
         const xVector = this._medianVector(xVectors);
         const yVector = this._medianVector(yVectors);
+        const hasXVector = !!xVector;
+        const hasYVector = !!yVector;
         const xAxis = xVector && Math.abs(xVector.dy) > Math.abs(xVector.dx) ? 'y' : 'x';
         const yAxis = yVector && Math.abs(yVector.dx) > Math.abs(yVector.dy) ? 'x' : 'y';
         if (xAxis === yAxis) {
@@ -452,6 +454,8 @@ export class ChipAnnotator {
                 yAxis: 'y',
                 ySign: yVector && Math.abs(yVector.dy) > 0 ? Math.sign(yVector.dy) || 1 : 1,
                 transposed: false,
+                hasXVector,
+                hasYVector,
             };
         }
         return {
@@ -464,6 +468,8 @@ export class ChipAnnotator {
                 ? (Math.sign(yVector?.dx || 1) || 1)
                 : (Math.sign(yVector?.dy || 1) || 1),
             transposed: xAxis === 'y' && yAxis === 'x',
+            hasXVector,
+            hasYVector,
         };
     }
 
@@ -732,7 +738,16 @@ export class ChipAnnotator {
         const slotOriginY = Number.isFinite(Number(canonicalShape?.slotOriginY))
             ? Number(canonicalShape.slotOriginY)
             : referenceYs.length ? positiveModulo(Math.min(...referenceYs), gridRows) : 0;
-        const screenTransform = this._inferGridScreenTransform(referenceEntries);
+        let screenTransform = this._inferGridScreenTransform(referenceEntries);
+        if (
+            (!screenTransform?.hasXVector || !screenTransform?.hasYVector) &&
+            entries.length > referenceEntries.length
+        ) {
+            const broadTransform = this._inferGridScreenTransform(entries);
+            if (broadTransform?.hasXVector && broadTransform?.hasYVector) {
+                screenTransform = broadTransform;
+            }
+        }
         const shape = this._getDisplayShotShape(gridShape, screenTransform);
         const referenceCellSize = this._getMedianChipRectSize(
             referenceEntries.map((entry) => entry.chip).filter(Boolean)
