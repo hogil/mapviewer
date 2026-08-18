@@ -6607,3 +6607,11 @@ return {
 - One-row or one-column Shot fixtures such as `2×1` and `1×2` must still infer display rotation correctly. If the reference full Shot lacks one adjacent axis, `ChipAnnotator._getShotGridGeometry()` should infer the screen transform from broader chip entries.
 - Guard: `scripts/e2e_chunk2.js` record `selected-region-composite` checks overlay pixels and unchanged grid/selection/modal state before continuing into grid Coord Shot Composite. `scripts/e2e_shot_100_products_guard.js` must pass 100 synthetic products covering 24 Shot shapes, 19 slot-count variants, 5 size profiles, 4 rotations, 8 wafer shapes, and chip counts from `<500` through `4000+`.
 - Files: `js/main.js`, `js/chip-annotator.js`, `css/style.css`, `scripts/e2e_chunk2.js`, `scripts/e2e_shot_100_products_guard.js`.
+
+#### BUG-41: Grid Coord all-loaded source and coordinate-list sync guard
+- Grid `Coord` must use selected wafer paths only when `gridSelectedIdxs` is non-empty. With no explicit grid selection, it must preserve all currently loaded `currentGridImages` in `_pendingGridRegionComposite.sourceImages` and mark `selectedOnly=false`.
+- Grid-origin single-image view must keep `Shot`, `Coord`, and `Border` linked to grid state. Entering single view with grid Shot active must enable `chipAnnotator.shotBoundaryVisible`; turning Shot off in single view must also clear `gridShotBoundaryVisible` and hidden thumbnail overlays. Border must update both single and grid button states.
+- Thumbnail Shot overlay canvas backing pixels must stay at CSS thumbnail size (`canvas.width === round(clientWidth)`, `canvas.height === round(clientHeight)`), not device-pixel-ratio scaled.
+- Coordinate modal live apply must preserve the active edited list while syncing the other lists from the resulting chip selection. Shot X/Y input should populate Chip X/Y and Shot Position; Chip X/Y input should populate Shot X/Y and Shot Position.
+- Guard: `scripts/e2e_chunk2.js` record `selected-region-composite` checks no-selection Coord all-loaded source count, single-view Shot/Coord/Border linkage, and overlay canvas pixel size. Record `coordinate-selection-cells` checks Shot-to-Chip/Position and Chip-to-Shot/Position list synchronization.
+- Files: `js/main.js`, `scripts/e2e_chunk2.js`.

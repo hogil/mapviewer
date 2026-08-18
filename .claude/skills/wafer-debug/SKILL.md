@@ -219,3 +219,10 @@ argument-hint: [증상-설명]
 - 원인 후보: `#grid-shot-boundary-btn`가 `openGridCoordinateSelection()`을 호출하면 grid thumbnail overlay와 coordinate modal 진입이 섞인다. 한 row/column Shot 구조에서는 기준 Shot만으로 screen transform을 추론해 회전/전치 방향이 틀릴 수 있다.
 - 수정 패턴: grid Shot은 `gridShotBoundaryVisible`과 `.grid-shot-boundary-overlay` canvas만 토글한다. `gridSelectedIdxs`, selected wafer paths, `viewMode`, `selectedImagePath`, coordinate modal display, chip selection은 그대로 둔다. Coord 버튼만 coordinate modal/representative wafer 진입을 담당한다. 기준 Shot에 한 축 벡터가 없으면 전체 chip entries로 `ChipAnnotator` screen transform을 보강한다.
 - E2E 신호: `selected-region-composite`는 grid Shot 클릭 전후 선택/grid/modal 상태 불변과 실제 overlay canvas nontransparent pixel을 확인한다. `scripts/e2e_shot_100_products_guard.js`는 `1×2`, `2×1`을 포함한 100개 synthetic product의 shape/rotation/chip-count coverage를 확인한다.
+
+### Grid Coord all-loaded source and coordinate-list sync (2026-08-18)
+
+- 증상: grid에서 wafer를 선택하지 않고 `Coord`를 누르면 로드된 전체 wafer에 적용되어야 하는데 선택 필요/대표 wafer처럼 동작한다. grid Shot/Border 상태가 grid-origin single-view 버튼과 이어지지 않고, Shot X/Y와 Chip X/Y 입력 리스트가 서로 따라 갱신되지 않는다.
+- 원인 후보: `openGridCoordinateSelection()`이 selected paths만 source로 삼고 no-selection fallback을 막는다. single-view `Coord` 버튼은 grid-origin source 범위를 만들지 않는다. thumbnail Shot overlay canvas가 DPR 배율로 커진다. coordinate live apply가 입력 중 sync를 완전히 막아 active list는 보존되지만 반대 list도 비어 있다.
+- 수정 패턴: grid `Coord`는 선택이 있으면 선택 wafer만, 없으면 `currentGridImages` 전체를 pending source로 저장한다. grid-origin single `Coord`도 동일 source를 보장한다. single Shot/Border 버튼은 grid state와 같이 갱신한다. thumbnail overlay backing pixel은 CSS 크기와 같게 둔다. live apply 후 active list를 제외한 Shot/Chip/Shot Position list를 selected chips에서 다시 채운다.
+- E2E 신호: `selected-region-composite`는 no-selection Coord source count가 current grid count와 같은지, single Shot/Coord/Border가 grid state와 이어지는지, overlay canvas pixel size가 CSS size와 같은지 확인한다. `coordinate-selection-cells`는 Shot X/Y 입력 후 Chip/Position, Chip X/Y 입력 후 Shot/Position 리스트가 갱신되는지 확인한다.

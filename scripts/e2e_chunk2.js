@@ -3349,14 +3349,23 @@ const { createRunner } = require('./e2e_playwright_session');
       const shape = annotator?.getShotGridShape?.();
       const slot = annotator?._getShotGridSlot?.(chip, shape);
       const button = document.querySelector(`#chip-coordinate-select-shot-picker button[data-coordinate-shot-slot="${slot}"]`);
+      const shotRows = [...document.querySelectorAll('#chip-coordinate-select-shot-tbody input[data-coordinate-row]')]
+        .map((input) => input.value)
+        .filter(Boolean);
+      const chipIdRows = [...document.querySelectorAll('#chip-coordinate-select-id-tbody input[data-coordinate-row]')]
+        .map((input) => input.value)
+        .filter(Boolean);
       return {
         slot,
         expectedRow: Number(String(slot || '').split(':')[1]) + 1,
         actualRow: Number(button?.style.gridRow),
         selected: button?.getAttribute('aria-checked') === 'true',
+        shotRows,
+        chipIdRows,
       };
     });
-    expect(chipPickerAlignment.selected && chipPickerAlignment.actualRow === chipPickerAlignment.expectedRow,
+    expect(chipPickerAlignment.selected && chipPickerAlignment.actualRow === chipPickerAlignment.expectedRow &&
+      chipPickerAlignment.shotRows.length === 2 && chipPickerAlignment.chipIdRows.length === 1,
       `chip picker Y alignment=${JSON.stringify(chipPickerAlignment)}`);
     await page.locator('#chip-coordinate-select-close').click();
     await openCoordinateModal();
@@ -3408,10 +3417,18 @@ const { createRunner } = require('./e2e_playwright_session');
       chips: window.viewer.chipAnnotator.selectedChips.size,
       shots: window.viewer.chipAnnotator._getSelectedShotGroups().size,
       summaryText: document.getElementById('chip-coordinate-select-summary')?.innerText?.trim() || '',
+      linkedChipValues: [...document.querySelectorAll('#chip-coordinate-select-chip-tbody input[data-coordinate-row]')]
+        .map((input) => input.value)
+        .filter(Boolean),
+      linkedPositionValues: [...document.querySelectorAll('#chip-coordinate-select-id-tbody input[data-coordinate-row]')]
+        .map((input) => input.value)
+        .filter(Boolean),
     }));
     expect(/^Yld/.test(afterShot.summaryText) && afterShot.summaryText.includes('Chip 48') &&
       afterShot.summaryText.includes('Shot Yld') && afterShot.summaryText.includes('Shot Pos Yld'),
       `coordinate selected yield summary=${JSON.stringify(afterShot)}`);
+    expect(afterShot.linkedChipValues.length === 96 && afterShot.linkedPositionValues.length === 24,
+      `Shot X/Y input did not sync Chip X/Y and Shot Position lists=${JSON.stringify(afterShot)}`);
     const shotPicker = await page.evaluate(() => {
       const annotator = window.viewer.chipAnnotator;
       const groups = [...document.querySelectorAll('#chip-coordinate-select-shot-picker .coordinate-select-shot-group')];
@@ -3922,6 +3939,60 @@ const { createRunner } = require('./e2e_playwright_session');
       Math.abs(Number(measureMedianCheck.actual) - Number(measureMedianCheck.sample.expected.toFixed(2))) <= 0.011,
       `measure median check=${JSON.stringify(measureMedianCheck)}`);
 
+    await page.evaluate(() => {
+      window.viewer?.clearGridSelectionMarks?.({ hidePanel: true, updateContext: true });
+    });
+    await sleep(200);
+    await page.locator('#grid-shot-boundary-btn').click();
+    await page.waitForFunction(() => window.viewer?.gridShotBoundaryVisible === true, null, { timeout: 10000 });
+    await page.locator('#grid-border-normalize-btn').click();
+    await page.waitForFunction(() => window.viewer?.borderNormalize === true, null, { timeout: 10000 });
+    const allGridCoordCount = await page.evaluate(() => window.viewer?.currentGridImages?.length || 0);
+    await page.locator('#grid-coordinate-select-open-btn').click();
+    await page.waitForFunction(
+      (expectedCount) => window.viewer?.viewMode === 'gridImage' &&
+        Array.isArray(window.viewer?._pendingGridRegionComposite?.sourceImages) &&
+        window.viewer._pendingGridRegionComposite.sourceImages.length === expectedCount &&
+        window.viewer._pendingGridRegionComposite.selectedOnly === false &&
+        window.viewer?.chipAnnotator?.shotBoundaryVisible === true &&
+        window.viewer?.borderNormalize === true &&
+        getComputedStyle(document.getElementById('chip-coordinate-select-modal')).display !== 'none',
+      allGridCoordCount,
+      { timeout: 40000 }
+    );
+    const gridCoordAllSingleControls = await page.evaluate(() => ({
+      sourceCount: window.viewer?._pendingGridRegionComposite?.sourceImages?.length || 0,
+      selectedOnly: window.viewer?._pendingGridRegionComposite?.selectedOnly ?? null,
+      currentGridCount: window.viewer?.currentGridImages?.length || 0,
+      shotLinked: window.viewer?.gridShotBoundaryVisible === true &&
+        window.viewer?.chipAnnotator?.shotBoundaryVisible === true,
+      borderLinked: window.viewer?.borderNormalize === true,
+      singleCoord: !!document.getElementById('single-coordinate-select-open-btn'),
+      singleShot: !!document.getElementById('single-shot-boundary-btn'),
+      singleBorder: !!document.getElementById('single-border-normalize-btn'),
+    }));
+    expect(gridCoordAllSingleControls.sourceCount === allGridCoordCount &&
+      gridCoordAllSingleControls.currentGridCount === allGridCoordCount &&
+      gridCoordAllSingleControls.selectedOnly === false &&
+      gridCoordAllSingleControls.shotLinked &&
+      gridCoordAllSingleControls.borderLinked &&
+      gridCoordAllSingleControls.singleCoord &&
+      gridCoordAllSingleControls.singleShot &&
+      gridCoordAllSingleControls.singleBorder,
+    `grid coord no-selection/all-loaded and single controls=${JSON.stringify(gridCoordAllSingleControls)}`);
+    await page.locator('#single-shot-boundary-btn').click();
+    await page.waitForFunction(
+      () => window.viewer?.gridShotBoundaryVisible === false &&
+        window.viewer?.chipAnnotator?.shotBoundaryVisible === false,
+      null,
+      { timeout: 10000 }
+    );
+    await page.locator('#single-border-normalize-btn').click();
+    await page.waitForFunction(() => window.viewer?.borderNormalize === false, null, { timeout: 10000 });
+    await page.locator('#chip-coordinate-select-close').click();
+    await page.evaluate(() => window.viewer?.exitSingleImageViewMode?.());
+    await page.waitForFunction(() => window.viewer?.gridMode === true && !window.viewer?.viewMode, null, { timeout: 30000 });
+
     await setSelection([target.index, gridCoordSecond.index]);
     const gridCoordBefore = await page.evaluate(() => {
       const wrapper = document.querySelector('.grid-scroll-wrapper');
@@ -3982,6 +4053,7 @@ const { createRunner } = require('./e2e_playwright_session');
           if (pixels[i] > 0) nonTransparent += 1;
         }
       }
+      const renderedRect = rendered?.getBoundingClientRect?.();
       const modal = document.getElementById('chip-coordinate-select-modal');
       const button = document.getElementById('grid-shot-boundary-btn');
       return {
@@ -3995,6 +4067,10 @@ const { createRunner } = require('./e2e_playwright_session');
         overlayCount: canvases.length,
         renderedCount: canvases.filter((canvas) => canvas.dataset.shotOverlayRendered === 'true').length,
         boundaryCount: Number(rendered?.dataset?.shotBoundaryCount || '0'),
+        pixelWidth: rendered?.width || 0,
+        pixelHeight: rendered?.height || 0,
+        cssWidth: Math.round(renderedRect?.width || 0),
+        cssHeight: Math.round(renderedRect?.height || 0),
         nonTransparent,
       };
     });
@@ -4005,6 +4081,8 @@ const { createRunner } = require('./e2e_playwright_session');
       gridShotOverlay.overlayCount > 0 &&
       gridShotOverlay.renderedCount > 0 &&
       gridShotOverlay.boundaryCount > 0 &&
+      gridShotOverlay.pixelWidth === gridShotOverlay.cssWidth &&
+      gridShotOverlay.pixelHeight === gridShotOverlay.cssHeight &&
       gridShotOverlay.nonTransparent > 0 &&
       gridShotOverlay.selectedIdxs.join(',') === gridShotBefore.selectedIdxs.join(',') &&
       gridShotOverlay.selectedPaths.join('|') === gridShotBefore.selectedPaths.join('|') &&
