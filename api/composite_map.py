@@ -3,6 +3,7 @@ Composite Map 생성 모듈
 여러 웨이퍼 맵의 인덱스별 빈도를 히트맵으로 시각화
 """
 import json
+import logging
 import os
 import shutil
 import struct
@@ -51,7 +52,14 @@ from .config import (
     POSITIONS_ROOT,
     FALLBACK_LOGIN_ID,
 )
-from .personal_colors import load_color_legends, _scheme_to_palette_bytes, normalize_hex_color
+from .personal_colors import (
+    SELECTED_SHOT_DISPLAY_METADATA_FILENAME,
+    SELECTED_SHOT_EMPTY_SLOT_INDEX,
+    SELECTED_SHOT_EMPTY_SLOT_RGB,
+    load_color_legends,
+    _scheme_to_palette_bytes,
+    normalize_hex_color,
+)
 from .composite_colors import load_composite_color_settings
 
 try:
@@ -127,6 +135,7 @@ SQUARE_MAP_CACHE_FILENAME = "square_maps_data.npz"
 _GRADE_RANGE = np.arange(8, dtype=np.uint8)
 _SUBSET_NAME_RE = re.compile(r"^square_(weighted_)?average_([0-7]+)\.(png|jpg|jpeg|webp)$", re.IGNORECASE)
 _SELECTED_REGION_PADDING_PX = 4
+logger = logging.getLogger(__name__)
 
 
 def _positive_int_env(name: str, default: int) -> int:
@@ -766,7 +775,7 @@ def _build_selected_shot_geometry(
         raise ValueError("선택한 Shot의 chip 크기를 계산할 수 없습니다.")
     target_width = cols * cell_width
     target_height = rows * cell_height
-    base_indices = np.full((target_height, target_width), 8, dtype=np.uint8)
+    base_indices = np.full((target_height, target_width), SELECTED_SHOT_EMPTY_SLOT_INDEX, dtype=np.uint8)
     output_coords: set[Tuple[int, int]] = set()
     position_rect_overrides: Dict[Tuple[int, int], Dict[str, Any]] = {}
 
@@ -807,7 +816,7 @@ def _build_selected_shot_geometry(
         group["placements"] = placements
 
     # Output positions represent one canonical Shot. Empty canonical slots stay
-    # background; only selected placement rectangles participate in color math.
+    # white and outside color math; only selected placement rectangles participate.
     display_placements = []
     seen_target_rects: set[Tuple[int, int, int, int]] = set()
     for group in groups:
@@ -1267,6 +1276,39 @@ def _build_palette_list(source_palette: Optional[Sequence[int]]) -> List[int]:
     if len(palette) < 256 * 3:
         palette.extend([0, 0, 0] * (256 - len(palette) // 3))
     return palette[: 256 * 3]
+
+
+def _force_selected_shot_empty_slot_palette(palette: Optional[Sequence[int]]) -> List[int]:
+    palette_list = _build_palette_list(palette)
+    offset = SELECTED_SHOT_EMPTY_SLOT_INDEX * 3
+    palette_list[offset:offset + 3] = list(SELECTED_SHOT_EMPTY_SLOT_RGB)
+    return palette_list
+
+
+def _write_selected_shot_display_metadata(output_dir: Path) -> None:
+    payload = {
+        "type": "selected_shot",
+        "empty_slot_index": SELECTED_SHOT_EMPTY_SLOT_INDEX,
+        "empty_slot_rgb": list(SELECTED_SHOT_EMPTY_SLOT_RGB),
+    }
+    path = output_dir / SELECTED_SHOT_DISPLAY_METADATA_FILENAME
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(path)
+    except Exception as exc:
+        try:
+            tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+        logger.warning("[COMPOSITE] selected Shot display metadata write failed: %s", exc)
+
+
+def _clear_selected_shot_display_metadata(output_dir: Path) -> None:
+    try:
+        (output_dir / SELECTED_SHOT_DISPLAY_METADATA_FILENAME).unlink(missing_ok=True)
+    except Exception as exc:
+        logger.warning("[COMPOSITE] selected Shot display metadata cleanup failed: %s", exc)
 
 
 def _sanitize_login_id(login_id: Optional[str]) -> str:
@@ -3462,6 +3504,11 @@ def create_composite_heatmaps(
         selected_region=bool(shot_geometry or chip_geometry),
     )
     sum_map_low_mask = selected_value_mask if (shot_geometry or chip_geometry) else chip_inner_mask
+    if shot_geometry:
+        default_palette_list = _force_selected_shot_empty_slot_palette(default_palette_list)
+        palette_list = _force_selected_shot_empty_slot_palette(palette_list)
+    else:
+        _clear_selected_shot_display_metadata(output_dir)
     _mark("mask_and_base_setup", t)
 
     heatmaps: List[Dict[str, Any]] = []
@@ -3579,6 +3626,9 @@ def create_composite_heatmaps(
                     sum_map_rel_path = sum_map_entries[0]["path"]
 
     _mark("save_heatmaps_and_sum_maps", t)
+
+    if shot_geometry:
+        _write_selected_shot_display_metadata(output_dir)
 
     if create_sum and sum_map_entries:
         def _delayed_persist_square_cache():

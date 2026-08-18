@@ -5343,9 +5343,10 @@ const { createRunner } = require('./e2e_playwright_session');
             .filter((coord) => Number.isFinite(Number(coord.slot_x)) && Number.isFinite(Number(coord.slot_y)))
             .map((coord) => `${Number(coord.slot_x)}:${Number(coord.slot_y)}`)
         );
-        const selectedSlot = shotCoords
+        const selectedSlotList = shotCoords
           .map((coord) => ({ x: Number(coord.slot_x), y: Number(coord.slot_y) }))
-          .find((slot) => Number.isFinite(slot.x) && Number.isFinite(slot.y));
+          .filter((slot) => Number.isFinite(slot.x) && Number.isFinite(slot.y));
+        const selectedSlot = selectedSlotList[0] || null;
         let missingSlot = null;
         for (let y = 0; y < 6 && !missingSlot; y += 1) {
           for (let x = 0; x < 4; x += 1) {
@@ -5394,23 +5395,27 @@ const { createRunner } = require('./e2e_playwright_session');
               1,
               1
             ).data);
-            const backgroundRgb = palette.length >= 27
-              ? Array.from(palette.slice(8 * 3, 8 * 3 + 3))
+            const emptySlotRgb = palette.length >= 72
+              ? Array.from(palette.slice(23 * 3, 23 * 3 + 3))
               : null;
             const missingPixel = sample(missingSlot);
-            const selectedPixel = sample(selectedSlot);
-            const missingMatchesBackground = !!backgroundRgb &&
-              missingPixel.slice(0, 3).join(',') === backgroundRgb.join(',');
-            const selectedDiffersFromBackground = !!backgroundRgb &&
-              selectedPixel.slice(0, 3).join(',') !== backgroundRgb.join(',');
+            const selectedPixels = selectedSlotList.map(sample);
+            const selectedPixel = selectedPixels[0] || null;
+            const selectedUniqueRgbCount = new Set(
+              selectedPixels.map((pixel) => pixel.slice(0, 3).join(','))
+            ).size;
+            const missingMatchesWhite = !!emptySlotRgb &&
+              emptySlotRgb.join(',') === '255,255,255' &&
+              missingPixel.slice(0, 3).join(',') === emptySlotRgb.join(',');
             sumMapProbe = {
-              selectedSlot,
+              selectedSlots: selectedSlotList,
               missingSlot,
-              backgroundRgb,
+              emptySlotRgb,
               missingPixel,
               selectedPixel,
-              missingMatchesBackground,
-              selectedDiffersFromBackground,
+              selectedPixels,
+              selectedUniqueRgbCount,
+              missingMatchesWhite,
             };
           } finally {
             URL.revokeObjectURL(sumUrl);
@@ -5466,8 +5471,8 @@ const { createRunner } = require('./e2e_playwright_session');
       partialShotResult.result.selection_grade_pixel_counts.length === 8 &&
       partialShotResult.imageSize?.width === shotResult.imageInfo?.width &&
       partialShotResult.imageSize?.height === shotResult.imageInfo?.height &&
-      partialShotResult.sumMapProbe?.missingMatchesBackground === true &&
-      partialShotResult.sumMapProbe?.selectedDiffersFromBackground === true &&
+      partialShotResult.sumMapProbe?.missingMatchesWhite === true &&
+      partialShotResult.sumMapProbe?.selectedUniqueRgbCount >= 2 &&
       partialShotResult.positionsChipCount === selectionTarget.partialShot.chipCount &&
       partialShotResult.positionsCanvas?.width === shotResult.result.width &&
       partialShotResult.positionsCanvas?.height === shotResult.result.height,

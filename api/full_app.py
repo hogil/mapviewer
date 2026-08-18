@@ -403,10 +403,14 @@ from .personal_colors import (
     swap_first16_colors,
     plte_grade_filter_memory,
     plte_inplace_patch_memory,
+    plte_patch_palette_index_memory,
     plte_bottom_filter_memory,
     plte_normalize_border_memory,
     plte_measure_gradient_patch_memory,
     plte_composite_gradient_patch_memory,
+    SELECTED_SHOT_DISPLAY_METADATA_FILENAME,
+    SELECTED_SHOT_EMPTY_SLOT_INDEX,
+    SELECTED_SHOT_EMPTY_SLOT_RGB,
 )
 from .composite_colors import (
     load_composite_color_settings,
@@ -4873,6 +4877,50 @@ def _resolve_composite_map_gradient_mode(image_path: Optional[Path]) -> Optional
     return "composite"
 
 
+def _selected_shot_empty_slot_patch(image_path: Optional[Path]) -> Optional[Tuple[int, Tuple[int, int, int]]]:
+    norm_path = str(image_path).replace("\\", "/") if image_path else ""
+    if not image_path or "composite_map/" not in norm_path or image_path.suffix.lower() != ".png":
+        return None
+    meta_path = image_path.parent / SELECTED_SHOT_DISPLAY_METADATA_FILENAME
+    try:
+        payload = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if payload.get("type") != "selected_shot":
+        return None
+    try:
+        index = int(payload.get("empty_slot_index", SELECTED_SHOT_EMPTY_SLOT_INDEX))
+        rgb_raw = payload.get("empty_slot_rgb", SELECTED_SHOT_EMPTY_SLOT_RGB)
+        rgb = tuple(int(value) for value in rgb_raw[:3])
+    except Exception:
+        return None
+    if not (0 <= index <= 255) or len(rgb) != 3:
+        return None
+    return index, rgb  # type: ignore[return-value]
+
+
+def _force_selected_shot_empty_slot_plte(image_path: Path, png_data: bytearray) -> bytearray:
+    patch = _selected_shot_empty_slot_patch(image_path)
+    if not patch:
+        return png_data
+    index, rgb = patch
+    return plte_patch_palette_index_memory(png_data, index, rgb)
+
+
+def _force_selected_shot_empty_slot_image(image_path: Path, img: Image.Image) -> Image.Image:
+    patch = _selected_shot_empty_slot_patch(image_path)
+    if not patch or img.mode != "P":
+        return img
+    index, rgb = patch
+    palette = list(img.getpalette() or [])
+    if len(palette) < 768:
+        palette.extend([0] * (768 - len(palette)))
+    offset = index * 3
+    palette[offset:offset + 3] = list(rgb)
+    img.putpalette(palette[:768])
+    return img
+
+
 def _apply_png_filters_memory(
     image_path: Path,
     png_data: bytearray,
@@ -4969,6 +5017,7 @@ def _apply_png_filters_memory(
             grade_indices=grade_indices or None,
         )
 
+    patched = _force_selected_shot_empty_slot_plte(image_path, patched)
     return patched
 
 
@@ -5476,6 +5525,7 @@ def _generate_thumbnail_sync(
                             _raw = plte_composite_gradient_patch_memory(bytearray(_raw), scheme or ANONYMOUS_LOGIN_ID) or _raw
                         if _avg_gradient_filter_set:
                             _raw = plte_gradient_filter_patch_memory(bytearray(_raw), _avg_gradient_filter_set) or _raw
+                        _raw = _force_selected_shot_empty_slot_plte(image_path, bytearray(_raw))
                         _vi = _pv.Image.thumbnail_buffer(bytes(_raw), size[0])
                     else:
                         # palette(개인색 없음) + non-palette(RGBA/RGB/JPEG 등) 모두 pyvips
@@ -5531,6 +5581,7 @@ def _generate_thumbnail_sync(
                                     pal[off+1] = int(g0 + (g1 - g0) * t)
                                     pal[off+2] = int(b0 + (b1 - b0) * t)
                                 img.putpalette(pal[:768])
+                        img = _force_selected_shot_empty_slot_image(image_path, img)
                     if img.mode not in ('RGB', 'RGBA'):
                         img = img.convert('RGB')
                     target_w, target_h = size

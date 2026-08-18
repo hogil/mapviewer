@@ -92,6 +92,9 @@ IDX_BORDER = 10       # Normal
 IDX_BORDER_INV = 11   # Invalid
 IDX_BOTTOM_START = 12 # BIN colors start here
 FILTERED_COLOR_RGB = [255, 255, 255]
+SELECTED_SHOT_EMPTY_SLOT_INDEX = 23
+SELECTED_SHOT_EMPTY_SLOT_RGB = (255, 255, 255)
+SELECTED_SHOT_DISPLAY_METADATA_FILENAME = "selected_shot_display.json"
 
 
 def _default_personal_scheme() -> Dict[str, Any]:
@@ -479,6 +482,46 @@ def plte_inplace_patch_memory(png_data: bytearray, scheme: str) -> bytearray:
         pos += chunk_length + 4
 
     return png_data
+
+
+def plte_patch_palette_index_memory(
+    png_data: bytearray,
+    palette_index: int,
+    rgb: Tuple[int, int, int],
+) -> bytearray:
+    """Patch one PLTE palette entry without touching image pixels."""
+    if palette_index < 0 or palette_index > 255:
+        return png_data
+
+    patched = bytearray(png_data)
+    rgb_bytes = bytes(int(max(0, min(255, value))) for value in rgb[:3])
+    if len(rgb_bytes) != 3:
+        return patched
+
+    pos = 8  # PNG signature
+    while pos < len(patched):
+        if pos + 8 > len(patched):
+            break
+        chunk_length = struct.unpack('>I', patched[pos:pos + 4])[0]
+        pos += 4
+        chunk_type = patched[pos:pos + 4]
+        pos += 4
+
+        if chunk_type == b'PLTE':
+            plte_start = pos
+            plte_end = pos + chunk_length
+            offset = palette_index * 3
+            if offset + 3 <= chunk_length:
+                patched[plte_start + offset:plte_start + offset + 3] = rgb_bytes
+                crc_data = chunk_type + bytes(patched[plte_start:plte_end])
+                crc = zlib.crc32(crc_data) & 0xffffffff
+                if plte_end + 4 <= len(patched):
+                    patched[plte_end:plte_end + 4] = struct.pack('>I', crc)
+            break
+
+        pos += chunk_length + 4
+
+    return patched
 
 
 def plte_grade_filter_memory(png_data: bytearray, grade_indices: List[int]) -> bytearray:
@@ -996,12 +1039,16 @@ __all__ = [
     "apply_personalized_palette",
     "swap_first16_colors",
     "plte_inplace_patch_memory",
+    "plte_patch_palette_index_memory",
     "plte_grade_filter_memory",
     "plte_bottom_filter_memory",
     "plte_normalize_border_memory",
     "plte_measure_gradient_patch_memory",
     "plte_composite_gradient_patch_memory",
     "plte_gradient_filter_patch_memory",
+    "SELECTED_SHOT_EMPTY_SLOT_INDEX",
+    "SELECTED_SHOT_EMPTY_SLOT_RGB",
+    "SELECTED_SHOT_DISPLAY_METADATA_FILENAME",
     "DEFAULT_RATIO_GRADIENT",
     "get_ratio_gradient_for_scheme",
     "get_composite_gradient_for_scheme",
