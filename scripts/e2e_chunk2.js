@@ -5269,6 +5269,7 @@ const { createRunner } = require('./e2e_playwright_session');
       shotResult.result.selected_shot_count === 1 &&
       shotResult.result.selected_shot_shape?.cols === 4 &&
       shotResult.result.selected_shot_shape?.rows === 6 &&
+      shotResult.result.quantile_clamp_min_to_zero === false &&
       Array.isArray(shotResult.result.selection_grade_pixel_counts) &&
       shotResult.result.selection_grade_pixel_counts.length === 8 &&
       Array.isArray(shotResult.result.selection_top_grades) &&
@@ -5316,6 +5317,9 @@ const { createRunner } = require('./e2e_playwright_session');
       if (status?.status !== 'completed') throw new Error(`partial shot status=${JSON.stringify(status)}`);
       const result = status.result || {};
       const image = result.heatmaps?.[0]?.path || result.sum_map_path || '';
+      const sumMap = (Array.isArray(result.sum_maps)
+        ? (result.sum_maps.find((entry) => entry.type === 'weighted_square_mean') || result.sum_maps[0])?.path
+        : '') || result.sum_map_path || '';
       const imageResponse = await fetch(`/api/image?path=${encodeURIComponent(image)}`, { cache: 'no-store' });
       if (!imageResponse.ok) throw new Error(`partial shot output status=${imageResponse.status}`);
       const blob = await imageResponse.blob();
@@ -5331,6 +5335,87 @@ const { createRunner } = require('./e2e_playwright_session');
         imageSize = { width: outputImage.naturalWidth, height: outputImage.naturalHeight };
       } finally {
         URL.revokeObjectURL(url);
+      }
+      let sumMapProbe = null;
+      if (sumMap) {
+        const selectedSlots = new Set(
+          shotCoords
+            .filter((coord) => Number.isFinite(Number(coord.slot_x)) && Number.isFinite(Number(coord.slot_y)))
+            .map((coord) => `${Number(coord.slot_x)}:${Number(coord.slot_y)}`)
+        );
+        const selectedSlot = shotCoords
+          .map((coord) => ({ x: Number(coord.slot_x), y: Number(coord.slot_y) }))
+          .find((slot) => Number.isFinite(slot.x) && Number.isFinite(slot.y));
+        let missingSlot = null;
+        for (let y = 0; y < 6 && !missingSlot; y += 1) {
+          for (let x = 0; x < 4; x += 1) {
+            if (!selectedSlots.has(`${x}:${y}`)) {
+              missingSlot = { x, y };
+              break;
+            }
+          }
+        }
+        if (selectedSlot && missingSlot) {
+          const sumResponse = await fetch(`/api/image?path=${encodeURIComponent(sumMap)}`, { cache: 'no-store' });
+          if (!sumResponse.ok) throw new Error(`partial shot sum map status=${sumResponse.status}`);
+          const buffer = await sumResponse.arrayBuffer();
+          const bytes = new Uint8Array(buffer);
+          let palette = new Uint8Array();
+          let offset = 8;
+          while (offset + 12 <= bytes.length) {
+            const length = ((bytes[offset] << 24) | (bytes[offset + 1] << 16) |
+              (bytes[offset + 2] << 8) | bytes[offset + 3]) >>> 0;
+            const type = String.fromCharCode(...bytes.slice(offset + 4, offset + 8));
+            if (type === 'PLTE') {
+              palette = bytes.slice(offset + 8, offset + 8 + length);
+              break;
+            }
+            offset += 12 + length;
+            if (type === 'IEND') break;
+          }
+          const sumUrl = URL.createObjectURL(new Blob([buffer], { type: 'image/png' }));
+          try {
+            const sumImage = new Image();
+            sumImage.src = sumUrl;
+            await new Promise((resolve, reject) => {
+              sumImage.onload = resolve;
+              sumImage.onerror = reject;
+            });
+            const canvas = document.createElement('canvas');
+            canvas.width = sumImage.naturalWidth;
+            canvas.height = sumImage.naturalHeight;
+            const context = canvas.getContext('2d');
+            context.drawImage(sumImage, 0, 0);
+            const cellWidth = canvas.width / 4;
+            const cellHeight = canvas.height / 6;
+            const sample = (slot) => Array.from(context.getImageData(
+              Math.floor((slot.x + 0.5) * cellWidth),
+              Math.floor((slot.y + 0.5) * cellHeight),
+              1,
+              1
+            ).data);
+            const backgroundRgb = palette.length >= 27
+              ? Array.from(palette.slice(8 * 3, 8 * 3 + 3))
+              : null;
+            const missingPixel = sample(missingSlot);
+            const selectedPixel = sample(selectedSlot);
+            const missingMatchesBackground = !!backgroundRgb &&
+              missingPixel.slice(0, 3).join(',') === backgroundRgb.join(',');
+            const selectedDiffersFromBackground = !!backgroundRgb &&
+              selectedPixel.slice(0, 3).join(',') !== backgroundRgb.join(',');
+            sumMapProbe = {
+              selectedSlot,
+              missingSlot,
+              backgroundRgb,
+              missingPixel,
+              selectedPixel,
+              missingMatchesBackground,
+              selectedDiffersFromBackground,
+            };
+          } finally {
+            URL.revokeObjectURL(sumUrl);
+          }
+        }
       }
       let positions = null;
       const positionsDeadline = Date.now() + 30000;
@@ -5360,8 +5445,10 @@ const { createRunner } = require('./e2e_playwright_session');
           selection_grade_pixel_counts: result.selection_grade_pixel_counts,
           selection_top_grades: result.selection_top_grades,
           selection_chip_inner_pixels: result.selection_chip_inner_pixels,
+          quantile_clamp_min_to_zero: result.quantile_clamp_min_to_zero,
         },
         imageSize,
+        sumMapProbe,
         positionsChipCount: Array.isArray(positions?.chips) ? positions.chips.length : 0,
         positionsCanvas: positions?.coord?.canvas || null,
       };
@@ -5374,10 +5461,13 @@ const { createRunner } = require('./e2e_playwright_session');
       partialShotResult.result.selected_shot_count === 1 &&
       partialShotResult.result.selected_shot_shape?.cols === 4 &&
       partialShotResult.result.selected_shot_shape?.rows === 6 &&
+      partialShotResult.result.quantile_clamp_min_to_zero === false &&
       Array.isArray(partialShotResult.result.selection_grade_pixel_counts) &&
       partialShotResult.result.selection_grade_pixel_counts.length === 8 &&
       partialShotResult.imageSize?.width === shotResult.imageInfo?.width &&
       partialShotResult.imageSize?.height === shotResult.imageInfo?.height &&
+      partialShotResult.sumMapProbe?.missingMatchesBackground === true &&
+      partialShotResult.sumMapProbe?.selectedDiffersFromBackground === true &&
       partialShotResult.positionsChipCount === selectionTarget.partialShot.chipCount &&
       partialShotResult.positionsCanvas?.width === shotResult.result.width &&
       partialShotResult.positionsCanvas?.height === shotResult.result.height,
@@ -5447,6 +5537,7 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(multiChipResult.result.selection_mode === 'chip' &&
       multiChipResult.result.selected_chip_count === 3 &&
       multiChipResult.result.composite_sample_count === 3 &&
+      multiChipResult.result.quantile_clamp_min_to_zero === false &&
       multiChipResult.result.width === selectionTarget.chipSize.width &&
       multiChipResult.result.height === selectionTarget.chipSize.height &&
       multiChipResult.imageInfo?.width === selectionTarget.chipSize.width &&
@@ -5520,6 +5611,7 @@ const { createRunner } = require('./e2e_playwright_session');
       Array.isArray(multiShotResult.result.selection_top_grades) &&
       multiShotResult.result.selection_top_grades.length > 0 &&
       multiShotResult.result.composite_sample_count === 2 &&
+      multiShotResult.result.quantile_clamp_min_to_zero === false &&
       multiShotResult.result.width === shotResult.result.width &&
       multiShotResult.result.height === shotResult.result.height &&
       multiShotResult.positionsChipCount === 24 &&
@@ -5570,6 +5662,7 @@ const { createRunner } = require('./e2e_playwright_session');
           composite_sample_count: result.composite_sample_count,
           selected_shot_count: result.selected_shot_count,
           selected_chip_count: result.selected_chip_count,
+          quantile_clamp_min_to_zero: result.quantile_clamp_min_to_zero,
           shot_local_square_weighted: result.shot_local_square_weighted === true,
           heatmapCount: Array.isArray(result.heatmaps) ? result.heatmaps.length : 0,
           sumMapCount: sumMaps.length,
@@ -5585,6 +5678,7 @@ const { createRunner } = require('./e2e_playwright_session');
       shotLocalWtwResult.result.composite_sample_count === 6 &&
       shotLocalWtwResult.result.selected_shot_count === 2 &&
       shotLocalWtwResult.result.selected_chip_count === 24 &&
+      shotLocalWtwResult.result.quantile_clamp_min_to_zero === false &&
       shotLocalWtwResult.result.shot_local_square_weighted &&
       shotLocalWtwResult.result.heatmapCount === 0 &&
       shotLocalWtwResult.result.sumMapCount === 3 &&

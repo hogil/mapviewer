@@ -766,7 +766,7 @@ def _build_selected_shot_geometry(
         raise ValueError("선택한 Shot의 chip 크기를 계산할 수 없습니다.")
     target_width = cols * cell_width
     target_height = rows * cell_height
-    base_indices = np.zeros((target_height, target_width), dtype=np.uint8)
+    base_indices = np.full((target_height, target_width), 8, dtype=np.uint8)
     output_coords: set[Tuple[int, int]] = set()
     position_rect_overrides: Dict[Tuple[int, int], Dict[str, Any]] = {}
 
@@ -806,13 +806,22 @@ def _build_selected_shot_geometry(
             })
         group["placements"] = placements
 
-    # Output positions represent one canonical Shot. If an edge/partial Shot is
-    # selected first, use the densest selected Shot as the visible template and
-    # let partial Shots contribute only their existing chip pixels.
-    reference_group = max(groups, key=lambda group: len(group.get("placements") or []))
-    for placement in reference_group["placements"]:
+    # Output positions represent one canonical Shot. Empty canonical slots stay
+    # background; only selected placement rectangles participate in color math.
+    display_placements = []
+    seen_target_rects: set[Tuple[int, int, int, int]] = set()
+    for group in groups:
+        for placement in group.get("placements") or []:
+            target_rect = tuple(int(value) for value in placement["target_rect"])
+            if target_rect in seen_target_rects:
+                continue
+            seen_target_rects.add(target_rect)
+            display_placements.append(placement)
+
+    for placement in display_placements:
         coord = placement["coord"]
         tx0, ty0, tx1, ty1 = placement["target_rect"]
+        base_indices[ty0:ty1, tx0:tx1] = 0
         output_coords.add(coord)
         position_rect_overrides[coord] = {
             "x0": tx0,
@@ -825,7 +834,7 @@ def _build_selected_shot_geometry(
     if show_normal_border:
         _draw_selected_shot_grid_borders(
             base_indices,
-            reference_group["placements"],
+            display_placements,
             cols=cols,
             rows=rows,
             cell_width=cell_width,
@@ -1820,6 +1829,15 @@ def _value_range_for_map(
     return v_min, v_max
 
 
+def _bool_from_npz_array(value: Any, default: bool) -> bool:
+    if value is None:
+        return default
+    try:
+        return bool(np.atleast_1d(value).ravel()[0])
+    except Exception:
+        return default
+
+
 def _selected_composite_value_mask(
     grade_counts: np.ndarray,
     base_indices: np.ndarray,
@@ -2340,6 +2358,7 @@ def _persist_square_map_data(
     image_count: Optional[int] = None,
     color_scheme: Optional[str] = None,
     colors: Optional[Sequence[str]] = None,
+    clamp_min_to_zero: bool = True,
 ) -> None:
     """
     Cache square-map arrays for fast recoloring.
@@ -2379,6 +2398,7 @@ def _persist_square_map_data(
         save_payload["color_scheme"] = np.array([color_scheme], dtype="U32")
     if colors:
         save_payload["colors"] = np.array(list(colors), dtype="U16")
+    save_payload["quantile_clamp_min_to_zero"] = np.array(bool(clamp_min_to_zero), dtype=np.bool_)
 
     def _save_npz():
         tmp = cache_path.with_name(cache_path.stem + "_tmp.npz")
@@ -2480,10 +2500,12 @@ def recolor_saved_sum_maps(
         source_image_count = int(image_count_arr.item()) if image_count_arr is not None else None
         color_scheme_arr = data.get("color_scheme")
         colors_arr = data.get("colors")
+        clamp_min_arr = data.get("quantile_clamp_min_to_zero")
     grade_counts_arr = grade_counts.astype(np.uint16, copy=False) if grade_counts is not None else None
     invalid_mask_arr = invalid_mask.astype(bool, copy=False) if invalid_mask is not None else None
     idx_8_mask_arr = idx_8_mask.astype(bool, copy=False) if idx_8_mask is not None else None
     only_low_mask_arr = only_low_mask.astype(bool, copy=False) if only_low_mask is not None else None
+    quantile_clamp_min_to_zero = _bool_from_npz_array(clamp_min_arr, True)
     cached_scheme = None
     if color_scheme_arr is not None:
         try:
@@ -2548,7 +2570,11 @@ def recolor_saved_sum_maps(
             old_file = sum_map_path.with_suffix(old_ext)
             if old_file.exists():
                 old_file.unlink(missing_ok=True)
-        v_min, v_max = _value_range_for_map(data_map, mask, clamp_min_to_zero=True)
+        v_min, v_max = _value_range_for_map(
+            data_map,
+            mask,
+            clamp_min_to_zero=quantile_clamp_min_to_zero,
+        )
         idx_arr = _render_sum_map_palette(
             base_indices=base_indices, value_map=data_map, mask=mask,
             value_min=v_min, value_max=v_max,
@@ -2576,6 +2602,7 @@ def recolor_saved_sum_maps(
             image_count=source_image_count,
             color_scheme=settings.scheme,
             colors=colors_to_use,
+            clamp_min_to_zero=quantile_clamp_min_to_zero,
         )
     except Exception as exc:
         print(f"[recolor_saved_sum_maps] Failed to persist updated NPZ: {exc}")
@@ -2617,7 +2644,11 @@ def recolor_saved_sum_maps(
             if "mean" in name_map:
                 target = output_dir / name_map["mean"]
                 render_map = sub_square_mean
-                vmin, vmax = _value_range_for_map(render_map, sub_calc_mask, clamp_min_to_zero=True)
+                vmin, vmax = _value_range_for_map(
+                    render_map,
+                    sub_calc_mask,
+                    clamp_min_to_zero=quantile_clamp_min_to_zero,
+                )
                 idx_arr = _render_sum_map_palette(
                     base_indices=base_indices, value_map=render_map, mask=sub_calc_mask,
                     value_min=vmin, value_max=vmax,
@@ -2638,7 +2669,11 @@ def recolor_saved_sum_maps(
             if "weighted" in name_map:
                 target = output_dir / name_map["weighted"]
                 render_map = sub_weighted
-                vmin, vmax = _value_range_for_map(render_map, sub_weighted_mask, clamp_min_to_zero=True)
+                vmin, vmax = _value_range_for_map(
+                    render_map,
+                    sub_weighted_mask,
+                    clamp_min_to_zero=quantile_clamp_min_to_zero,
+                )
                 idx_arr = _render_sum_map_palette(
                     base_indices=base_indices, value_map=render_map, mask=sub_weighted_mask,
                     value_min=vmin, value_max=vmax,
@@ -2725,6 +2760,7 @@ def _save_sum_map_variants(
     only_low_mask: Optional[np.ndarray] = None,
     colors: Optional[Sequence[str]] = None,
     image_count: Optional[int] = None,
+    clamp_min_to_zero: bool = True,
 ) -> List[Dict[str, str]]:
     trace = _trace_enabled()
     # all_indices가 없으면 grade_counts + base_indices + image_count 필수
@@ -2842,12 +2878,11 @@ def _save_sum_map_variants(
     # min/max 사전 계산
     _precomputed_ranges: Dict[int, Tuple[Optional[float], Optional[float]]] = {}
     for vi, (_, _, _, data_map, mask_arr) in enumerate(variants):
-        values = data_map[mask_arr]
-        if values.size > 0:
-            finite = values[np.isfinite(values)]
-            _precomputed_ranges[vi] = (0.0, float(finite.max())) if finite.size > 0 else (None, None)
-        else:
-            _precomputed_ranges[vi] = (None, None)
+        _precomputed_ranges[vi] = _value_range_for_map(
+            data_map,
+            mask_arr,
+            clamp_min_to_zero=clamp_min_to_zero,
+        )
 
     def _render_and_save_palette(variant_idx, data_map, mask_arr, target_path):
         """palette index 렌더링 + PNG 저장."""
@@ -2898,6 +2933,7 @@ def _save_sum_map_variants(
             image_count=image_count,
             color_scheme=settings.scheme,
             colors=resolved_colors,
+            clamp_min_to_zero=clamp_min_to_zero,
         )
         threading.Thread(target=_persist_square_map_data, kwargs=_npz_args, daemon=True).start()
 
@@ -2997,6 +3033,7 @@ def _render_shot_local_square_weighted_entry(
     filename: str,
     display_name: str,
     gradient_stats: Optional[Dict[str, Any]] = None,
+    clamp_min_to_zero: bool = False,
 ) -> Dict[str, str]:
     selected_grades = list(range(min(int(grade_counts.shape[0]), 8)))
     _square_mean_map, weighted_map, _calc_mask, weighted_mask = _compute_maps_from_counts(
@@ -3011,7 +3048,11 @@ def _render_shot_local_square_weighted_entry(
     palette = _build_palette_list(palette_list)
     sum_palette = _build_sum_map_palette(palette, gradient_scheme="default")
     target = output_dir / filename
-    vmin, vmax = _value_range_for_map(weighted_map, weighted_mask, clamp_min_to_zero=True)
+    vmin, vmax = _value_range_for_map(
+        weighted_map,
+        weighted_mask,
+        clamp_min_to_zero=clamp_min_to_zero,
+    )
     idx_arr = _render_sum_map_palette(
         base_indices=base_indices,
         value_map=weighted_map,
@@ -3487,6 +3528,7 @@ def create_composite_heatmaps(
     sum_map_entries: List[Dict[str, str]] = []
     sum_map_rel_path = None
     shot_local_square_weighted = bool(shot_local_square_weighted and shot_geometry)
+    quantile_clamp_min_to_zero = not bool(shot_geometry or chip_geometry)
 
     if shot_local_square_weighted:
         sum_map_entries, source_weighted_count = _save_shot_local_square_weighted_maps_for_sources(
@@ -3520,6 +3562,7 @@ def create_composite_heatmaps(
                     None, output_dir, palette_bytes,
                     invalid_mask, base_indices, idx_8_13_only, scheme,
                     "", False, grade_counts, sum_map_low_mask, None, composite_sample_count,
+                    quantile_clamp_min_to_zero,
                 )
 
             # heatmap 결과 수집
@@ -3555,6 +3598,7 @@ def create_composite_heatmaps(
                 only_low_mask=sum_map_low_mask,
                 image_count=composite_sample_count,
                 color_scheme=scheme or ANONYMOUS_LOGIN_ID,
+                clamp_min_to_zero=quantile_clamp_min_to_zero,
             )
 
         threading.Thread(target=_delayed_persist_square_cache, daemon=True).start()
@@ -3612,6 +3656,7 @@ def create_composite_heatmaps(
         "source_image_size": {"width": source_width, "height": source_height},
         "processing_time": round(total_time, 2),
         "generated_at": timestamp,
+        "quantile_clamp_min_to_zero": quantile_clamp_min_to_zero,
         "numba": _numba_runtime_info(
             accumulator=accumulator_mode,
             batch_size=effective_batch,
@@ -3907,6 +3952,7 @@ def create_subset_map(
         source_image_count = int(image_count_arr.item()) if image_count_arr is not None else None
         color_scheme_arr = data.get("color_scheme")
         colors_arr = data.get("colors")
+        clamp_min_arr = data.get("quantile_clamp_min_to_zero")
 
     if grade_counts is None:
         raise ValueError("grade_counts가 NPZ 파일에 없습니다.")
@@ -3917,6 +3963,7 @@ def create_subset_map(
     idx_8_mask_arr = None
     chip_inner_mask = (base_indices == 0)
     subset_low_mask = only_low_mask.astype(bool, copy=False) if only_low_mask is not None else chip_inner_mask
+    quantile_clamp_min_to_zero = _bool_from_npz_array(clamp_min_arr, True)
 
     # Subset Map 계산 (chip 내부만 계산 대상으로 제한)
     square_mean_map, weighted_map, calc_mask, weighted_mask = _compute_maps_from_counts(
@@ -3989,7 +4036,11 @@ def create_subset_map(
             old_file = sum_map_path.with_suffix(old_ext)
             if old_file.exists():
                 old_file.unlink(missing_ok=True)
-        value_min, value_max = _value_range_for_map(data_map, mask, clamp_min_to_zero=True)
+        value_min, value_max = _value_range_for_map(
+            data_map,
+            mask,
+            clamp_min_to_zero=quantile_clamp_min_to_zero,
+        )
         idx_arr = _render_sum_map_palette(
             base_indices=base_indices, value_map=data_map, mask=mask,
             value_min=value_min, value_max=value_max,

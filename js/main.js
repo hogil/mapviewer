@@ -12745,7 +12745,7 @@ class WaferMapViewer {
             this._closeCompositeMeasureFloatingPanels();
             alert(hasRegionSelection
                 ? 'Composite Map을 만들 현재 이미지가 없습니다.'
-                : 'Composite Map을 만들 이미지를 선택하세요.');
+                : 'wafer를 선택하세요.');
             return;
         }
         if (hasRegionSelection && selectedChipCoords.length === 0) {
@@ -12924,7 +12924,7 @@ class WaferMapViewer {
 
         const selected = this.getSelectedImagesForModal();
         if (!selected.length) {
-            this.showToast?.('이미지를 먼저 선택하세요.', 1800);
+            alert('wafer를 선택하세요.');
             return;
         }
 

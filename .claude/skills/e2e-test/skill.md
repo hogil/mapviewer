@@ -2115,12 +2115,12 @@ assert(v.currentGridImages.length === 3);  // 입력한 wafer만
 
 **평가 항목**:
 1. 그리드 복귀, 전체해제 → `v.gridSelectedIdxs.length === 0`
-2. `#measure-composite-btn-top` 클릭 → 토스트 "이미지를 먼저 선택하세요." 표시
+2. `#measure-composite-btn-top` 클릭 → alert "wafer를 선택하세요." 표시
    - `#mc-panel` display === 'none' (드롭다운 안 열림)
 3. 우클릭 → 컨텍스트 메뉴 열기 → "Composite 만들기" 호버
 4. 서브메뉴 내용에 "이미지를 선택하세요" 텍스트 표시 확인
 
-**pass 기준**: 토스트 표시, 드롭다운 미열림, 서브메뉴 안내 메시지
+**pass 기준**: alert 표시, 드롭다운 미열림, 서브메뉴 안내 메시지
 
 ---
 

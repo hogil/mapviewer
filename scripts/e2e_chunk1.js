@@ -3035,6 +3035,26 @@ const { createRunner } = require('./e2e_playwright_session');
     });
     await sleep(150);
     await loadFolder('unknown');
+    await page.evaluate(() => {
+      window.viewer.selectedImages = [];
+      window.viewer?.clearGridSelectionMarks?.({ hidePanel: true, updateContext: true });
+    });
+    const noWaferCompositeAlert = await withAutoDialogs(async () => {
+      await page.locator('#measure-composite-btn-top').click();
+      await sleep(200);
+      return page.evaluate(() => ({
+        selectedIdxs: [...(window.viewer?.gridSelectedIdxs || [])],
+        selectedImages: window.viewer?.selectedImages?.length || 0,
+        mcPanelDisplay: getComputedStyle(document.getElementById('mc-panel')).display,
+      }));
+    });
+    expect(
+      noWaferCompositeAlert.dialogs.some((dialog) => /wafer.*선택/.test(dialog.message || '')) &&
+        noWaferCompositeAlert.result.selectedIdxs.length === 0 &&
+        noWaferCompositeAlert.result.selectedImages === 0 &&
+        noWaferCompositeAlert.result.mcPanelDisplay === 'none',
+      `no-wafer Composite alert=${JSON.stringify(noWaferCompositeAlert)}`
+    );
     await setSelection([0, 1, 2]);
     const selectedUnknownPaths = await page.evaluate(() => (
       (window.viewer.gridSelectedIdxs || []).map((idx) => window.viewer.currentGridImages?.[idx] || null)
