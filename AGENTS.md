@@ -369,6 +369,13 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
 - E2E guard: `scripts/e2e_chunk2.js` record `coordinate-selection-cells`는 map selector가 `pointer-events:none` overlay와 fixed panel, `Shot 선택|Chip 선택` buttons, `showGrid=false`, `shotBoundaryVisible=true` 상태인지 확인한다. 같은 record는 Shot list base 2개에서 Chip range를 적용하면 base 안 chip만 남고 Chip range `Clear` 후 base selection이 복원되는지 확인한다. `selected-region-composite`는 grid context menu의 `Coord 선택`, direct `Shot 선택`, `Chip 선택`, `Wafer 선택` 라벨/표시를 확인하고, direct Shot 선택이 Coord modal을 열지 않으며 pending source count를 바꾸지 않는지 확인한다.
 - 파일: `js/main.js`, `js/chip-annotator.js`, `css/style.css`, `index.html`, `scripts/e2e_chunk2.js`
 
+#### BUG-47: Coordinate Map Shot 렌더/색상 scheme 회귀 (2026-08-19)
+- 증상: Shot X/Y `Map`에서 chip을 눌러도 Shot 선택이 화면에 전혀 안 된 것처럼 보이고, map의 chip 색/선택 색/Shot boundary가 현재 단일보기 wafer scheme와 다르게 보일 수 있었다. Chip 경계도 선택용 map에서 지나치게 진하게 보였다.
+- 원인: `js/main.js::_getCoordinateMapSelectionViewer()`가 선택용 viewer에 `gridMode=true`를 넣어 `chip-annotator.js`의 Shot boundary/hover/selected Shot 렌더 함수들이 early return했다. `js/main.js::_getCoordinateMapSelectionAnnotator()`는 단일보기 annotator 색을 복사하지 않고 selector 전용 hard-coded 색을 사용했고, `_drawCoordinateMapSelectionStructure()`는 모든 chip을 흰색과 강한 cyan stroke로 그렸다.
+- 수정 계약: Coordinate Map selector는 구조-only를 유지하되 viewer는 `gridMode=false`여야 한다. selector annotator의 hover/selected/preview/Shot boundary 색은 현재 단일보기 `chipAnnotator`에서 복사하고, chip fill은 active color legend scheme의 palette/grade 색을 사용한다. Chip boundary는 scheme 배경 위에서 보조선 수준으로만 약하게 표시하며, Shot boundary와 선택 효과는 단일보기와 같은 renderer를 통과해야 한다.
+- E2E guard: `scripts/e2e_chunk2.js` record `coordinate-selection-cells`는 map selector open 상태에서 `coordinateMapSelectionViewer.gridMode === false`, main annotator 색 복사, Shot boundary overlay alpha pixel 존재, Shot Map plain click 후 selected Shot group/overlay alpha pixel 존재를 확인한다.
+- 파일: `js/main.js`, `scripts/e2e_chunk2.js`
+
 ### Available skills
 - deploy-check: Ubuntu 프로덕션 배포 전 점검을 수행한다. 배포 전 민감정보, 설정, SSL/SAML, 환경변수, 운영 체크리스트를 확인할 때 사용한다. (file: D:/project/mapviewer/.claude/skills/deploy-check/SKILL.md)
 - e2e-test: L3 Tracker 전체 기능 E2E 테스트를 Playwright 브라우저 자동화로 수행한다. `/e2e-test`, `E2E 테스트`, `전체 테스트`, `기능 테스트 돌려줘` 같은 요청에 반응한다. (file: D:/project/mapviewer/.claude/skills/e2e-test/skill.md)

@@ -261,3 +261,10 @@ argument-hint: [증상-설명]
 - 원인: coordinate map selector가 `/api/image` bitmap을 로드해 그렸고, plain click 선택 경로 없이 `ChipAnnotator`의 일반 클릭 해제 동작에 의존했다. 범위 UI는 axis마다 min/max range를 나란히 만들고 crossing 값을 같은 값으로만 보정했다.
 - 수정 패턴: map selector는 positions/layout만 읽고 chip 구조와 Shot boundary만 canvas에 그린다. Shot Map plain click은 Shot 단위 replace, Chip Map plain click은 Chip 단위 replace로 처리하고 blank click은 selection을 지우지 않는다. Chip/Radius 범위 UI는 axis마다 하나의 dual-handle rail을 사용하고, UI state 및 `chip-annotator.js` range 계산 모두 min/max를 작은 값/큰 값으로 정렬한다.
 - E2E 신호: `coordinate-selection-cells`는 map modal에 `coordinateMapSelection.image`가 없고 plain click만으로 Shot/Chip list가 동기화되는지 확인한다. 같은 record는 axis마다 `.coordinate-select-range-slider` 하나와 value group 하나가 있고, reversed min/max 입력 후에도 `min <= max`, 소수점 2자리, Chip/Radius AND 선택이 유지되는지 확인한다.
+
+### Coordinate Map Shot render / scheme color guard (2026-08-19)
+
+- 증상: Shot X/Y `Map`에서 chip을 눌러도 Shot 선택이 화면에 안 된 것처럼 보이고, map selector 색/선택 효과/Shot boundary가 현재 단일보기 wafer와 다르게 보일 수 있다. Chip boundary도 selector에서 과하게 진하게 보일 수 있다.
+- 원인: map selector viewer가 `gridMode=true`면 `chip-annotator.js`의 Shot boundary/hover/selected Shot renderer가 early return한다. selector annotator가 main `chipAnnotator` 색을 복사하지 않고 hard-coded 색을 쓰거나, structure canvas가 모든 chip을 흰색과 강한 grid stroke로 그리면 현재 scheme과 분리된다.
+- 수정 패턴: selector는 구조-only를 유지하되 viewer `gridMode=false`, annotator hover/selected/preview/Shot boundary 색은 main annotator에서 복사한다. Chip fill은 active color legend scheme의 palette/grade 색을 쓰고, chip boundary는 보조선 수준으로 약하게만 그린다.
+- E2E 신호: `coordinate-selection-cells`는 map selector open 상태에서 `coordinateMapSelectionViewer.gridMode === false`, main annotator 색 복사, Shot boundary overlay alpha pixel 존재, Shot Map plain click 후 selected Shot group/overlay alpha pixel 존재를 확인한다.

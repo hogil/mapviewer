@@ -10968,7 +10968,7 @@ class WaferMapViewer {
         if (!this.coordinateMapSelectionViewer) {
             this.coordinateMapSelectionViewer = {
                 transform: { scale: 1, dx: 0, dy: 0 },
-                gridMode: true,
+                gridMode: false,
                 currentImage: true,
                 dom: { viewerContainer: stage },
                 isCoordinateSelectionOpen: true,
@@ -11004,12 +11004,73 @@ class WaferMapViewer {
             this.coordinateMapSelectionAnnotator.ctx = overlayCanvas.getContext('2d');
             this.coordinateMapSelectionAnnotator.viewer = viewer;
         }
-        this.coordinateMapSelectionAnnotator.gridColor = 'rgba(0, 255, 255, 0.45)';
-        this.coordinateMapSelectionAnnotator.hoverColor = 'rgba(0, 153, 255, 0.9)';
-        this.coordinateMapSelectionAnnotator.selectedColor = 'rgba(255, 196, 0, 0.55)';
-        this.coordinateMapSelectionAnnotator.selectionPreviewColor = 'rgba(255, 196, 0, 0.32)';
-        this.coordinateMapSelectionAnnotator.shotBoundaryColor = 'rgba(170, 85, 210, 0.95)';
+        const sourceAnnotator = this.chipAnnotator;
+        if (sourceAnnotator) {
+            this.coordinateMapSelectionAnnotator.gridColor = sourceAnnotator.gridColor;
+            this.coordinateMapSelectionAnnotator.hoverColor = sourceAnnotator.hoverColor;
+            this.coordinateMapSelectionAnnotator.selectedColor = sourceAnnotator.selectedColor;
+            this.coordinateMapSelectionAnnotator.selectionPreviewColor = sourceAnnotator.selectionPreviewColor;
+            this.coordinateMapSelectionAnnotator.shotBoundaryColor = sourceAnnotator.shotBoundaryColor;
+        }
         return this.coordinateMapSelectionAnnotator;
+    }
+
+    _getCoordinateMapSelectionSchemeData() {
+        if (!this.colorLegends) return null;
+        let schemeToUse = this.personalizedColorEnabled ? this.getActivePersonalizedScheme() : 'default';
+        if (!this.colorLegends[schemeToUse]) {
+            if (this.colorLegends[FALLBACK_LOGIN_ID]) {
+                schemeToUse = FALLBACK_LOGIN_ID;
+            } else if (this.colorLegends.anon) {
+                schemeToUse = 'anon';
+            } else if (this.colorLegends.anonymous) {
+                schemeToUse = 'anonymous';
+            } else if (this.colorLegends.default) {
+                schemeToUse = 'default';
+            } else {
+                const firstKey = Object.keys(this.colorLegends)[0];
+                schemeToUse = firstKey || 'default';
+            }
+        }
+        return this.colorLegends[schemeToUse] || null;
+    }
+
+    _colorWithAlpha(color, alpha) {
+        const fallback = `rgba(0, 0, 0, ${alpha})`;
+        const value = String(color || '').trim();
+        if (!value) return fallback;
+        if (value.startsWith('rgba(')) {
+            return value.replace(/rgba\(([^)]+),\s*[\d.]+\)/, `rgba($1, ${alpha})`);
+        }
+        if (value.startsWith('rgb(')) {
+            return value.replace('rgb(', 'rgba(').replace(')', `, ${alpha})`);
+        }
+        const hex = value.replace('#', '');
+        if (!/^[0-9a-fA-F]{6}$/.test(hex)) return fallback;
+        const r = parseInt(hex.slice(0, 2), 16);
+        const g = parseInt(hex.slice(2, 4), 16);
+        const b = parseInt(hex.slice(4, 6), 16);
+        return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    }
+
+    _getCoordinateMapSelectionChipColor(chip, annotator, schemeData) {
+        const top = schemeData?.top || {};
+        const bottom = schemeData?.bottom || {};
+        const paletteIndex = Number(chip?.palette_index ?? chip?.paletteIndex);
+        if (Number.isInteger(paletteIndex)) {
+            if (paletteIndex >= 0 && paletteIndex <= 7) {
+                return top[`Grade${paletteIndex}`] || '#ffffff';
+            }
+            if (paletteIndex === 8) return schemeData?.background || '#ffffff';
+            if (paletteIndex === 10) return bottom.Normal || '#ffffff';
+            if (paletteIndex === 11) return bottom.Invalid || '#ffffff';
+            const bottomKeys = ['B285', 'B286', 'B287', 'B288', 'B290', 'B291', 'B300', 'B385', 'B386', 'B388', 'B389', 'B390'];
+            const bottomKey = bottomKeys[paletteIndex - 12];
+            if (bottomKey) return bottom[bottomKey] || '#ffffff';
+        }
+        const gradeIndex = annotator?._getChipGradeIndex?.(chip);
+        if (Number.isInteger(gradeIndex)) return top[`Grade${gradeIndex}`] || '#ffffff';
+        return schemeData?.background || '#ffffff';
     }
 
     _getCoordinateMapSelectionBounds(annotator) {
@@ -11064,18 +11125,18 @@ class WaferMapViewer {
 
         const ctx = imageCanvas.getContext('2d');
         if (!ctx) return false;
+        const schemeData = this._getCoordinateMapSelectionSchemeData();
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-        ctx.fillStyle = '#050505';
+        ctx.fillStyle = schemeData?.background || '#050505';
         ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
         const dx = -bounds.x * scale;
         const dy = -bounds.y * scale;
         state.viewer.transform = { scale, dx, dy };
         ctx.setTransform(scale, 0, 0, scale, dx, dy);
-        ctx.fillStyle = '#ffffff';
-        ctx.strokeStyle = annotator.gridColor || 'rgba(0, 255, 255, 0.45)';
-        ctx.lineWidth = Math.max(0.75, 1 / Math.max(scale, 0.001));
+        const strokeColor = this._colorWithAlpha(schemeData?.text || '#000001', 0.12);
+        const strokeWidth = Math.max(0.25, 0.5 / Math.max(scale, 0.001));
         (annotator.chips || []).forEach((chip) => {
             const rect = chip?.rect;
             if (!rect) return;
@@ -11088,8 +11149,13 @@ class WaferMapViewer {
             const y = Math.min(y0, y1);
             const width = Math.abs(x1 - x0);
             const height = Math.abs(y1 - y0);
+            ctx.fillStyle = this._getCoordinateMapSelectionChipColor(chip, annotator, schemeData);
             ctx.fillRect(x, y, width, height);
-            ctx.strokeRect(x, y, width, height);
+            if (width * scale >= 6 && height * scale >= 6) {
+                ctx.strokeStyle = strokeColor;
+                ctx.lineWidth = strokeWidth;
+                ctx.strokeRect(x, y, width, height);
+            }
         });
         ctx.setTransform(1, 0, 0, 1, 0, 0);
 
@@ -11266,6 +11332,11 @@ class WaferMapViewer {
         annotator.clearLayoutData?.({ resetVisibility: false });
 
         try {
+            if (!this.colorLegends) {
+                await this.loadColorLegends?.().catch((error) => {
+                    console.warn('Coordinate map color legend load failed:', error);
+                });
+            }
             const positionsPromise = annotator.loadPositions(imagePath, { loadAnnotations: false, render: false });
             const processId = this._getLayoutProcessId(imagePath);
             const layoutRowsPromise = processId

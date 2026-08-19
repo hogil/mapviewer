@@ -3074,6 +3074,7 @@ const { createRunner } = require('./e2e_playwright_session');
         window.viewer?.coordinateSelectionMapMode?.listName === 'shot' &&
         window.viewer?.coordinateMapSelectionAnnotator?.selectionMode === 'shot' &&
         !window.viewer?.coordinateMapSelection?.image &&
+        window.viewer?.coordinateMapSelectionViewer?.gridMode === false &&
         window.viewer?.coordinateMapSelectionAnnotator?.showGrid === false &&
         window.viewer?.coordinateMapSelectionAnnotator?.shotBoundaryVisible === true,
       null,
@@ -3089,6 +3090,20 @@ const { createRunner } = require('./e2e_playwright_session');
         shotModePressed: document.getElementById('coordinate-map-select-shot-mode')?.getAttribute('aria-pressed') || '',
         chipModePressed: document.getElementById('coordinate-map-select-chip-mode')?.getAttribute('aria-pressed') || '',
         modeButtons: [...document.querySelectorAll('[data-coordinate-map-select-mode]')].map((button) => button.textContent.trim()),
+        viewerGridMode: window.viewer?.coordinateMapSelectionViewer?.gridMode,
+        selectedColorCopied: window.viewer?.coordinateMapSelectionAnnotator?.selectedColor === window.viewer?.chipAnnotator?.selectedColor,
+        hoverColorCopied: window.viewer?.coordinateMapSelectionAnnotator?.hoverColor === window.viewer?.chipAnnotator?.hoverColor,
+        shotBoundaryColorCopied: window.viewer?.coordinateMapSelectionAnnotator?.shotBoundaryColor === window.viewer?.chipAnnotator?.shotBoundaryColor,
+        boundaryAlphaPixels: (() => {
+          const canvas = document.getElementById('coordinate-map-select-overlay');
+          if (!canvas?.width || !canvas?.height) return 0;
+          const data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+          let count = 0;
+          for (let i = 3; i < data.length; i += 4 * 8) {
+            if (data[i] > 0) count += 1;
+          }
+          return count;
+        })(),
       };
     });
     expect(mapPanelStructure.overlayPointerEvents === 'none' &&
@@ -3096,7 +3111,12 @@ const { createRunner } = require('./e2e_playwright_session');
       mapPanelStructure.panelPosition === 'fixed' &&
       mapPanelStructure.shotModePressed === 'true' &&
       mapPanelStructure.chipModePressed === 'false' &&
-      mapPanelStructure.modeButtons.join('|') === 'Shot 선택|Chip 선택',
+      mapPanelStructure.modeButtons.join('|') === 'Shot 선택|Chip 선택' &&
+      mapPanelStructure.viewerGridMode === false &&
+      mapPanelStructure.selectedColorCopied &&
+      mapPanelStructure.hoverColorCopied &&
+      mapPanelStructure.shotBoundaryColorCopied &&
+      mapPanelStructure.boundaryAlphaPixels > 0,
     `coordinate map panel structure=${JSON.stringify(mapPanelStructure)}`);
     const shotMapPoint = await page.evaluate(() => {
       const v = window.viewer;
@@ -3130,6 +3150,17 @@ const { createRunner } = require('./e2e_playwright_session');
       pressed: document.querySelector('[data-coordinate-list-map="shot"]')?.getAttribute('aria-pressed') || '',
       modalSelected: window.viewer?.coordinateMapSelectionAnnotator?.selectedChips?.size || 0,
       mainSelected: window.viewer?.chipAnnotator?.selectedChips?.size || 0,
+      selectedShotBoundaries: window.viewer?.coordinateMapSelectionAnnotator?._getSelectedShotGroups?.()?.size || 0,
+      selectedAlphaPixels: (() => {
+        const canvas = document.getElementById('coordinate-map-select-overlay');
+        if (!canvas?.width || !canvas?.height) return 0;
+        const data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+        let count = 0;
+        for (let i = 3; i < data.length; i += 4 * 8) {
+          if (data[i] > 0) count += 1;
+        }
+        return count;
+      })(),
       shotRows: [...document.querySelectorAll('#chip-coordinate-select-shot-tbody input[data-coordinate-row]')]
         .map((input) => input.value)
         .filter(Boolean),
@@ -3137,6 +3168,7 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(shotMapSelection.modalVisible && shotMapSelection.activeList === 'shot' &&
       shotMapSelection.mapList === 'shot' && shotMapSelection.pressed === 'true' &&
       shotMapSelection.modalSelected > 0 && shotMapSelection.mainSelected === shotMapSelection.modalSelected &&
+      shotMapSelection.selectedShotBoundaries > 0 && shotMapSelection.selectedAlphaPixels > 0 &&
       shotMapSelection.shotRows.length === 2,
       `shot map selection=${JSON.stringify(shotMapSelection)}`);
     await page.locator('#coordinate-map-select-done').click();
@@ -3146,6 +3178,7 @@ const { createRunner } = require('./e2e_playwright_session');
       () => getComputedStyle(document.getElementById('coordinate-map-select-modal')).display !== 'none' &&
         window.viewer?.coordinateSelectionMapMode?.listName === 'chip' &&
         window.viewer?.coordinateMapSelectionAnnotator?.selectionMode === 'chip' &&
+        window.viewer?.coordinateMapSelectionViewer?.gridMode === false &&
         window.viewer?.coordinateMapSelectionAnnotator?.showGrid === false &&
         window.viewer?.coordinateMapSelectionAnnotator?.shotBoundaryVisible === true &&
         !window.viewer?.coordinateMapSelection?.image,
