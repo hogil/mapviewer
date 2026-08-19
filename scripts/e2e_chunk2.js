@@ -5200,7 +5200,7 @@ const { createRunner } = require('./e2e_playwright_session');
       { timeout: 10000 }
     );
     const uiShotMenuText = await page.locator('#chip-context-menu').innerText();
-    expect(uiShotMenuText.includes('선택 Shot Composite Map 만들기 (2개)'),
+    expect(uiShotMenuText.includes('🎯 선택 Shot Composite Map 만들기 (2개)'),
       `UI shot menu=${uiShotMenuText}`);
     await page.locator('#chip-context-menu #chip-composite-create').click();
     const uiShotRequest = await uiShotRequestPromise;
@@ -5407,7 +5407,7 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(Array.isArray(chipRequestBody.selected_chip_coords) &&
       chipRequestBody.selected_chip_coords.length === 1,
     `chip payload=${JSON.stringify(chipRequestBody)}`);
-    expect(menuText.includes('선택 Chip Composite Map 만들기'), `chip menu=${menuText}`);
+    expect(menuText.includes('🔲 선택 Chip Composite Map 만들기'), `chip menu=${menuText}`);
     expect(chipResult.responseOk && chipResult.positionsChipCount === 1,
       `chip result=${JSON.stringify(chipResult)}`);
     expect(chipResult.pixels?.responseOk &&

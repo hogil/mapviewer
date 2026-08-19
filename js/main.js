@@ -34953,6 +34953,7 @@ class WaferMapViewer {
                 : [];
             const selectedShotCount = selectedShotGroups.length;
             const selectedUnit = selectedMode === 'shot' ? 'Shot' : 'Chip';
+            const selectedUnitIcon = selectedMode === 'shot' ? '🎯' : '🔲';
             const selectedUnitCount = selectedMode === 'shot' && selectedShotCount > 0
                 ? selectedShotCount
                 : selectedChips.length;
@@ -34965,7 +34966,7 @@ class WaferMapViewer {
                 color: #fff;
                 font-size: 14px;
             `;
-            compositeItem.textContent = `선택 ${selectedUnit} Composite Map 만들기 (${selectedUnitCount}개)`;
+            compositeItem.textContent = `${selectedUnitIcon} 선택 ${selectedUnit} Composite Map 만들기 (${selectedUnitCount}개)`;
             compositeItem.title = '현재 선택 영역만 Composite Map으로 만듭니다.';
             compositeItem.onclick = () => {
                 const selectedSnapshot = selectedChips.map((chip) => ({
@@ -34993,7 +34994,7 @@ class WaferMapViewer {
                     color: #fff;
                     font-size: 14px;
                 `;
-                chipCompositeItem.textContent = `선택 Chip Composite Map 만들기 (${selectedChips.length}개)`;
+                chipCompositeItem.textContent = `🔲 선택 Chip Composite Map 만들기 (${selectedChips.length}개)`;
                 chipCompositeItem.title = '현재 선택된 Chip들을 하나의 Chip 기준 Composite Map으로 만듭니다.';
                 chipCompositeItem.onclick = () => {
                     const selectedSnapshot = selectedChips.map((chip) => ({
