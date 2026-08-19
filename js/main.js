@@ -16023,28 +16023,21 @@ class WaferMapViewer {
     _configureGridShotCoordinateContextItem(contextMenu) {
         const item = this._ensureGridContextMenuItem(contextMenu, 'grid-shot-coordinate-select-open');
         if (!item) return;
-        if (this.gridMode !== true || this.isCompositeMode) {
-            item.style.setProperty('display', 'none', 'important');
-            item.onclick = null;
-            return;
+        item.style.setProperty('display', 'none', 'important');
+        item.onclick = null;
+    }
+
+    async _openGridContextCoordinateSelection() {
+        this.hideContextMenu();
+        if (!this.gridShotBoundaryVisible) {
+            this.toggleGridShotBoundaryOverlay(true);
         }
-        item.style.setProperty('display', 'block', 'important');
-        item.textContent = 'Coord 선택';
-        item.title = 'Grid 화면을 유지한 채 Shot 경계와 좌표 선택 패널을 엽니다.';
-        item.onclick = async (clickEvent) => {
-            clickEvent?.preventDefault?.();
-            clickEvent?.stopPropagation?.();
-            this.hideContextMenu();
-            if (!this.gridShotBoundaryVisible) {
-                this.toggleGridShotBoundaryOverlay(true);
-            }
-            await this.openGridCoordinateSelection({ openModal: true });
-            if (this.gridMode === true && this.gridShotBoundaryVisible !== true) {
-                this.toggleGridShotBoundaryOverlay(true);
-            } else {
-                this._scheduleGridShotBoundaryOverlayRender?.(0);
-            }
-        };
+        await this.openGridCoordinateSelection({ openModal: true });
+        if (this.gridMode === true && this.gridShotBoundaryVisible !== true) {
+            this.toggleGridShotBoundaryOverlay(true);
+        } else {
+            this._scheduleGridShotBoundaryOverlayRender?.(0);
+        }
     }
 
     _setGridDirectSelectionMode(mode) {
@@ -16055,11 +16048,7 @@ class WaferMapViewer {
         });
         this.gridDirectSelectionMode = mode;
         this.gridDirectSelectionSourceSet?.clear?.();
-        if (!this.gridShotBoundaryVisible) {
-            this.toggleGridShotBoundaryOverlay(true);
-        } else {
-            this._scheduleGridShotBoundaryOverlayRender?.(0);
-        }
+        this._scheduleGridCoordinateSelectionOverlayRender?.(0);
         const label = mode === 'shot' ? 'Shot' : 'Chip';
         this.showToast?.(`${label} 직접 선택 모드`, 1600);
         return true;
@@ -16134,6 +16123,7 @@ class WaferMapViewer {
 
         parentItem.style.setProperty('display', 'block', 'important');
         [
+            ['grid-shot-coordinate-select-open', 'Coord 선택', 'Grid 화면을 유지한 채 Shot 경계와 좌표 선택 패널을 엽니다.', () => this._openGridContextCoordinateSelection()],
             ['grid-direct-shot-select', 'Shot 선택', 'Coord와 무관하게 각 wafer thumbnail에서 Shot을 직접 선택합니다.', () => this._setGridDirectSelectionMode('shot')],
             ['grid-direct-chip-select', 'Chip 선택', 'Coord와 무관하게 각 wafer thumbnail에서 Chip을 직접 선택합니다.', () => this._setGridDirectSelectionMode('chip')],
             ['grid-direct-wafer-select', 'Wafer 선택', '우클릭한 wafer 하나만 선택합니다.', () => this._selectGridContextTargetWafer()],
@@ -16147,6 +16137,9 @@ class WaferMapViewer {
                 submenu.appendChild(item);
             }
             if (!item) return;
+            if (item.parentElement !== submenu) {
+                submenu.appendChild(item);
+            }
             item.style.setProperty('display', 'block', 'important');
             item.textContent = text;
             item.title = title;
@@ -16156,6 +16149,24 @@ class WaferMapViewer {
                 this.hideContextMenu();
                 handler();
             };
+        });
+    }
+
+    _orderGridContextSelectionCompositeItems(contextMenu) {
+        if (!contextMenu) return;
+        const anchor = document.getElementById('context-mea-create') ||
+            document.getElementById('context-composite-return') ||
+            contextMenu.firstChild;
+        [
+            'grid-direct-selection-menu',
+            'grid-selected-region-composite-create',
+            'grid-shot-local-square-weighted-create',
+            'grid-chip-composite-create',
+        ].forEach((id) => {
+            const item = document.getElementById(id);
+            if (item && item.parentElement === contextMenu) {
+                contextMenu.insertBefore(item, anchor);
+            }
         });
     }
 
@@ -16198,6 +16209,7 @@ class WaferMapViewer {
                 contextOptions: { mode: 'chip', includeAllWhenEmpty: true },
             }
         );
+        this._orderGridContextSelectionCompositeItems(contextMenu);
     }
 
     showContextMenu(event, clickedIdx) {
@@ -33620,14 +33632,7 @@ class WaferMapViewer {
             : Boolean(visible);
         this._syncGridShotBoundaryButtonUI();
         if (!this.gridShotBoundaryVisible) {
-            const hadDirectSelection = !!this.gridDirectSelectionMode ||
-                (this.gridDirectSelectionSourceSet?.size || 0) > 0;
-            this.gridDirectSelectionMode = null;
-            this.gridDirectSelectionSourceSet?.clear?.();
             this._clearGridShotBoundaryOverlays();
-            if (hadDirectSelection && !this._getGridCoordinateSelectionSourceSet?.().size) {
-                this._clearGridCoordinateSelectionOverlays();
-            }
             return;
         }
         this._scheduleGridShotBoundaryOverlayRender(0);
@@ -33661,7 +33666,7 @@ class WaferMapViewer {
         const thumbBox = event.target?.closest?.('.grid-thumb-imgbox');
         if (!thumbBox || !wrap.contains(thumbBox)) return false;
         if (this.gridDirectSelectionMode === 'shot' || this.gridDirectSelectionMode === 'chip') {
-            return this.gridShotBoundaryVisible === true;
+            return true;
         }
         if (this.isCoordinateSelectionOpen !== true) return false;
         if (this.coordinateSelectionMapMode?.listName === 'chip') return true;

@@ -4517,7 +4517,7 @@ const { createRunner } = require('./e2e_playwright_session');
     await page.waitForFunction(
       () => {
         const menu = document.getElementById('grid-context-menu');
-        const item = document.getElementById('grid-shot-coordinate-select-open');
+        const item = document.getElementById('grid-direct-selection-menu');
         const modal = document.getElementById('chip-coordinate-select-modal');
         return menu && item && modal &&
           getComputedStyle(menu).display !== 'none' &&
@@ -4529,14 +4529,15 @@ const { createRunner } = require('./e2e_playwright_session');
     );
     const gridContextShotSelectNoCoordBefore = await page.evaluate(() => ({
       text: document.getElementById('grid-shot-coordinate-select-open')?.textContent?.trim() || '',
-      visible: getComputedStyle(document.getElementById('grid-shot-coordinate-select-open')).display !== 'none',
+      coordInSelectionSubmenu: document.getElementById('grid-shot-coordinate-select-open')?.parentElement?.id === 'grid-direct-selection-submenu',
+      coordTopLevelCount: document.querySelectorAll('#grid-context-menu > #grid-shot-coordinate-select-open').length,
       selectionMenuText: document.querySelector('#grid-direct-selection-menu .grid-direct-selection-label')?.textContent?.trim() || '',
       selectionMenuVisible: getComputedStyle(document.getElementById('grid-direct-selection-menu')).display !== 'none',
       selectionSubmenuHidden: getComputedStyle(document.getElementById('grid-direct-selection-submenu')).display === 'none',
       directShotText: document.getElementById('grid-direct-shot-select')?.textContent?.trim() || '',
       directChipText: document.getElementById('grid-direct-chip-select')?.textContent?.trim() || '',
       directWaferText: document.getElementById('grid-direct-wafer-select')?.textContent?.trim() || '',
-      directItemsInSubmenu: ['grid-direct-shot-select', 'grid-direct-chip-select', 'grid-direct-wafer-select']
+      directItemsInSubmenu: ['grid-shot-coordinate-select-open', 'grid-direct-shot-select', 'grid-direct-chip-select', 'grid-direct-wafer-select']
         .every((id) => document.getElementById(id)?.parentElement?.id === 'grid-direct-selection-submenu'),
       directTopLevelCount: [...document.querySelectorAll('#grid-context-menu > #grid-direct-shot-select, #grid-context-menu > #grid-direct-chip-select, #grid-context-menu > #grid-direct-wafer-select')].length,
       shotCompositeText: document.getElementById('grid-selected-region-composite-create')?.textContent?.trim() || '',
@@ -4545,6 +4546,14 @@ const { createRunner } = require('./e2e_playwright_session');
       shotWtwVisible: getComputedStyle(document.getElementById('grid-shot-local-square-weighted-create')).display !== 'none',
       chipCompositeText: document.getElementById('grid-chip-composite-create')?.textContent?.trim() || '',
       chipCompositeVisible: getComputedStyle(document.getElementById('grid-chip-composite-create')).display !== 'none',
+      actionOrder: [...document.querySelectorAll('#grid-context-menu > .context-menu-item')]
+        .map((item) => item.id)
+        .filter((id) => [
+          'grid-direct-selection-menu',
+          'grid-selected-region-composite-create',
+          'grid-shot-local-square-weighted-create',
+          'grid-chip-composite-create',
+        ].includes(id)),
       modalHidden: getComputedStyle(document.getElementById('chip-coordinate-select-modal')).display === 'none',
       gridMode: window.viewer?.gridMode === true,
       viewMode: window.viewer?.viewMode || null,
@@ -4561,7 +4570,7 @@ const { createRunner } = require('./e2e_playwright_session');
     await page.waitForFunction(
       () => window.viewer?.gridMode === true &&
         window.viewer?.gridDirectSelectionMode === 'shot' &&
-        window.viewer?.gridShotBoundaryVisible === true &&
+        window.viewer?.gridShotBoundaryVisible === false &&
         getComputedStyle(document.getElementById('chip-coordinate-select-modal')).display === 'none',
       null,
       { timeout: 30000 }
@@ -4597,6 +4606,10 @@ const { createRunner } = require('./e2e_playwright_session');
       (chipCount) => window.viewer?.chipAnnotator?.selectionMode === 'shot' &&
         window.viewer.chipAnnotator.selectedChips?.size === chipCount &&
         window.viewer?.gridDirectSelectionMode === 'shot' &&
+        window.viewer?.gridShotBoundaryVisible === false &&
+        Array.from(document.querySelectorAll('.grid-coordinate-selection-overlay'))
+          .some((canvas) => canvas.dataset.coordinateOverlayRendered === 'true' &&
+            Number(canvas.dataset.coordinateSelectedChipCount || '0') === chipCount) &&
         getComputedStyle(document.getElementById('chip-coordinate-select-modal')).display === 'none',
       gridDirectShotPoint.chipCount,
       { timeout: 30000 }
@@ -4650,7 +4663,7 @@ const { createRunner } = require('./e2e_playwright_session');
     await page.waitForFunction(
       () => window.viewer?.gridMode === true &&
         window.viewer?.gridDirectSelectionMode === 'chip' &&
-        window.viewer?.gridShotBoundaryVisible === true &&
+        window.viewer?.gridShotBoundaryVisible === false &&
         getComputedStyle(document.getElementById('chip-coordinate-select-modal')).display === 'none',
       null,
       { timeout: 30000 }
@@ -4659,6 +4672,7 @@ const { createRunner } = require('./e2e_playwright_session');
     await page.waitForFunction(
       () => window.viewer?.chipAnnotator?.selectionMode === 'chip' &&
         window.viewer.chipAnnotator.selectedChips?.size === 1 &&
+        window.viewer?.gridShotBoundaryVisible === false &&
         Array.from(document.querySelectorAll('.grid-coordinate-selection-overlay'))
           .some((canvas) => canvas.dataset.coordinateOverlayRendered === 'true' &&
             Number(canvas.dataset.coordinateSelectedChipCount || '0') === 1),
@@ -4683,7 +4697,13 @@ const { createRunner } = require('./e2e_playwright_session');
     await page.locator('#image-grid .grid-thumb-wrap').nth(target.index).click({ button: 'right' });
     await page.waitForFunction(
       () => getComputedStyle(document.getElementById('grid-context-menu')).display !== 'none' &&
-        getComputedStyle(document.getElementById('grid-shot-coordinate-select-open')).display !== 'none',
+        getComputedStyle(document.getElementById('grid-direct-selection-menu')).display !== 'none',
+      null,
+      { timeout: 10000 }
+    );
+    await page.locator('#grid-direct-selection-menu').hover();
+    await page.waitForFunction(
+      () => getComputedStyle(document.getElementById('grid-direct-selection-submenu')).display !== 'none',
       null,
       { timeout: 10000 }
     );
@@ -4711,7 +4731,8 @@ const { createRunner } = require('./e2e_playwright_session');
       menuHidden: getComputedStyle(document.getElementById('grid-context-menu')).display === 'none',
     }));
     expect(gridContextShotSelectNoCoordBefore.text === 'Coord 선택' &&
-      gridContextShotSelectNoCoordBefore.visible &&
+      gridContextShotSelectNoCoordBefore.coordInSelectionSubmenu &&
+      gridContextShotSelectNoCoordBefore.coordTopLevelCount === 0 &&
       gridContextShotSelectNoCoordBefore.selectionMenuText === '선택 ▸' &&
       gridContextShotSelectNoCoordBefore.selectionMenuVisible &&
       gridContextShotSelectNoCoordBefore.selectionSubmenuHidden &&
@@ -4726,6 +4747,8 @@ const { createRunner } = require('./e2e_playwright_session');
       gridContextShotSelectNoCoordBefore.shotWtwVisible &&
       gridContextShotSelectNoCoordBefore.chipCompositeText === '🔲 Chip Composite' &&
       gridContextShotSelectNoCoordBefore.chipCompositeVisible &&
+      gridContextShotSelectNoCoordBefore.actionOrder.join('|') ===
+        'grid-direct-selection-menu|grid-selected-region-composite-create|grid-shot-local-square-weighted-create|grid-chip-composite-create' &&
       gridContextShotSelectNoCoordBefore.modalHidden &&
       gridContextShotSelectNoCoordAfter.modalVisible &&
       gridContextShotSelectNoCoordAfter.gridMode &&
