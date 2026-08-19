@@ -16105,7 +16105,7 @@ class WaferMapViewer {
         const selectionMenu = this._ensureGridDirectSelectionSubmenu(contextMenu);
         if (!selectionMenu) return;
         const { parentItem, submenu, label } = selectionMenu;
-        label.textContent = '선택 ▸';
+        label.textContent = 'Coord/Wafer/Shot/Chip 선택 ▸';
         parentItem.title = 'Grid wafer, Shot, Chip 선택 방식을 고릅니다.';
         parentItem.onmouseenter = () => this._openGridDirectSelectionSubmenu();
         parentItem.onpointerenter = () => this._openGridDirectSelectionSubmenu();
@@ -16154,9 +16154,10 @@ class WaferMapViewer {
 
     _orderGridContextSelectionCompositeItems(contextMenu) {
         if (!contextMenu) return;
-        const anchor = document.getElementById('context-mea-create') ||
-            document.getElementById('context-composite-return') ||
-            contextMenu.firstChild;
+        let insertAfter = document.getElementById('context-set-ref-map');
+        if (insertAfter?.parentElement !== contextMenu) {
+            insertAfter = document.getElementById('context-mea-create') || null;
+        }
         [
             'grid-direct-selection-menu',
             'grid-selected-region-composite-create',
@@ -16165,7 +16166,8 @@ class WaferMapViewer {
         ].forEach((id) => {
             const item = document.getElementById(id);
             if (item && item.parentElement === contextMenu) {
-                contextMenu.insertBefore(item, anchor);
+                contextMenu.insertBefore(item, insertAfter?.nextSibling || null);
+                insertAfter = item;
             }
         });
     }
