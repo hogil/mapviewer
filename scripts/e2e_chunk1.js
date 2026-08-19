@@ -3084,6 +3084,8 @@ const { createRunner } = require('./e2e_playwright_session');
     );
     const ctxComposite = await visible('#context-mc-create');
     expect(ctxComposite, 'ctx composite hidden');
+    const ctxCompositeText = await page.locator('#context-mc-create').innerText();
+    expect(ctxCompositeText.includes('Wafer Composite'), `ctx composite label=${ctxCompositeText}`);
     const ctxMeasure = await visible('#context-mea-create');
     expect(ctxMeasure, 'ctx measure hidden');
     append('[CM] initial context visible\n');

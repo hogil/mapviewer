@@ -4849,7 +4849,7 @@ const { createRunner } = require('./e2e_playwright_session');
     });
     expect(gridContextShotComposite.exists &&
       gridContextShotComposite.visible &&
-      gridContextShotComposite.text === 'Shot Composite' &&
+      gridContextShotComposite.text === '🎯 Shot Composite' &&
       gridContextShotComposite.captured?.selectionMode === 'shot' &&
       gridContextShotComposite.captured?.selectedChipCount === gridCoordShot.chipCount &&
       gridContextShotComposite.captured?.sourceCount === 2 &&
@@ -4858,9 +4858,9 @@ const { createRunner } = require('./e2e_playwright_session');
       gridContextShotComposite.captured?.firstShotHasSlots === true &&
       gridContextShotComposite.captured?.shotLocalSquareWeighted === false &&
       gridContextShotComposite.specialVisible &&
-      gridContextShotComposite.specialText === 'Shot Composite W to W' &&
+      gridContextShotComposite.specialText === '🧭 Shot Composite W to W' &&
       gridContextShotComposite.chipVisible &&
-      gridContextShotComposite.chipText === 'Chip Composite' &&
+      gridContextShotComposite.chipText === '🔲 Chip Composite' &&
       gridContextShotComposite.selectedIdxs.join(',') === gridContextBefore.selectedIdxs.join(',') &&
       gridContextShotComposite.selectedPaths.join('|') === gridContextBefore.selectedPaths.join('|') &&
       gridContextShotComposite.selectedWraps.join(',') === gridContextBefore.selectedWraps.join(',') &&
@@ -4908,7 +4908,7 @@ const { createRunner } = require('./e2e_playwright_session');
       };
     });
     expect(gridContextShotLocalWeighted.exists &&
-      gridContextShotLocalWeighted.text === 'Shot Composite W to W' &&
+      gridContextShotLocalWeighted.text === '🧭 Shot Composite W to W' &&
       gridContextShotLocalWeighted.captured?.selectionMode === 'shot' &&
       gridContextShotLocalWeighted.captured?.shotLocalSquareWeighted === true &&
       gridContextShotLocalWeighted.captured?.selectedChipCount === gridCoordShot.chipCount &&

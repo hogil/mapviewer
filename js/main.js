@@ -15293,7 +15293,7 @@ class WaferMapViewer {
             this._ensureGridContextMenuItem(contextMenu, 'grid-selected-region-composite-create'),
             shotContext,
             {
-                text: 'Shot Composite',
+                text: '🎯 Shot Composite',
                 contextOptions: { mode: 'shot', includeAllWhenEmpty: true },
             }
         );
@@ -15301,7 +15301,7 @@ class WaferMapViewer {
             this._ensureGridContextMenuItem(contextMenu, 'grid-shot-local-square-weighted-create'),
             shotContext,
             {
-                text: 'Shot Composite W to W',
+                text: '🧭 Shot Composite W to W',
                 title: '선택 wafer별 Shot을 shot-local grid로 누적해 square weighted average 결과를 만듭니다.',
                 contextOptions: { mode: 'shot', includeAllWhenEmpty: true },
                 shotLocalSquareWeighted: true,
@@ -15316,7 +15316,7 @@ class WaferMapViewer {
             this._ensureGridContextMenuItem(contextMenu, 'grid-chip-composite-create'),
             chipContext,
             {
-                text: 'Chip Composite',
+                text: '🔲 Chip Composite',
                 contextOptions: { mode: 'chip', includeAllWhenEmpty: true },
             }
         );
