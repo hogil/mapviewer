@@ -4688,13 +4688,12 @@ const { createRunner } = require('./e2e_playwright_session');
       const data = await v._getGridShotBoundaryData?.(imagePath);
       const groups = data?.groups || [];
       const group = groups.find((candidate) =>
-        Number(candidate.shotX) === Number(shotX) &&
-        Number(candidate.shotY) === Number(shotY) &&
+        (Number(candidate.shotX) !== Number(shotX) || Number(candidate.shotY) !== Number(shotY)) &&
         Number(candidate.chipCount || 0) > 0
       );
       const thumbBox = wrap.querySelector('.grid-thumb-imgbox');
       const rect = thumbBox?.getBoundingClientRect?.();
-      if (!data?.canvasWidth || !data?.canvasHeight || !group || !rect) return { ok: false, reason: 'missing same shot' };
+      if (!data?.canvasWidth || !data?.canvasHeight || !group || !rect) return { ok: false, reason: 'missing different shot' };
       const scale = Math.min(rect.width / data.canvasWidth, rect.height / data.canvasHeight);
       const offsetX = (rect.width - data.canvasWidth * scale) / 2;
       const offsetY = (rect.height - data.canvasHeight * scale) / 2;
@@ -4703,6 +4702,8 @@ const { createRunner } = require('./e2e_playwright_session');
         x: rect.left + offsetX + (group.minX + group.width / 2) * scale,
         y: rect.top + offsetY + (group.minY + group.height / 2) * scale,
         chipCount: group.chipCount,
+        shotX: Number(group.shotX),
+        shotY: Number(group.shotY),
       };
     }, { imagePath: gridCoordSecond.imagePath, shotX: gridDirectShotPoint.shotX, shotY: gridDirectShotPoint.shotY });
     expect(gridDirectSecondShotPoint.ok, `grid direct second shot click point=${JSON.stringify(gridDirectSecondShotPoint)}`);
@@ -4721,22 +4722,41 @@ const { createRunner } = require('./e2e_playwright_session');
         Array.from(document.querySelectorAll('.grid-coordinate-selection-overlay'))
           .some((canvas) => canvas.dataset.coordinateOverlayRendered === 'true' &&
             Number(canvas.dataset.coordinateSelectedChipCount || '0') === chipCount),
-      { chipCount: gridDirectShotPoint.chipCount, firstIndex: target.index, secondIndex: gridCoordSecond.index },
+      { chipCount: gridDirectSecondShotPoint.chipCount, firstIndex: target.index, secondIndex: gridCoordSecond.index },
       { timeout: 30000 }
     );
     const gridDirectShotCtrlSecondAfter = await page.evaluate(() => ({
       mode: window.viewer?.gridDirectSelectionMode || '',
       directSourceCount: window.viewer?.gridDirectSelectionSourceSet?.size || 0,
       selectedChips: window.viewer?.chipAnnotator?.selectedChips?.size || 0,
+      directSelections: Array.from(window.viewer?.gridDirectSelectionBySource || new Map())
+        .map(([sourceKey, state]) => ({
+          sourceKey,
+          count: Array.isArray(state?.coords) ? state.coords.length : 0,
+          keys: (Array.isArray(state?.coords) ? state.coords : [])
+            .map((coord) => `${Number(coord.x_abs ?? coord.xAbs)}:${Number(coord.y_abs ?? coord.yAbs)}`)
+            .sort(),
+        }))
+        .sort((a, b) => a.sourceKey.localeCompare(b.sourceKey)),
       selectedIdxs: [...(window.viewer?.gridSelectedIdxs || [])].sort((a, b) => a - b),
       selectedWraps: Array.from(document.querySelectorAll('#image-grid .grid-thumb-wrap.selected'))
         .map((wrap) => Number(wrap.dataset.index))
         .sort((a, b) => a - b),
       modalHidden: getComputedStyle(document.getElementById('chip-coordinate-select-modal')).display === 'none',
     }));
+    const gridDirectShotTargetKey = String(target.imagePath || '').replace(/\\/g, '/').toLowerCase();
+    const gridDirectShotSecondKey = String(gridCoordSecond.imagePath || '').replace(/\\/g, '/').toLowerCase();
     expect(gridDirectShotCtrlSecondAfter.mode === 'shot' &&
       gridDirectShotCtrlSecondAfter.directSourceCount === 2 &&
-      gridDirectShotCtrlSecondAfter.selectedChips === gridDirectShotPoint.chipCount &&
+      gridDirectShotCtrlSecondAfter.selectedChips === gridDirectSecondShotPoint.chipCount &&
+      gridDirectShotCtrlSecondAfter.directSelections.length === 2 &&
+      gridDirectShotCtrlSecondAfter.directSelections.some((entry) =>
+        entry.sourceKey === gridDirectShotTargetKey &&
+        entry.count === gridDirectShotPoint.chipCount) &&
+      gridDirectShotCtrlSecondAfter.directSelections.some((entry) =>
+        entry.sourceKey === gridDirectShotSecondKey &&
+        entry.count === gridDirectSecondShotPoint.chipCount) &&
+      gridDirectShotCtrlSecondAfter.directSelections[0].keys.join('|') !== gridDirectShotCtrlSecondAfter.directSelections[1].keys.join('|') &&
       gridDirectShotCtrlSecondAfter.selectedIdxs.includes(target.index) &&
       gridDirectShotCtrlSecondAfter.selectedIdxs.includes(gridCoordSecond.index) &&
       gridDirectShotCtrlSecondAfter.selectedWraps.includes(target.index) &&
@@ -4828,12 +4848,12 @@ const { createRunner } = require('./e2e_playwright_session');
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       const data = await v._getGridShotBoundaryData?.(imagePath);
       const chip = (data?.chips || []).find((candidate) =>
-        Number(candidate.xAbs) === Number(xAbs) &&
-        Number(candidate.yAbs) === Number(yAbs)
+        Number(candidate.xAbs) !== Number(xAbs) ||
+        Number(candidate.yAbs) !== Number(yAbs)
       );
       const thumbBox = wrap.querySelector('.grid-thumb-imgbox');
       const rect = thumbBox?.getBoundingClientRect?.();
-      if (!data?.canvasWidth || !data?.canvasHeight || !chip || !rect) return { ok: false, reason: 'missing same chip' };
+      if (!data?.canvasWidth || !data?.canvasHeight || !chip || !rect) return { ok: false, reason: 'missing different chip' };
       const scale = Math.min(rect.width / data.canvasWidth, rect.height / data.canvasHeight);
       const offsetX = (rect.width - data.canvasWidth * scale) / 2;
       const offsetY = (rect.height - data.canvasHeight * scale) / 2;
@@ -4841,6 +4861,8 @@ const { createRunner } = require('./e2e_playwright_session');
         ok: true,
         x: rect.left + offsetX + (chip.minX + chip.width / 2) * scale,
         y: rect.top + offsetY + (chip.minY + chip.height / 2) * scale,
+        xAbs: Number(chip.xAbs),
+        yAbs: Number(chip.yAbs),
       };
     }, { imagePath: gridCoordSecond.imagePath, ...gridDirectChipSelectedCoord });
     expect(gridDirectSecondChipPoint.ok, `grid direct second chip click point=${JSON.stringify(gridDirectSecondChipPoint)}`);
@@ -4866,15 +4888,34 @@ const { createRunner } = require('./e2e_playwright_session');
       mode: window.viewer?.gridDirectSelectionMode || '',
       directSourceCount: window.viewer?.gridDirectSelectionSourceSet?.size || 0,
       selectedChips: window.viewer?.chipAnnotator?.selectedChips?.size || 0,
+      directSelections: Array.from(window.viewer?.gridDirectSelectionBySource || new Map())
+        .map(([sourceKey, state]) => ({
+          sourceKey,
+          count: Array.isArray(state?.coords) ? state.coords.length : 0,
+          keys: (Array.isArray(state?.coords) ? state.coords : [])
+            .map((coord) => `${Number(coord.x_abs ?? coord.xAbs)}:${Number(coord.y_abs ?? coord.yAbs)}`)
+            .sort(),
+        }))
+        .sort((a, b) => a.sourceKey.localeCompare(b.sourceKey)),
       selectedIdxs: [...(window.viewer?.gridSelectedIdxs || [])].sort((a, b) => a - b),
       selectedWraps: Array.from(document.querySelectorAll('#image-grid .grid-thumb-wrap.selected'))
         .map((wrap) => Number(wrap.dataset.index))
         .sort((a, b) => a - b),
       modalHidden: getComputedStyle(document.getElementById('chip-coordinate-select-modal')).display === 'none',
     }));
+    const gridDirectChipTargetKey = String(target.imagePath || '').replace(/\\/g, '/').toLowerCase();
+    const gridDirectChipSecondKey = String(gridCoordSecond.imagePath || '').replace(/\\/g, '/').toLowerCase();
     expect(gridDirectChipCtrlSecondAfter.mode === 'chip' &&
       gridDirectChipCtrlSecondAfter.directSourceCount === 2 &&
       gridDirectChipCtrlSecondAfter.selectedChips === 1 &&
+      gridDirectChipCtrlSecondAfter.directSelections.length === 2 &&
+      gridDirectChipCtrlSecondAfter.directSelections.some((entry) =>
+        entry.sourceKey === gridDirectChipTargetKey &&
+        entry.keys.join('|') === `${gridDirectChipSelectedCoord.xAbs}:${gridDirectChipSelectedCoord.yAbs}`) &&
+      gridDirectChipCtrlSecondAfter.directSelections.some((entry) =>
+        entry.sourceKey === gridDirectChipSecondKey &&
+        entry.keys.join('|') === `${gridDirectSecondChipPoint.xAbs}:${gridDirectSecondChipPoint.yAbs}`) &&
+      gridDirectChipCtrlSecondAfter.directSelections[0].keys.join('|') !== gridDirectChipCtrlSecondAfter.directSelections[1].keys.join('|') &&
       gridDirectChipCtrlSecondAfter.selectedIdxs.includes(target.index) &&
       gridDirectChipCtrlSecondAfter.selectedIdxs.includes(gridCoordSecond.index) &&
       gridDirectChipCtrlSecondAfter.selectedWraps.includes(target.index) &&
