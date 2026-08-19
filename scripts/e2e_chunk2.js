@@ -3056,84 +3056,137 @@ const { createRunner } = require('./e2e_playwright_session');
 
     await openCoordinateModal();
     const mapButtonState = await page.evaluate(() => {
-      const v = window.viewer;
-      const annotator = v?.chipAnnotator;
       const shotMap = document.querySelector('[data-coordinate-list-map="shot"]');
       const chipMap = document.querySelector('[data-coordinate-list-map="chip"]');
       const chipIdMap = document.querySelector('[data-coordinate-list-map="chipId"]');
-      const firstGroup = Array.from(annotator?.shotBoundaryGroups?.values?.() || [])[0];
-      const firstLayout = annotator?.getLayoutRowForChip?.(firstGroup?.chips?.[0]);
-      shotMap?.click();
-      const shotActive = {
-        exists: !!shotMap,
-        activeList: v?.coordinateSelectionActiveList || '',
-        mapList: v?.coordinateSelectionMapMode?.listName || '',
-        selectionMode: annotator?.selectionMode || '',
-        shotBoundaryVisible: annotator?.shotBoundaryVisible === true,
-        pressed: shotMap?.getAttribute('aria-pressed') || '',
-      };
-      if (firstLayout) {
-        annotator?.selectByCoordinateRows?.('shot-grid', [
-          { x: Number(firstLayout.shot_x_pos), y: Number(firstLayout.shot_y_pos) },
-        ], { operation: 'replace' });
-        v?.onManualChipSelection?.();
-      }
-      const shotRowsAfterMapSelection = [...document.querySelectorAll('#chip-coordinate-select-shot-tbody input[data-coordinate-row]')]
-        .map((input) => input.value)
-        .filter(Boolean);
-      annotator?.clearSelection?.(false);
-      v?.handleChipSelectionCleared?.();
-      chipMap?.click();
-      const firstChip = annotator?.chips?.find((chip) => annotator.isChipSelectable?.(chip) !== false);
-      if (firstChip) {
-        annotator?.selectByCoordinateRows?.('chip-grid', [
-          { x: Number(firstChip.x_abs), y: Number(firstChip.y_abs) },
-        ], { operation: 'replace' });
-        v?.onManualChipSelection?.();
-      }
-      const chipActive = {
-        exists: !!chipMap,
-        activeList: v?.coordinateSelectionActiveList || '',
-        mapList: v?.coordinateSelectionMapMode?.listName || '',
-        selectionMode: annotator?.selectionMode || '',
-        pressed: chipMap?.getAttribute('aria-pressed') || '',
-        chipRows: [...document.querySelectorAll('#chip-coordinate-select-chip-tbody input[data-coordinate-row]')]
-          .map((input) => input.value)
-          .filter(Boolean),
-      };
-      annotator?.clearSelection?.(false);
-      v?.handleChipSelectionCleared?.();
-      v?._stopCoordinateSelectionMapMode?.();
-      if (annotator) {
-        annotator.selectionMode = 'chip';
-        annotator.setShotBoundaryVisible?.(false);
-      }
       return {
-        shotActive,
-        shotRowsAfterMapSelection,
-        chipActive,
+        shotExists: !!shotMap,
+        chipExists: !!chipMap,
         chipIdMapExists: !!chipIdMap,
-        selectedAfterCleanup: annotator?.selectedChips?.size || 0,
-        mapAfterCleanup: v?.coordinateSelectionMapMode?.listName || '',
       };
     });
-    expect(mapButtonState.shotActive.exists &&
-      mapButtonState.shotActive.activeList === 'shot' &&
-      mapButtonState.shotActive.mapList === 'shot' &&
-      mapButtonState.shotActive.selectionMode === 'shot' &&
-      mapButtonState.shotActive.shotBoundaryVisible &&
-      mapButtonState.shotActive.pressed === 'true' &&
-      mapButtonState.shotRowsAfterMapSelection.length === 2 &&
-      mapButtonState.chipActive.exists &&
-      mapButtonState.chipActive.activeList === 'chip' &&
-      mapButtonState.chipActive.mapList === 'chip' &&
-      mapButtonState.chipActive.selectionMode === 'chip' &&
-      mapButtonState.chipActive.pressed === 'true' &&
-      mapButtonState.chipActive.chipRows.length === 2 &&
-      mapButtonState.chipIdMapExists === false &&
-      mapButtonState.selectedAfterCleanup === 0 &&
-      mapButtonState.mapAfterCleanup === '',
-      `coordinate map buttons=${JSON.stringify(mapButtonState)}`);
+    expect(mapButtonState.shotExists && mapButtonState.chipExists && mapButtonState.chipIdMapExists === false,
+      `coordinate map buttons exist=${JSON.stringify(mapButtonState)}`);
+
+    await page.locator('[data-coordinate-list-map="shot"]').click();
+    await page.waitForFunction(
+      () => getComputedStyle(document.getElementById('coordinate-map-select-modal')).display !== 'none' &&
+        window.viewer?.coordinateSelectionMapMode?.listName === 'shot' &&
+        window.viewer?.coordinateMapSelectionAnnotator?.selectionMode === 'shot' &&
+        window.viewer?.coordinateMapSelectionAnnotator?.shotBoundaryVisible === true,
+      null,
+      { timeout: 10000 }
+    );
+    const shotMapPoint = await page.evaluate(() => {
+      const v = window.viewer;
+      const annotator = v?.coordinateMapSelectionAnnotator;
+      const canvas = document.getElementById('coordinate-map-select-overlay');
+      const group = Array.from(annotator?.shotBoundaryGroups?.values?.() || [])[0];
+      const chip = group?.chips?.find((candidate) => annotator.isChipSelectable?.(candidate) !== false) || group?.chips?.[0];
+      const rect = chip?.rect;
+      const transform = v?.coordinateMapSelectionViewer?.transform;
+      const canvasRect = canvas?.getBoundingClientRect();
+      if (!rect || !transform || !canvasRect) return null;
+      return {
+        x: canvasRect.left + ((Number(rect.x0) + Number(rect.x1)) / 2) * transform.scale + transform.dx,
+        y: canvasRect.top + ((Number(rect.y0) + Number(rect.y1)) / 2) * transform.scale + transform.dy,
+      };
+    });
+    expect(!!shotMapPoint, `shot map point=${JSON.stringify(shotMapPoint)}`);
+    await page.keyboard.down('Control');
+    await page.mouse.click(shotMapPoint.x, shotMapPoint.y);
+    await page.keyboard.up('Control');
+    await page.waitForFunction(
+      () => [...document.querySelectorAll('#chip-coordinate-select-shot-tbody input[data-coordinate-row]')]
+        .map((input) => input.value)
+        .filter(Boolean).length === 2 &&
+        window.viewer?.chipAnnotator?.selectionMode === 'shot',
+      null,
+      { timeout: 10000 }
+    );
+    const shotMapSelection = await page.evaluate(() => ({
+      modalVisible: getComputedStyle(document.getElementById('coordinate-map-select-modal')).display !== 'none',
+      activeList: window.viewer?.coordinateSelectionActiveList || '',
+      mapList: window.viewer?.coordinateSelectionMapMode?.listName || '',
+      pressed: document.querySelector('[data-coordinate-list-map="shot"]')?.getAttribute('aria-pressed') || '',
+      modalSelected: window.viewer?.coordinateMapSelectionAnnotator?.selectedChips?.size || 0,
+      mainSelected: window.viewer?.chipAnnotator?.selectedChips?.size || 0,
+      shotRows: [...document.querySelectorAll('#chip-coordinate-select-shot-tbody input[data-coordinate-row]')]
+        .map((input) => input.value)
+        .filter(Boolean),
+    }));
+    expect(shotMapSelection.modalVisible && shotMapSelection.activeList === 'shot' &&
+      shotMapSelection.mapList === 'shot' && shotMapSelection.pressed === 'true' &&
+      shotMapSelection.modalSelected > 0 && shotMapSelection.mainSelected === shotMapSelection.modalSelected &&
+      shotMapSelection.shotRows.length === 2,
+      `shot map selection=${JSON.stringify(shotMapSelection)}`);
+    await page.locator('#coordinate-map-select-done').click();
+
+    await page.locator('[data-coordinate-list-map="chip"]').click();
+    await page.waitForFunction(
+      () => getComputedStyle(document.getElementById('coordinate-map-select-modal')).display !== 'none' &&
+        window.viewer?.coordinateSelectionMapMode?.listName === 'chip' &&
+        window.viewer?.coordinateMapSelectionAnnotator?.selectionMode === 'chip',
+      null,
+      { timeout: 10000 }
+    );
+    const chipMapPoint = await page.evaluate(() => {
+      const v = window.viewer;
+      const annotator = v?.coordinateMapSelectionAnnotator;
+      const canvas = document.getElementById('coordinate-map-select-overlay');
+      const chip = annotator?.chips?.find((candidate) => annotator.isChipSelectable?.(candidate) !== false);
+      const rect = chip?.rect;
+      const transform = v?.coordinateMapSelectionViewer?.transform;
+      const canvasRect = canvas?.getBoundingClientRect();
+      if (!rect || !transform || !canvasRect) return null;
+      return {
+        x: canvasRect.left + ((Number(rect.x0) + Number(rect.x1)) / 2) * transform.scale + transform.dx,
+        y: canvasRect.top + ((Number(rect.y0) + Number(rect.y1)) / 2) * transform.scale + transform.dy,
+      };
+    });
+    expect(!!chipMapPoint, `chip map point=${JSON.stringify(chipMapPoint)}`);
+    await page.keyboard.down('Control');
+    await page.mouse.click(chipMapPoint.x, chipMapPoint.y);
+    await page.keyboard.up('Control');
+    await page.waitForFunction(
+      () => [...document.querySelectorAll('#chip-coordinate-select-chip-tbody input[data-coordinate-row]')]
+        .map((input) => input.value)
+        .filter(Boolean).length === 2 &&
+        window.viewer?.chipAnnotator?.selectionMode === 'chip',
+      null,
+      { timeout: 10000 }
+    );
+    const chipMapSelection = await page.evaluate(() => ({
+      activeList: window.viewer?.coordinateSelectionActiveList || '',
+      mapList: window.viewer?.coordinateSelectionMapMode?.listName || '',
+      pressed: document.querySelector('[data-coordinate-list-map="chip"]')?.getAttribute('aria-pressed') || '',
+      modalSelected: window.viewer?.coordinateMapSelectionAnnotator?.selectedChips?.size || 0,
+      mainSelected: window.viewer?.chipAnnotator?.selectedChips?.size || 0,
+      chipRows: [...document.querySelectorAll('#chip-coordinate-select-chip-tbody input[data-coordinate-row]')]
+        .map((input) => input.value)
+        .filter(Boolean),
+    }));
+    expect(chipMapSelection.activeList === 'chip' &&
+      chipMapSelection.mapList === 'chip' && chipMapSelection.pressed === 'true' &&
+      chipMapSelection.modalSelected === 1 && chipMapSelection.mainSelected === 1 &&
+      chipMapSelection.chipRows.length === 2,
+      `chip map selection=${JSON.stringify(chipMapSelection)}`);
+    await page.locator('#coordinate-map-select-clear').click();
+    await page.waitForFunction(
+      () => (window.viewer?.chipAnnotator?.selectedChips?.size || 0) === 0,
+      null,
+      { timeout: 10000 }
+    );
+    await page.locator('#coordinate-map-select-done').click();
+    const mapCleanup = await page.evaluate(() => ({
+      modalHidden: getComputedStyle(document.getElementById('coordinate-map-select-modal')).display === 'none',
+      selectedAfterCleanup: window.viewer?.chipAnnotator?.selectedChips?.size || 0,
+      mapAfterCleanup: window.viewer?.coordinateSelectionMapMode?.listName || '',
+    }));
+    expect(mapCleanup.modalHidden &&
+      mapCleanup.selectedAfterCleanup === 0 &&
+      mapCleanup.mapAfterCleanup === '',
+      `coordinate map cleanup=${JSON.stringify(mapCleanup)}`);
     const quickPickerInitial = await page.evaluate(() => ({
       shotOptions: document.querySelectorAll('button[data-coordinate-quick-picker="shot"]').length,
       chipOptions: document.querySelectorAll('button[data-coordinate-quick-picker="chip"]').length,

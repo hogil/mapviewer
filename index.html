@@ -683,6 +683,24 @@
         </div>
     </div>
 
+    <div id="coordinate-map-select-modal" class="modal-overlay coordinate-map-select-overlay" style="display:none;">
+        <div class="modal-content coordinate-map-select-modal-content" role="dialog" aria-modal="true" aria-labelledby="coordinate-map-select-title">
+            <div class="modal-header coordinate-map-select-header">
+                <div id="coordinate-map-select-title" class="modal-title">Wafer Map 선택</div>
+                <button id="coordinate-map-select-close" class="modal-close" type="button" aria-label="닫기">×</button>
+            </div>
+            <div id="coordinate-map-select-status" class="coordinate-map-select-status">-</div>
+            <div id="coordinate-map-select-stage" class="coordinate-map-select-stage">
+                <canvas id="coordinate-map-select-image" aria-label="Wafer map"></canvas>
+                <canvas id="coordinate-map-select-overlay" aria-label="Wafer map 선택"></canvas>
+            </div>
+            <div class="modal-buttons coordinate-map-select-buttons">
+                <button id="coordinate-map-select-clear" class="grid-btn" type="button">Clear</button>
+                <button id="coordinate-map-select-done" class="grid-btn" type="button">완료</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Ref Map Modal -->
     <div id="ref-map-window" class="ref-map-window" style="display: none;">
         <div class="ref-map-modal-header">

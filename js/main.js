@@ -817,6 +817,15 @@ class WaferMapViewer {
             coordinateSelectRangeStatus: document.getElementById('chip-coordinate-select-range-status'),
             coordinateSelectLiveStatus: document.getElementById('chip-coordinate-select-live-status'),
             coordinateSelectShotPicker: document.getElementById('chip-coordinate-select-shot-picker'),
+            coordinateMapSelectModal: document.getElementById('coordinate-map-select-modal'),
+            coordinateMapSelectTitle: document.getElementById('coordinate-map-select-title'),
+            coordinateMapSelectClose: document.getElementById('coordinate-map-select-close'),
+            coordinateMapSelectDone: document.getElementById('coordinate-map-select-done'),
+            coordinateMapSelectClear: document.getElementById('coordinate-map-select-clear'),
+            coordinateMapSelectStatus: document.getElementById('coordinate-map-select-status'),
+            coordinateMapSelectStage: document.getElementById('coordinate-map-select-stage'),
+            coordinateMapSelectImageCanvas: document.getElementById('coordinate-map-select-image'),
+            coordinateMapSelectOverlayCanvas: document.getElementById('coordinate-map-select-overlay'),
             compositeOverlay: document.getElementById('composite-overlay'),
             compositeHeatmapGrid: document.getElementById('composite-heatmap-grid'),
             compositeInfoText: document.getElementById('composite-info-text'),
@@ -1136,6 +1145,10 @@ class WaferMapViewer {
             xMin: null,
             xMax: null,
         };
+        this.coordinateMapSelection = null;
+        this.coordinateMapSelectionViewer = null;
+        this.coordinateMapSelectionAnnotator = null;
+        this.coordinateMapSelectionResizeHandler = null;
         this.permissionUsers = [];
         this.permissionSelectedUser = null;
         this.permissionFilterRole = 'ALL'; // 초기값: ALL
@@ -9528,6 +9541,7 @@ class WaferMapViewer {
             clearTimeout(this.coordinateSelectionLiveTimer);
             this.coordinateSelectionLiveTimer = null;
         }
+        this.closeCoordinateMapSelectionModal?.({ stopMapMode: false });
         this._stopCoordinateSelectionMapMode?.();
         if (this.dom?.coordinateSelectModal) this.dom.coordinateSelectModal.style.display = 'none';
         this.isCoordinateSelectionOpen = false;
@@ -10817,15 +10831,301 @@ class WaferMapViewer {
         this._startCoordinateSelectionMapMode(listName);
     }
 
-    _syncCoordinateSelectionListsFromSelectedChips(options = {}) {
-        if (!this.isCoordinateSelectionOpen || !this.coordinateSelectionLists || !this.chipAnnotator) return;
-        const preserveListName = options?.preserveListName || null;
-        const annotator = this.chipAnnotator;
+    _getCoordinateMapSelectionTargetPath() {
+        const candidates = [
+            this._gridCoordinateTargetPath,
+            this.selectedImagePath,
+            this.currentImagePath,
+            this.contextMenuTargetPath,
+        ];
+        return candidates
+            .map((path) => String(path || '').trim())
+            .find(Boolean) || '';
+    }
+
+    _getCoordinateMapImageUrl(imagePath) {
+        const personalizedParams = this.getPersonalizedParams ? this.getPersonalizedParams() : '';
+        return `/api/image?path=${encodeURIComponent(imagePath)}${personalizedParams}`;
+    }
+
+    _getCoordinateMapSelectionViewer() {
+        const stage = this.dom?.coordinateMapSelectStage;
+        if (!this.coordinateMapSelectionViewer) {
+            this.coordinateMapSelectionViewer = {
+                transform: { scale: 1, dx: 0, dy: 0 },
+                gridMode: true,
+                currentImage: true,
+                dom: { viewerContainer: stage },
+                isCoordinateSelectionOpen: true,
+                coordinateSelectionLists: null,
+                coordinateSelectionSuppressSelectionSync: false,
+                selectedGradientRanges: new Set(),
+                isMeasureGradientMode: () => false,
+                updateChipLabelLegend: () => {},
+                _syncShotBoundaryButtonUI: () => {},
+                showToast: (...args) => this.showToast?.(...args),
+                _syncCoordinateSelectionListsFromSelectedChips: () =>
+                    this._syncCoordinateMapSelectionListFromSelection(),
+                onManualChipSelection: () =>
+                    this._syncCoordinateMapSelectionListFromSelection(),
+                handleChipSelectionCleared: () =>
+                    this._syncCoordinateMapSelectionListFromSelection({ clearWhenEmpty: true }),
+            };
+        }
+        this.coordinateMapSelectionViewer.dom.viewerContainer = stage;
+        return this.coordinateMapSelectionViewer;
+    }
+
+    async _getCoordinateMapSelectionAnnotator() {
+        const overlayCanvas = this.dom?.coordinateMapSelectOverlayCanvas;
+        if (!overlayCanvas) return null;
+        const viewer = this._getCoordinateMapSelectionViewer();
+        if (!this.coordinateMapSelectionAnnotator) {
+            const jsVer = this._getJsVersionTag();
+            const { ChipAnnotator } = await import(`./chip-annotator.js?v=${jsVer}`);
+            this.coordinateMapSelectionAnnotator = new ChipAnnotator(overlayCanvas, viewer);
+        } else {
+            this.coordinateMapSelectionAnnotator.canvas = overlayCanvas;
+            this.coordinateMapSelectionAnnotator.ctx = overlayCanvas.getContext('2d');
+            this.coordinateMapSelectionAnnotator.viewer = viewer;
+        }
+        return this.coordinateMapSelectionAnnotator;
+    }
+
+    async _loadCoordinateMapSelectionImage(imagePath) {
+        const img = new Image();
+        img.decoding = 'async';
+        img.src = this._getCoordinateMapImageUrl(imagePath);
+        if (img.decode) {
+            await img.decode();
+        } else {
+            await new Promise((resolve, reject) => {
+                img.onload = resolve;
+                img.onerror = reject;
+            });
+        }
+        return img;
+    }
+
+    _drawCoordinateMapSelectionImage() {
+        const state = this.coordinateMapSelection;
+        const stage = this.dom?.coordinateMapSelectStage;
+        const imageCanvas = this.dom?.coordinateMapSelectImageCanvas;
+        const overlayCanvas = this.dom?.coordinateMapSelectOverlayCanvas;
+        const annotator = this.coordinateMapSelectionAnnotator;
+        if (!state || !stage || !imageCanvas || !overlayCanvas || !annotator) return false;
+
+        const rect = stage.getBoundingClientRect();
+        const canvasWidth = Math.max(1, Math.round(rect.width || stage.clientWidth || 0));
+        const canvasHeight = Math.max(1, Math.round(rect.height || stage.clientHeight || 0));
+        if (canvasWidth <= 1 || canvasHeight <= 1) return false;
+
+        if (imageCanvas.width !== canvasWidth) imageCanvas.width = canvasWidth;
+        if (imageCanvas.height !== canvasHeight) imageCanvas.height = canvasHeight;
+        if (overlayCanvas.width !== canvasWidth) overlayCanvas.width = canvasWidth;
+        if (overlayCanvas.height !== canvasHeight) overlayCanvas.height = canvasHeight;
+
+        const ctx = imageCanvas.getContext('2d');
+        if (!ctx) return false;
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+        ctx.fillStyle = '#050505';
+        ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+        const img = state.image;
+        const coordCanvas = annotator.positionsData?.coord?.canvas || {};
+        const imageWidth = Number(img?.naturalWidth) || Number(coordCanvas.width) || canvasWidth;
+        const imageHeight = Number(img?.naturalHeight) || Number(coordCanvas.height) || canvasHeight;
+        const scale = Math.min(canvasWidth / imageWidth, canvasHeight / imageHeight);
+        const dx = (canvasWidth - imageWidth * scale) / 2;
+        const dy = (canvasHeight - imageHeight * scale) / 2;
+        state.viewer.transform = { scale, dx, dy };
+
+        if (img && imageWidth > 0 && imageHeight > 0) {
+            ctx.imageSmoothingEnabled = false;
+            ctx.drawImage(img, dx, dy, imageWidth * scale, imageHeight * scale);
+        }
+
+        annotator.render?.();
+        return true;
+    }
+
+    _updateCoordinateMapSelectionStatus() {
+        const status = this.dom?.coordinateMapSelectStatus;
+        const title = this.dom?.coordinateMapSelectTitle;
+        const state = this.coordinateMapSelection;
+        const annotator = this.coordinateMapSelectionAnnotator;
+        if (!state) {
+            if (status) status.textContent = '-';
+            return;
+        }
+        const modeLabel = state.listName === 'shot' ? 'Shot X/Y' : 'Chip X/Y';
+        if (title) title.textContent = `${modeLabel} Map 선택`;
+        const selectedChipCount = annotator?.selectedChips?.size || 0;
+        const selectedShotCount = annotator?.selectionMode === 'shot'
+            ? (annotator._getSelectedShotGroups?.().size || 0)
+            : 0;
+        const fileName = String(state.imagePath || '').replace(/\\/g, '/').split('/').pop() || '-';
+        if (status) {
+            status.textContent = selectedShotCount > 0
+                ? `${fileName} · ${selectedShotCount} Shot / ${selectedChipCount} Chip`
+                : `${fileName} · ${selectedChipCount} Chip`;
+        }
+    }
+
+    _syncCoordinateMapSelectionListFromSelection(options = {}) {
+        if (this.coordinateMapSelection?.loading) return false;
+        const annotator = this.coordinateMapSelectionAnnotator;
+        if (!this.isCoordinateSelectionOpen || !this.coordinateSelectionLists || !annotator) return false;
+        const selectedCount = annotator.selectedChips?.size || 0;
+        if (selectedCount === 0) {
+            if (options.clearWhenEmpty !== true) return false;
+            this._clearCoordinateSelectionCoordinateLists();
+            this.coordinateSelectionSuppressSelectionSync = true;
+            try {
+                this.chipAnnotator?.clearSelection?.(false);
+            } finally {
+                this.coordinateSelectionSuppressSelectionSync = false;
+            }
+            this._scheduleGridCoordinateSelectionOverlayRender?.(0);
+            this._updateCoordinateMapSelectionStatus();
+            return true;
+        }
+
+        const rowsByList = this._collectCoordinateSelectionRowsFromAnnotator(annotator);
+        ['shot', 'chip', 'chipId'].forEach((listName) => {
+            const state = this.coordinateSelectionLists?.[listName];
+            if (!state) return;
+            state.rows = rowsByList[listName].length
+                ? rowsByList[listName]
+                : this._newCoordinateSelectionListRows(listName);
+            state.hasInput = false;
+            state.synced = true;
+        });
+        const activeList = this.coordinateMapSelection?.listName || this.coordinateSelectionActiveList || 'shot';
+        this._activateCoordinateSelectionList(activeList);
+        this._clearCoordinateSelectionQuickSearches();
+        this._renderCoordinateSelectionLists();
+        this._applyCoordinateSelectionLive({ forceClear: true });
+        this._updateCoordinateMapSelectionStatus();
+        return true;
+    }
+
+    _restoreCoordinateMapSelectionFromLists(listName) {
+        const annotator = this.coordinateMapSelectionAnnotator;
+        if (!annotator?.positionsData) return;
+        const parsed = this._getLiveCoordinateSelectionList(listName);
+        annotator.selectedChips = new Set();
+        annotator.selectedChipsOrder = [];
+        annotator.selectionMode = listName === 'shot' ? 'shot' : 'chip';
+        if (parsed.ready && parsed.rows.length) {
+            this.coordinateMapSelection.loading = true;
+            try {
+                annotator.selectByCoordinateRows(parsed.target, parsed.rows, { operation: 'replace' });
+            } finally {
+                this.coordinateMapSelection.loading = false;
+            }
+        }
+        annotator.selectionMode = listName === 'shot' ? 'shot' : 'chip';
+        annotator.shotBoundaryVisible = listName === 'shot';
+        annotator.showGrid = true;
+        annotator.render?.();
+        this._updateCoordinateMapSelectionStatus();
+    }
+
+    async openCoordinateMapSelectionModal(listName) {
+        if (listName !== 'shot' && listName !== 'chip') return false;
+        const dom = this.dom;
+        if (!dom?.coordinateMapSelectModal || !dom.coordinateMapSelectStage) return false;
+        const imagePath = this._getCoordinateMapSelectionTargetPath();
+        if (!imagePath) {
+            this._setCoordinateSelectionError('Map 선택에 사용할 wafer가 없습니다.');
+            return false;
+        }
+
+        this._activateCoordinateSelectionList(listName);
+        this.coordinateSelectionMapMode = { listName, modal: true };
+        this._syncCoordinateSelectionMapButtons();
+        dom.coordinateMapSelectModal.style.display = 'flex';
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+
+        const requestId = (this._coordinateMapSelectionRequestId || 0) + 1;
+        this._coordinateMapSelectionRequestId = requestId;
+        const viewer = this._getCoordinateMapSelectionViewer();
+        this.coordinateMapSelection = {
+            listName,
+            imagePath,
+            image: null,
+            viewer,
+            loading: true,
+        };
+        this._updateCoordinateMapSelectionStatus();
+
+        const annotator = await this._getCoordinateMapSelectionAnnotator();
+        if (!annotator) return false;
+        annotator.selectedChips = new Set();
+        annotator.selectedChipsOrder = [];
+        annotator.selectionMode = listName === 'shot' ? 'shot' : 'chip';
+        annotator.showGrid = true;
+        annotator.shotBoundaryVisible = listName === 'shot';
+        annotator.clearLayoutData?.({ resetVisibility: false });
+
+        try {
+            const imagePromise = this._loadCoordinateMapSelectionImage(imagePath);
+            const positionsPromise = annotator.loadPositions(imagePath, { loadAnnotations: false, render: false });
+            const processId = this._getLayoutProcessId(imagePath);
+            const layoutRowsPromise = processId
+                ? this._getLayoutRowsForProcess(processId).catch(() => [])
+                : Promise.resolve([]);
+            const [image, positionsLoaded, layoutRows] = await Promise.all([imagePromise, positionsPromise, layoutRowsPromise]);
+            if (this._coordinateMapSelectionRequestId !== requestId) return false;
+            if (!positionsLoaded) {
+                this._setCoordinateSelectionError('Map 선택에 필요한 Chip 위치 정보를 찾을 수 없습니다.');
+                return false;
+            }
+            this.coordinateMapSelection.image = image;
+            if (processId) annotator.setLayoutData(processId, layoutRows);
+            annotator.selectionMode = listName === 'shot' ? 'shot' : 'chip';
+            annotator.showGrid = true;
+            annotator.shotBoundaryVisible = listName === 'shot';
+            this._drawCoordinateMapSelectionImage();
+            this.coordinateMapSelection.loading = false;
+            this._restoreCoordinateMapSelectionFromLists(listName);
+            this._setCoordinateSelectionError('');
+            if (!this.coordinateMapSelectionResizeHandler) {
+                this.coordinateMapSelectionResizeHandler = () => this._drawCoordinateMapSelectionImage();
+                window.addEventListener('resize', this.coordinateMapSelectionResizeHandler);
+            }
+            return true;
+        } catch (error) {
+            console.error('Coordinate map selection failed:', error);
+            if (this.coordinateMapSelection) this.coordinateMapSelection.loading = false;
+            this._setCoordinateSelectionError('Wafer map 선택 모달을 열 수 없습니다.');
+            return false;
+        }
+    }
+
+    closeCoordinateMapSelectionModal(options = {}) {
+        if (this.dom?.coordinateMapSelectModal) {
+            this.dom.coordinateMapSelectModal.style.display = 'none';
+        }
+        if (this.coordinateMapSelectionResizeHandler) {
+            window.removeEventListener('resize', this.coordinateMapSelectionResizeHandler);
+            this.coordinateMapSelectionResizeHandler = null;
+        }
+        this.coordinateMapSelection = null;
+        if (options.stopMapMode !== false) {
+            this._stopCoordinateSelectionMapMode();
+        }
+    }
+
+    _collectCoordinateSelectionRowsFromAnnotator(annotator) {
+        const rowsByList = { shot: [], chip: [], chipId: [] };
+        const seen = { shot: new Set(), chip: new Set(), chipId: new Set() };
+        if (!annotator?.chips?.length || !annotator?.selectedChips) return rowsByList;
         const selected = [...(annotator.selectedChips || [])]
             .map((index) => ({ index, chip: annotator.chips?.[index] }))
             .filter(({ chip }) => !!chip);
-        const rowsByList = { shot: [], chip: [], chipId: [] };
-        const seen = { shot: new Set(), chip: new Set(), chipId: new Set() };
         selected.forEach(({ chip }) => {
             const layout = annotator.getLayoutRowForChip?.(chip);
             const shotX = Number(layout?.shot_x_pos);
@@ -10855,6 +11155,13 @@ class WaferMapViewer {
         rowsByList.shot.sort((left, right) => Number(left[1]) - Number(right[1]) || Number(left[0]) - Number(right[0]));
         rowsByList.chip.sort((left, right) => Number(left[1]) - Number(right[1]) || Number(left[0]) - Number(right[0]));
         rowsByList.chipId.sort((left, right) => Number(left[0]) - Number(right[0]));
+        return rowsByList;
+    }
+
+    _syncCoordinateSelectionListsFromSelectedChips(options = {}) {
+        if (!this.isCoordinateSelectionOpen || !this.coordinateSelectionLists || !this.chipAnnotator) return;
+        const preserveListName = options?.preserveListName || null;
+        const rowsByList = this._collectCoordinateSelectionRowsFromAnnotator(this.chipAnnotator);
         ['shot', 'chip', 'chipId'].forEach((listName) => {
             if (listName === preserveListName) return;
             const state = this.coordinateSelectionLists[listName];
@@ -10989,6 +11296,7 @@ class WaferMapViewer {
         const dom = this.dom;
         if (!dom?.coordinateSelectModal || dom.coordinateSelectModal.dataset.boundV2 === 'true') return;
         dom.coordinateSelectModal.dataset.boundV2 = 'true';
+        this.bindCoordinateMapSelectionEvents();
         dom.coordinateSelectModal?.addEventListener('input', (event) => {
             const search = event.target.closest?.('input[data-coordinate-quick-search]');
             if (!search) return;
@@ -11132,7 +11440,7 @@ class WaferMapViewer {
             if (mapButton) {
                 event.preventDefault();
                 event.stopPropagation();
-                this._toggleCoordinateSelectionMapMode(mapButton.dataset.coordinateListMap);
+                this.openCoordinateMapSelectionModal(mapButton.dataset.coordinateListMap);
                 return;
             }
             const clearButton = event.target.closest?.('[data-coordinate-list-clear]');
@@ -11383,6 +11691,26 @@ class WaferMapViewer {
         }
     }
 
+    bindCoordinateMapSelectionEvents() {
+        const dom = this.dom;
+        if (!dom?.coordinateMapSelectModal || dom.coordinateMapSelectModal.dataset.bound === 'true') return;
+        dom.coordinateMapSelectModal.dataset.bound = 'true';
+        const close = () => this.closeCoordinateMapSelectionModal();
+        dom.coordinateMapSelectClose?.addEventListener('click', close);
+        dom.coordinateMapSelectDone?.addEventListener('click', close);
+        dom.coordinateMapSelectClear?.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const annotator = this.coordinateMapSelectionAnnotator;
+            if (annotator) {
+                annotator.selectedChips = new Set();
+                annotator.selectedChipsOrder = [];
+                annotator.render?.();
+            }
+            this._syncCoordinateMapSelectionListFromSelection({ clearWhenEmpty: true });
+        });
+    }
+
     openCoordinateSelectionModal() {
         const dom = this.dom;
         if (!dom?.coordinateSelectModal) return;
@@ -11390,6 +11718,7 @@ class WaferMapViewer {
         this.coordinateSelectionShotPickerDrag = null;
         this.coordinateSelectionShotPickerScopeIndices = null;
         this.coordinateSelectionShotPickerSuppressClickAt = 0;
+        this.closeCoordinateMapSelectionModal?.({ stopMapMode: false });
         this.coordinateSelectionMapMode = null;
         this._resetCoordinateSelectionCellState();
         this.coordinateSelectionLists = {
