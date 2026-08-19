@@ -1234,14 +1234,21 @@ export class ChipAnnotator {
         return scope;
     }
 
-    selectByCoordinateRows(target, rows, options = {}) {
-        const operation = ['add', 'remove'].includes(options.operation) ? options.operation : 'replace';
+    matchCoordinateRows(target, rows, options = {}) {
         const inputRows = Array.isArray(rows) ? rows : [];
         const matchedIndices = new Set();
         const matchedRows = [];
         const unmatchedRows = [];
-        const shotScope = this._getSelectedShotScopeIndices();
+        const shotScope = options.respectSelectedShotScope === false
+            ? new Set()
+            : this._getSelectedShotScopeIndices();
         const restrictToSelectedShots = shotScope.size > 0;
+        const rawBaseIndices = options.baseIndices instanceof Set || Array.isArray(options.baseIndices)
+            ? options.baseIndices
+            : null;
+        const baseIndices = rawBaseIndices
+            ? new Set(Array.from(rawBaseIndices).map(Number).filter(Number.isInteger))
+            : null;
         const normalizeId = (value) => String(value ?? '').trim().toLowerCase();
         const near = (left, right, tolerance = 0.0001) => Number.isFinite(left) &&
             Number.isFinite(right) && Math.abs(left - right) <= tolerance;
@@ -1249,6 +1256,7 @@ export class ChipAnnotator {
         inputRows.forEach((row, rowIndex) => {
             const rowMatches = [];
             this.chips.forEach((chip, chipIndex) => {
+                if (baseIndices && !baseIndices.has(chipIndex)) return;
                 if (!chip) return;
                 if (!this.isChipSelectable(chip)) return;
                 const layout = this.getLayoutRowForChip(chip);
@@ -1285,6 +1293,22 @@ export class ChipAnnotator {
             }
         });
 
+        return {
+            matchedIndices,
+            matchedRows,
+            unmatchedRows,
+            matchedCount: matchedIndices.size,
+            matchedRowsCount: matchedRows.length,
+            restrictedToSelectedShots: restrictToSelectedShots,
+            baseCount: baseIndices ? baseIndices.size : null,
+        };
+    }
+
+    selectByCoordinateRows(target, rows, options = {}) {
+        const operation = ['add', 'remove'].includes(options.operation) ? options.operation : 'replace';
+        const match = this.matchCoordinateRows(target, rows, options);
+        const matchedIndices = match.matchedIndices;
+        const inputRows = Array.isArray(rows) ? rows : [];
         const nextSelection = operation === 'replace'
             ? new Set()
             : new Set(this.selectedChips);
@@ -1294,7 +1318,8 @@ export class ChipAnnotator {
             matchedIndices.forEach((index) => nextSelection.add(index));
         }
 
-        const preserveShotMode = target === 'shot-grid' || (restrictToSelectedShots && inputRows.some((row) => row?.value !== undefined));
+        const preserveShotMode = target === 'shot-grid' ||
+            (match.restrictedToSelectedShots && inputRows.some((row) => row?.value !== undefined));
         this.selectionMode = preserveShotMode ? 'shot' : 'chip';
         this.selectedChips = nextSelection;
         const previousOrder = Array.isArray(this.selectedChipsOrder) ? this.selectedChipsOrder : [];
@@ -1310,10 +1335,10 @@ export class ChipAnnotator {
         return {
             selectedCount: nextSelection.size,
             selectedShotCount: this.selectionMode === 'shot' ? this._getSelectedShotGroups().size : 0,
-            matchedRows: matchedRows.length,
-            unmatchedRows,
+            matchedRows: match.matchedRowsCount,
+            unmatchedRows: match.unmatchedRows,
             matchedIndices: Array.from(matchedIndices),
-            restrictedToSelectedShots: restrictToSelectedShots,
+            restrictedToSelectedShots: match.restrictedToSelectedShots,
         };
     }
 
@@ -1392,6 +1417,12 @@ export class ChipAnnotator {
         const chipRange = filters?.chipRange?.enabled ? filters.chipRange : null;
         const chipRangeTarget = filters?.chipRangeTarget || chipRange?.target || 'chip-grid';
         const radiusRange = filters?.radiusRange?.enabled ? filters.radiusRange : null;
+        const rawBaseIndices = filters?.baseIndices instanceof Set || Array.isArray(filters?.baseIndices)
+            ? filters.baseIndices
+            : null;
+        const baseIndices = rawBaseIndices
+            ? new Set(Array.from(rawBaseIndices).map(Number).filter(Number.isInteger))
+            : null;
         const finite = (value) => Number.isFinite(Number(value));
         const normalizeBounds = (left, right) => {
             const leftValue = Number(left);
@@ -1406,6 +1437,7 @@ export class ChipAnnotator {
         const matchedIndices = new Set();
 
         this.chips.forEach((chip, chipIndex) => {
+            if (baseIndices && !baseIndices.has(chipIndex)) return;
             if (!chip) return;
             if (!this.isChipSelectable(chip)) return;
             const layout = chipRangeTarget === 'chip-pos' || radiusRange
@@ -1455,6 +1487,8 @@ export class ChipAnnotator {
             selectedCount: nextSelection.size,
             selectedShotCount: 0,
             matchedCount: matchedIndices.size,
+            matchedIndices: Array.from(matchedIndices),
+            baseCount: baseIndices ? baseIndices.size : null,
         };
     }
 

@@ -155,6 +155,13 @@ argument-hint: [증상-설명]
   - JS/CSS 응답은 `no-cache + ETag`
 - 신규 기능이 특정 사용자에게만 안 보이면 먼저 네트워크 탭에서 모듈 그래프 전체의 버전 문자열과 `304` 재검증을 확인한다.
 
+### Coord range / map selector / grid direct selection 회귀 (2026-08-19)
+
+- Chip/Radius range는 active Shot/Chip coordinate list와 AND 조건이어야 한다. list가 비어 있을 때만 전체 wafer 기준 range로 동작한다. range를 수정할 때 이전 range 결과 `selectedChips`를 base로 쓰면 slider 변경 때 selection이 계속 축소되므로, `matchCoordinateRows()` 같은 non-mutating matcher로 base를 다시 만든 뒤 constraint를 적용한다.
+- Coordinate Map selector는 실제 wafer bitmap을 로드하지 않는다. positions/layout만 사용해 흰 chip, 기본 chip boundary, Shot boundary, 선택 highlight를 그리는 structure-only panel이어야 한다. 배경 overlay는 투명하고 pointer-events를 막아야 하며 panel만 fixed/draggable로 동작한다.
+- Grid context의 direct `Shot 선택`/`Chip 선택`/`Wafer 선택`은 Coord modal과 분리한다. direct 선택은 `_pendingGridRegionComposite`를 만들거나 sourceImages를 바꾸지 않고, 표시가 필요하면 direct 전용 source set으로 thumbnail selection overlay만 그린다. Coord opener는 별도 `Coord 선택` 메뉴로 유지한다.
+- E2E 신호: `coordinate-selection-cells`는 modeless map selector, mode buttons, `showGrid=false`, range base AND와 Clear 복원을 확인한다. `selected-region-composite`는 grid direct Shot 선택이 Coord modal/pending source를 건드리지 않는지 확인한다.
+
 ### Chip Label ↔ Wafer 연결/오버레이 회귀 (2026-05-02)
 
 - chip wafer key는 파일명 앞 5개 토큰 `product/bottom/wafer/date/time`이다. 예: `AAU220_00P_13_20260501_010000`. 이 prefix가 같으면 wafer filename에 `96.0_2` 같은 추가 토큰이 있어도 같은 wafer label로 매칭한다.
