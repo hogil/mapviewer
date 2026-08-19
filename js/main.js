@@ -9528,6 +9528,7 @@ class WaferMapViewer {
             clearTimeout(this.coordinateSelectionLiveTimer);
             this.coordinateSelectionLiveTimer = null;
         }
+        this._stopCoordinateSelectionMapMode?.();
         if (this.dom?.coordinateSelectModal) this.dom.coordinateSelectModal.style.display = 'none';
         this.isCoordinateSelectionOpen = false;
         const panel = this.dom?.coordinateSelectModal?.querySelector('.coordinate-select-modal-content');
@@ -9736,6 +9737,7 @@ class WaferMapViewer {
         this._updateCoordinateSelectionSummary();
         this._renderCoordinateSelectionShotPicker();
         this._renderCoordinateSelectionQuickPickers();
+        this._syncCoordinateSelectionMapButtons();
     }
 
     _ensureCoordinateSelectionCellState() {
@@ -10754,6 +10756,67 @@ class WaferMapViewer {
         this._scheduleCoordinateSelectionLiveApply({ forceClear: true });
     }
 
+    _syncCoordinateSelectionMapButtons() {
+        const activeList = this.coordinateSelectionMapMode?.listName || '';
+        this.dom?.coordinateSelectListPanels?.querySelectorAll('[data-coordinate-list-map]').forEach((button) => {
+            const active = button.dataset.coordinateListMap === activeList;
+            button.classList.toggle('is-active', active);
+            button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+    }
+
+    _stopCoordinateSelectionMapMode(listName = null) {
+        if (!this.coordinateSelectionMapMode) return;
+        if (listName && this.coordinateSelectionMapMode.listName !== listName) return;
+        this.coordinateSelectionMapMode = null;
+        this._syncCoordinateSelectionMapButtons();
+    }
+
+    _syncCoordinateSelectionMapListFromSelection(options = {}) {
+        const listName = this.coordinateSelectionMapMode?.listName;
+        if (!listName || !this.coordinateSelectionLists?.[listName]) return false;
+        const selectedCount = this.chipAnnotator?.selectedChips?.size || 0;
+        if (selectedCount === 0 && options.clearWhenEmpty !== true) return false;
+        this._syncCoordinateSelectionListsFromSelectedChips();
+        this._activateCoordinateSelectionList(listName);
+        this._syncCoordinateSelectionMapButtons();
+        this._scheduleGridCoordinateSelectionOverlayRender?.(0);
+        return true;
+    }
+
+    _startCoordinateSelectionMapMode(listName) {
+        if (listName !== 'shot' && listName !== 'chip') return false;
+        const annotator = this.chipAnnotator;
+        if (!annotator?.positionsData || !Array.isArray(annotator.chips) || annotator.chips.length === 0) {
+            this._setCoordinateSelectionError('현재 이미지의 Chip 위치 정보가 아직 준비되지 않았습니다.');
+            return false;
+        }
+        this.coordinateSelectionMapMode = { listName };
+        this._activateCoordinateSelectionList(listName);
+        annotator.selectionMode = listName === 'shot' ? 'shot' : 'chip';
+        if (listName === 'shot') {
+            if (this.gridMode === true) {
+                this.toggleGridShotBoundaryOverlay?.(true);
+            } else {
+                annotator.setShotBoundaryVisible?.(true);
+            }
+        }
+        annotator.render?.();
+        annotator.updateSelectedChipsList?.({ notifyViewer: false });
+        this._syncCoordinateSelectionMapListFromSelection();
+        this._syncCoordinateSelectionMapButtons();
+        this._setCoordinateSelectionError('');
+        return true;
+    }
+
+    _toggleCoordinateSelectionMapMode(listName) {
+        if (this.coordinateSelectionMapMode?.listName === listName) {
+            this._stopCoordinateSelectionMapMode(listName);
+            return;
+        }
+        this._startCoordinateSelectionMapMode(listName);
+    }
+
     _syncCoordinateSelectionListsFromSelectedChips(options = {}) {
         if (!this.isCoordinateSelectionOpen || !this.coordinateSelectionLists || !this.chipAnnotator) return;
         const preserveListName = options?.preserveListName || null;
@@ -11065,6 +11128,13 @@ class WaferMapViewer {
             if (input?.dataset.coordinateEditing === 'true') this._finishCoordinateSelectionCellEdit(input);
         });
         dom.coordinateSelectListPanels?.addEventListener('click', (event) => {
+            const mapButton = event.target.closest?.('[data-coordinate-list-map]');
+            if (mapButton) {
+                event.preventDefault();
+                event.stopPropagation();
+                this._toggleCoordinateSelectionMapMode(mapButton.dataset.coordinateListMap);
+                return;
+            }
             const clearButton = event.target.closest?.('[data-coordinate-list-clear]');
             if (clearButton) {
                 this._clearCoordinateSelectionList(clearButton.dataset.coordinateListClear);
@@ -11320,6 +11390,7 @@ class WaferMapViewer {
         this.coordinateSelectionShotPickerDrag = null;
         this.coordinateSelectionShotPickerScopeIndices = null;
         this.coordinateSelectionShotPickerSuppressClickAt = 0;
+        this.coordinateSelectionMapMode = null;
         this._resetCoordinateSelectionCellState();
         this.coordinateSelectionLists = {
             shot: { rows: this._newCoordinateSelectionListRows('shot'), hasInput: false, synced: false },
@@ -15184,7 +15255,36 @@ class WaferMapViewer {
         };
     }
 
+    _configureGridShotCoordinateContextItem(contextMenu) {
+        const item = this._ensureGridContextMenuItem(contextMenu, 'grid-shot-coordinate-select-open');
+        if (!item) return;
+        if (this.gridMode !== true || this.isCompositeMode) {
+            item.style.setProperty('display', 'none', 'important');
+            item.onclick = null;
+            return;
+        }
+        item.style.setProperty('display', 'block', 'important');
+        item.textContent = 'Shot 선택';
+        item.title = 'Grid 화면을 유지한 채 Shot 경계와 좌표 선택 패널을 엽니다.';
+        item.onclick = async (clickEvent) => {
+            clickEvent?.preventDefault?.();
+            clickEvent?.stopPropagation?.();
+            this.hideContextMenu();
+            if (!this.gridShotBoundaryVisible) {
+                this.toggleGridShotBoundaryOverlay(true);
+            }
+            await this.openGridCoordinateSelection({ openModal: true });
+            if (this.gridMode === true && this.gridShotBoundaryVisible !== true) {
+                this.toggleGridShotBoundaryOverlay(true);
+            } else {
+                this._scheduleGridShotBoundaryOverlayRender?.(0);
+            }
+        };
+    }
+
     _updateGridSelectedRegionCompositeContextItems(contextMenu) {
+        this._configureGridShotCoordinateContextItem(contextMenu);
+
         const shotContext = this._getGridSelectedRegionCompositeContext({
             mode: 'shot',
             includeAllWhenEmpty: true,
@@ -32662,10 +32762,12 @@ class WaferMapViewer {
 
     _shouldInterceptGridShotBoundaryThumbEvent(wrap, event) {
         if (!wrap || !event || this.gridMode !== true || this.viewMode === 'gridImage') return false;
-        if (this.gridShotBoundaryVisible !== true || this.isCoordinateSelectionOpen !== true) return false;
+        if (this.isCoordinateSelectionOpen !== true) return false;
         if (typeof event.button === 'number' && event.button !== 0) return false;
         const thumbBox = event.target?.closest?.('.grid-thumb-imgbox');
-        return !!thumbBox && wrap.contains(thumbBox);
+        if (!thumbBox || !wrap.contains(thumbBox)) return false;
+        if (this.coordinateSelectionMapMode?.listName === 'chip') return true;
+        return this.gridShotBoundaryVisible === true;
     }
 
     _getGridShotBoundaryHit(wrap, event, data) {
@@ -32692,6 +32794,34 @@ class WaferMapViewer {
                 waferX <= Number(group.maxX) &&
                 waferY >= Number(group.minY) &&
                 waferY <= Number(group.maxY)
+            )
+            .sort((left, right) => (left.width * left.height) - (right.width * right.height))[0] || null;
+    }
+
+    _getGridChipBoundaryHit(wrap, event, data) {
+        if (!wrap || !event || !data?.chips?.length || !(data.canvasWidth > 0) || !(data.canvasHeight > 0)) return null;
+        const thumbBox = wrap.querySelector('.grid-thumb-imgbox');
+        if (!thumbBox) return null;
+        const rect = thumbBox.getBoundingClientRect();
+        const cssWidth = Math.max(1, rect.width || thumbBox.clientWidth || 0);
+        const cssHeight = Math.max(1, rect.height || thumbBox.clientHeight || 0);
+        if (cssWidth <= 1 || cssHeight <= 1) return null;
+        const scale = Math.min(cssWidth / data.canvasWidth, cssHeight / data.canvasHeight);
+        if (!(scale > 0)) return null;
+        const offsetX = (cssWidth - data.canvasWidth * scale) / 2;
+        const offsetY = (cssHeight - data.canvasHeight * scale) / 2;
+        const localX = Number(event.clientX) - rect.left;
+        const localY = Number(event.clientY) - rect.top;
+        const waferX = (localX - offsetX) / scale;
+        const waferY = (localY - offsetY) / scale;
+        if (!Number.isFinite(waferX) || !Number.isFinite(waferY)) return null;
+
+        return data.chips
+            .filter((chip) =>
+                waferX >= Number(chip.minX) &&
+                waferX <= Number(chip.minX) + Number(chip.width) &&
+                waferY >= Number(chip.minY) &&
+                waferY <= Number(chip.minY) + Number(chip.height)
             )
             .sort((left, right) => (left.width * left.height) - (right.width * right.height))[0] || null;
     }
@@ -32736,6 +32866,50 @@ class WaferMapViewer {
         return this._applyCoordinateSelectionLive({ forceClear: true });
     }
 
+    _applyGridChipBoundaryClickSelection(chipHit, event) {
+        const annotator = this.chipAnnotator;
+        const xAbs = Number(chipHit?.xAbs);
+        const yAbs = Number(chipHit?.yAbs);
+        if (!annotator?.chips?.length || !Number.isFinite(xAbs) || !Number.isFinite(yAbs)) return null;
+        const index = annotator.chips.findIndex((chip) =>
+            Number(chip?.x_abs ?? chip?.x) === xAbs &&
+            Number(chip?.y_abs ?? chip?.y) === yAbs
+        );
+        if (index < 0 || annotator.isChipSelectable?.(annotator.chips[index]) === false) return null;
+
+        const previousSelection = new Set(annotator.selectedChips || []);
+        let nextSelection;
+        if (event?.ctrlKey || event?.metaKey) {
+            nextSelection = new Set(previousSelection);
+            if (nextSelection.has(index)) {
+                nextSelection.delete(index);
+            } else {
+                nextSelection.add(index);
+            }
+        } else if (event?.shiftKey || event?.altKey) {
+            nextSelection = new Set(previousSelection);
+            nextSelection.add(index);
+        } else {
+            nextSelection = new Set([index]);
+        }
+
+        annotator.selectionMode = 'chip';
+        annotator.selectedChips = nextSelection;
+        annotator.selectedChipsOrder = [
+            ...(Array.isArray(annotator.selectedChipsOrder)
+                ? annotator.selectedChipsOrder.filter((chipIndex) => nextSelection.has(chipIndex))
+                : []),
+            ...Array.from(nextSelection).filter((chipIndex) => !annotator.selectedChipsOrder?.includes?.(chipIndex)),
+        ];
+        annotator.render?.();
+        annotator.updateSelectedChipsList?.({ notifyViewer: false });
+        this._syncCoordinateSelectionListsFromSelectedChips();
+        this._activateCoordinateSelectionList('chip');
+        this._syncCoordinateSelectionMapButtons();
+        this._scheduleGridCoordinateSelectionOverlayRender?.(0);
+        return { selectedCount: nextSelection.size, chipIndex: index };
+    }
+
     async _handleGridShotBoundaryThumbClick(wrap, event) {
         if (!this._shouldInterceptGridShotBoundaryThumbEvent(wrap, event)) return false;
         const imagePath = wrap.dataset?.path || '';
@@ -32744,11 +32918,32 @@ class WaferMapViewer {
 
         const sourceSet = this._getGridCoordinateSelectionSourceSet();
         if (sourceSet.size && !sourceSet.has(sourceKey)) {
-            this.showToast?.('Coord 대상 wafer에서 Shot을 선택하세요.', 1800);
+            this.showToast?.('Coord 대상 wafer에서 선택하세요.', 1800);
             return false;
         }
 
         const data = await this._getGridShotBoundaryData(imagePath);
+        const mapList = this.coordinateSelectionMapMode?.listName || '';
+        if (mapList === 'chip') {
+            const chip = this._getGridChipBoundaryHit(wrap, event, data);
+            if (!chip) return false;
+            if (!this._sameImagePath(this._gridCoordinateTargetPath, imagePath)) {
+                const ready = await this._prepareGridCoordinateSelectionTarget(imagePath, {
+                    preserveSelectionState: null,
+                    restorePending: false,
+                });
+                if (!ready) {
+                    this.showToast?.('클릭한 wafer의 좌표 정보를 열 수 없습니다.', 1800);
+                    return false;
+                }
+                if (this._pendingGridRegionComposite) {
+                    this._pendingGridRegionComposite.targetPath = imagePath;
+                }
+            }
+            this._applyGridChipBoundaryClickSelection(chip, event);
+            return true;
+        }
+
         const group = this._getGridShotBoundaryHit(wrap, event, data);
         if (!group) return false;
 
@@ -33845,11 +34040,13 @@ class WaferMapViewer {
     }
 
     onManualChipSelection() {
+        this._syncCoordinateSelectionMapListFromSelection?.();
         if (!this.getChipLabelLegendClasses().length) return;
         this.applyChipLabelLegendFilter();
     }
 
     handleChipSelectionCleared() {
+        this._syncCoordinateSelectionMapListFromSelection?.({ clearWhenEmpty: true });
         if (!this.getChipLabelLegendClasses().length) return;
         this.applyChipLabelLegendFilter();
     }
@@ -37054,11 +37251,13 @@ class WaferMapViewer {
     }
 
     onManualChipSelection() {
+        this._syncCoordinateSelectionMapListFromSelection?.();
         if (!this.getChipLabelLegendClasses().length) return;
         this.applyChipLabelLegendFilter();
     }
 
     handleChipSelectionCleared() {
+        this._syncCoordinateSelectionMapListFromSelection?.({ clearWhenEmpty: true });
         if (!this.getChipLabelLegendClasses().length) return;
         this.applyChipLabelLegendFilter();
     }

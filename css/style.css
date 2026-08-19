@@ -3225,7 +3225,8 @@
             text-align: right;
         }
 
-        .coordinate-select-list-clear {
+        .coordinate-select-list-clear,
+        .coordinate-select-list-map {
             flex: 0 0 auto;
             padding: 2px 6px;
             background: #242424;
@@ -3238,11 +3239,19 @@
         }
 
         .coordinate-select-list-clear:hover,
-        .coordinate-select-list-clear:focus-visible {
+        .coordinate-select-list-clear:focus-visible,
+        .coordinate-select-list-map:hover,
+        .coordinate-select-list-map:focus-visible,
+        .coordinate-select-list-map.is-active {
             background: #333;
             color: #fff;
             border-color: #777;
             outline: none;
+        }
+
+        .coordinate-select-list-map.is-active {
+            background: #315f8f;
+            border-color: #4c8fd1;
         }
 
         .coordinate-select-quick-picker {
