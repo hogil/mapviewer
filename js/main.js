@@ -814,6 +814,7 @@ class WaferMapViewer {
             coordinateSelectRadiusRangeEnabled: document.getElementById('chip-coordinate-select-radius-range-enabled'),
             coordinateSelectRangeAdd: document.getElementById('chip-coordinate-select-range-add'),
             coordinateSelectRangeReset: document.getElementById('chip-coordinate-select-range-reset'),
+            coordinateSelectRangeTabs: document.getElementById('chip-coordinate-select-range-tabs'),
             coordinateSelectRangeFields: document.getElementById('chip-coordinate-select-range-fields'),
             coordinateSelectRangeStatus: document.getElementById('chip-coordinate-select-range-status'),
             coordinateSelectLiveStatus: document.getElementById('chip-coordinate-select-live-status'),
@@ -9259,6 +9260,8 @@ class WaferMapViewer {
         const fields = this.dom?.coordinateSelectRangeFields;
         if (!fields) return;
         fields.replaceChildren();
+        const tabHost = this.dom?.coordinateSelectRangeTabs;
+        tabHost?.replaceChildren();
         const chipConfig = this._getCoordinateSelectionRangeConfig('chip-pos');
         const radiusConfig = this._getCoordinateSelectionRangeConfig('radius');
         const rangeSets = this._ensureCoordinateSelectionRangeSets();
@@ -9274,7 +9277,7 @@ class WaferMapViewer {
         });
         this._syncPrimaryCoordinateSelectionRangeSet();
         const activeSetId = String(this.coordinateSelectionActiveRangeSetId || rangeSets[0]?.id || '');
-        const tabs = document.createElement('div');
+        const tabs = tabHost || document.createElement('div');
         tabs.className = 'coordinate-select-range-tabs';
         tabs.setAttribute('role', 'tablist');
         rangeSets.forEach((set, index) => {
@@ -9288,7 +9291,7 @@ class WaferMapViewer {
             tab.textContent = `Set ${index + 1}`;
             tabs.appendChild(tab);
         });
-        fields.appendChild(tabs);
+        if (!tabHost) fields.appendChild(tabs);
         const pages = document.createElement('div');
         pages.className = 'coordinate-select-range-pages';
         fields.appendChild(pages);
@@ -11945,16 +11948,19 @@ class WaferMapViewer {
         dom.coordinateSelectRangeFields?.addEventListener('input', (event) => {
             if (event.target.matches('[data-coordinate-range-axis][data-coordinate-range-bound]')) this._handleCoordinateSelectionRangeInput(event.target);
         });
-        dom.coordinateSelectRangeFields?.addEventListener('click', (event) => {
+        const handleCoordinateRangeTabClick = (event) => {
             const tabButton = event.target.closest?.('[data-coordinate-range-tab]');
-            if (tabButton) {
-                event.preventDefault();
-                event.stopPropagation();
-                this.coordinateSelectionActiveRangeSetId = tabButton.dataset.coordinateRangeTab || null;
-                this._syncPrimaryCoordinateSelectionRangeSet();
-                this._renderCoordinateSelectionRange();
-                return;
-            }
+            if (!tabButton) return false;
+            event.preventDefault();
+            event.stopPropagation();
+            this.coordinateSelectionActiveRangeSetId = tabButton.dataset.coordinateRangeTab || null;
+            this._syncPrimaryCoordinateSelectionRangeSet();
+            this._renderCoordinateSelectionRange();
+            return true;
+        };
+        dom.coordinateSelectRangeTabs?.addEventListener('click', handleCoordinateRangeTabClick);
+        dom.coordinateSelectRangeFields?.addEventListener('click', (event) => {
+            if (handleCoordinateRangeTabClick(event)) return;
             const clearButton = event.target.closest?.('[data-coordinate-range-clear]');
             if (clearButton) {
                 event.preventDefault();

@@ -3927,8 +3927,10 @@ const { createRunner } = require('./e2e_playwright_session');
       addButton: !!document.getElementById('chip-coordinate-select-range-add'),
       groups: document.querySelectorAll('#chip-coordinate-select-range-fields .coordinate-select-range-group').length,
       sets: document.querySelectorAll('#chip-coordinate-select-range-fields .coordinate-select-range-set').length,
-      tabs: document.querySelectorAll('#chip-coordinate-select-range-fields [data-coordinate-range-tab]').length,
-      activeTabs: document.querySelectorAll('#chip-coordinate-select-range-fields [data-coordinate-range-tab].is-active').length,
+      tabs: document.querySelectorAll('#chip-coordinate-select-range-tabs [data-coordinate-range-tab]').length,
+      fieldTabs: document.querySelectorAll('#chip-coordinate-select-range-fields [data-coordinate-range-tab]').length,
+      activeTabs: document.querySelectorAll('#chip-coordinate-select-range-tabs [data-coordinate-range-tab].is-active').length,
+      tabsAfterAdd: document.getElementById('chip-coordinate-select-range-tabs')?.previousElementSibling?.id === 'chip-coordinate-select-range-add',
       visibleSets: [...document.querySelectorAll('#chip-coordinate-select-range-fields .coordinate-select-range-set')]
         .filter((set) => !set.hidden).length,
       rows: document.querySelectorAll('#chip-coordinate-select-range-fields .coordinate-select-range-axis').length,
@@ -3945,7 +3947,8 @@ const { createRunner } = require('./e2e_playwright_session');
         .map((element) => element.textContent),
     }));
     expect(rangeStructure.addButton && rangeStructure.groups === 1 && rangeStructure.sets === 1 &&
-      rangeStructure.tabs === 1 && rangeStructure.activeTabs === 1 && rangeStructure.visibleSets === 1 &&
+      rangeStructure.tabs === 1 && rangeStructure.fieldTabs === 0 && rangeStructure.activeTabs === 1 &&
+      rangeStructure.tabsAfterAdd && rangeStructure.visibleSets === 1 &&
       rangeStructure.rows === 3 && rangeStructure.visibleRows === 3 && rangeStructure.sliders === 3 &&
       rangeStructure.valueGroups === 3 && rangeStructure.clearButtons.length === 1 &&
       rangeStructure.clearButtons[0].startsWith('set:') && rangeStructure.deleteButtons.length === 1 &&
@@ -3954,7 +3957,7 @@ const { createRunner } = require('./e2e_playwright_session');
       rangeStructure.labels.join('|') === 'Chip X(mm)|Chip Y(mm)|Radius(mm)',
     `Range controls should keep one default tab/page and one dual-handle rail per axis=${JSON.stringify(rangeStructure)}`);
     const setRangeNumber = async (setIndex, kind, axis, bound, value) => {
-      await page.locator('#chip-coordinate-select-range-fields [data-coordinate-range-tab]').nth(setIndex).click();
+      await page.locator('#chip-coordinate-select-range-tabs [data-coordinate-range-tab]').nth(setIndex).click();
       await page.locator('#chip-coordinate-select-range-fields .coordinate-select-range-set').nth(setIndex)
         .locator(`input[type="number"][data-coordinate-range-kind="${kind}"][data-coordinate-range-axis="${axis}"][data-coordinate-range-bound="${bound}"]`)
         .fill(String(value));
@@ -4016,7 +4019,8 @@ const { createRunner } = require('./e2e_playwright_session');
 
     const radiusRangeControls = await page.evaluate(() => ({
       setCount: document.querySelectorAll('#chip-coordinate-select-range-fields .coordinate-select-range-set').length,
-      tabCount: document.querySelectorAll('#chip-coordinate-select-range-fields [data-coordinate-range-tab]').length,
+      tabCount: document.querySelectorAll('#chip-coordinate-select-range-tabs [data-coordinate-range-tab]').length,
+      fieldTabCount: document.querySelectorAll('#chip-coordinate-select-range-fields [data-coordinate-range-tab]').length,
       visibleSetCount: [...document.querySelectorAll('#chip-coordinate-select-range-fields .coordinate-select-range-set')]
         .filter((set) => !set.hidden).length,
       chipInputCount: document.querySelectorAll('#chip-coordinate-select-range-fields input[data-coordinate-range-kind="chip"]').length,
@@ -4049,7 +4053,8 @@ const { createRunner } = require('./e2e_playwright_session');
         .map((input) => input.value),
     }));
     expect(radiusRangeControls.setCount === 1 &&
-      radiusRangeControls.tabCount === 1 && radiusRangeControls.visibleSetCount === 1 &&
+      radiusRangeControls.tabCount === 1 && radiusRangeControls.fieldTabCount === 0 &&
+      radiusRangeControls.visibleSetCount === 1 &&
       radiusRangeControls.chipInputCount === 8 && radiusRangeControls.radiusInputCount === 4 &&
       radiusRangeControls.sliderCount === 3 &&
       radiusRangeControls.labels.join('|') === 'Chip X(mm)|Chip Y(mm)|Radius(mm)' && radiusRangeSelection.selected === 1 &&
@@ -4084,8 +4089,9 @@ const { createRunner } = require('./e2e_playwright_session');
     const rangeOrSelection = await page.evaluate(() => ({
       selected: window.viewer?.chipAnnotator?.selectedChips?.size || 0,
       setCount: document.querySelectorAll('#chip-coordinate-select-range-fields .coordinate-select-range-set').length,
-      tabCount: document.querySelectorAll('#chip-coordinate-select-range-fields [data-coordinate-range-tab]').length,
-      activeTabs: document.querySelectorAll('#chip-coordinate-select-range-fields [data-coordinate-range-tab].is-active').length,
+      tabCount: document.querySelectorAll('#chip-coordinate-select-range-tabs [data-coordinate-range-tab]').length,
+      fieldTabCount: document.querySelectorAll('#chip-coordinate-select-range-fields [data-coordinate-range-tab]').length,
+      activeTabs: document.querySelectorAll('#chip-coordinate-select-range-tabs [data-coordinate-range-tab].is-active').length,
       visibleSetCount: [...document.querySelectorAll('#chip-coordinate-select-range-fields .coordinate-select-range-set')]
         .filter((set) => !set.hidden).length,
       status: document.getElementById('chip-coordinate-select-range-status')?.textContent || '',
@@ -4093,7 +4099,8 @@ const { createRunner } = require('./e2e_playwright_session');
       visibleRows: [...document.querySelectorAll('#chip-coordinate-select-range-fields .coordinate-select-range-set:not([hidden]) .coordinate-select-range-axis')].length,
     }));
     expect(rangeOrSelection.selected === 2 && rangeOrSelection.setCount === 2 &&
-      rangeOrSelection.tabCount === 2 && rangeOrSelection.activeTabs === 1 && rangeOrSelection.visibleSetCount === 1 &&
+      rangeOrSelection.tabCount === 2 && rangeOrSelection.fieldTabCount === 0 &&
+      rangeOrSelection.activeTabs === 1 && rangeOrSelection.visibleSetCount === 1 &&
       rangeOrSelection.rows === 6 && rangeOrSelection.visibleRows === 3 && rangeOrSelection.status.includes(' OR '),
     `Range sets should OR selected chips=${JSON.stringify(rangeOrSelection)}`);
 

@@ -253,6 +253,7 @@ argument-hint: [증상-설명]
 - 증상: Shot Position 3개만 선택한 selected Shot Composite에서 비선택 빈 slot이 quantile 0처럼 보이고, 선택된 position들이 모두 끝색처럼 보일 수 있다. wafer 선택 없이 top `Composite`를 눌러도 alert 창이 아니라 toast/기존 이미지 선택 문구만 보일 수 있다.
 - 원인: selected Shot canvas가 전체 canonical 영역을 grade 0으로 초기화했고, sum-map 최초 생성/recolor/subset/shot-local WTW가 selected 결과에서도 value range를 `0..max`로 clamp했다. top Composite no-selection은 `_toggleMcPanel()` toast 경로였다.
 - 수정 패턴: `_build_selected_shot_geometry()`는 base를 selected Shot 전용 흰색 index 23으로 시작하고 selected placement rect만 0으로 마킹한다. selected Chip/Shot Composite는 `quantile_clamp_min_to_zero=false`를 response/NPZ에 저장하고, `_save_sum_map_variants()`, `recolor_saved_sum_maps()`, `create_subset_map()`, `_render_shot_local_square_weighted_entry()` 모두 selected mask의 실제 finite min/max를 사용한다. 일반 wafer Composite는 기존 `0..max`를 유지한다. selected Shot output에는 `selected_shot_display.json`을 저장하고 `/api/image`와 thumbnail PLTE 패치 뒤에도 empty slot index 23을 흰색으로 되돌린다. no-wafer Composite는 `wafer를 선택하세요.` alert를 띄운다.
+- 주의: `api/composite_map.py` 계산 결과가 맞아도 `api/full_app.py` status response allow-list가 `quantile_clamp_min_to_zero`를 빠뜨리면 E2E에서는 selected quantile 계약이 깨진 것으로 보인다. selected response metadata를 추가할 때 allow-list를 같이 확인한다.
 - E2E 신호: `8,9,10,11`은 no-wafer top Composite alert와 `#mc-panel` 미표시를 확인한다. `selected-region-composite`는 selected result의 `quantile_clamp_min_to_zero === false`와 partial Shot 빈 slot 중심 pixel이 palette index 23 흰색과 일치하고 선택 slot들이 선택된 값끼리 여러 quantile 색으로 분포하는지 확인한다.
 
 ### Coordinate Map structure-only selector / range rail guard (2026-08-19)
@@ -285,6 +286,6 @@ argument-hint: [증상-설명]
 
 ### Coord range OR set guard (2026-08-20)
 
-- 증상: Chip X/Y와 Radius range가 단일 AND 필터만 제공하면 떨어진 여러 chip 영역을 한 번에 고르기 어렵고, Chip 범위와 Radius 범위가 별도 group으로 보이면 같은 조건 set인지 혼동된다. 여러 set을 세로 카드로 계속 쌓으면 Coord panel이 길어진다.
-- 수정 패턴: Coord range UI는 기본 `Set 1` tab/page를 항상 가진다. `Add`는 새 tab/page를 만들고 활성 tab을 이동하되, 새 full-range set을 즉시 OR 적용해 선택을 바꾸지 않는다. 한 page 안에는 `Chip X(mm)`, `Chip Y(mm)`, `Radius(mm)` 3축을 세로 한 열로 두고 AND로 평가한다. 여러 set은 OR로 합친다. 기존 Shot/Chip/Shot Position list가 있으면 list match를 base로 두고 `(base) AND (set1 OR set2 ...)`로 계산한다. 마지막 set은 삭제하지 않는다.
-- E2E 신호: `coordinate-selection-cells`는 기본 Set 1 tab/page, 마지막 delete disabled, Add 후 tab 2개/visible page 1개, 2개 set OR로 서로 다른 chip 2개 선택, Shot list base와 range set AND, set Clear 후 base selection 복원을 확인한다.
+- 증상: Chip X/Y와 Radius range가 단일 AND 필터만 제공하면 떨어진 여러 chip 영역을 한 번에 고르기 어렵고, Chip 범위와 Radius 범위가 별도 group으로 보이면 같은 조건 set인지 혼동된다. 여러 set tab을 field 영역에 넣으면 panel에 불필요한 세로 줄이 생긴다.
+- 수정 패턴: Coord range UI는 기본 `Set 1` tab/page를 항상 가진다. `Set 1`, `Set 2` tab은 field 영역이 아니라 `Add` 바로 옆 액션 줄에 둔다. `Add`는 새 tab/page를 만들고 활성 tab을 이동하되, 새 full-range set을 즉시 OR 적용해 선택을 바꾸지 않는다. 한 page 안에는 `Chip X(mm)`, `Chip Y(mm)`, `Radius(mm)` 3축을 세로 한 열로 두고 AND로 평가한다. 여러 set은 OR로 합친다. 기존 Shot/Chip/Shot Position list가 있으면 list match를 base로 두고 `(base) AND (set1 OR set2 ...)`로 계산한다. 마지막 set은 삭제하지 않는다.
+- E2E 신호: `coordinate-selection-cells`는 기본 Set 1 tab/page, tab container가 `Add` 바로 뒤에 있고 field 영역에 tab이 없는지, 마지막 delete disabled, Add 후 tab 2개/visible page 1개, 2개 set OR로 서로 다른 chip 2개 선택, Shot list base와 range set AND, set Clear 후 base selection 복원을 확인한다.

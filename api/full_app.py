@@ -11451,6 +11451,7 @@ async def create_composite_map_endpoint(
                         "selection_top_grades",
                         "selection_chip_inner_pixels",
                         "composite_sample_count",
+                        "quantile_clamp_min_to_zero",
                     ):
                         if key in result:
                             response[key] = result[key]
