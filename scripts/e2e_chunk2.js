@@ -4734,7 +4734,7 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(gridContextShotSelectNoCoordBefore.text === 'Coord 선택' &&
       gridContextShotSelectNoCoordBefore.coordInSelectionSubmenu &&
       gridContextShotSelectNoCoordBefore.coordTopLevelCount === 0 &&
-      gridContextShotSelectNoCoordBefore.selectionMenuText === 'Coord/Wafer/Shot/Chip 선택 ▸' &&
+      gridContextShotSelectNoCoordBefore.selectionMenuText === 'Wafer/Shot/Chip 선택 ▸' &&
       gridContextShotSelectNoCoordBefore.selectionMenuVisible &&
       gridContextShotSelectNoCoordBefore.selectionSubmenuHidden &&
       gridContextShotSelectNoCoordBefore.directShotText === 'Shot 선택' &&
@@ -4749,7 +4749,7 @@ const { createRunner } = require('./e2e_playwright_session');
       gridContextShotSelectNoCoordBefore.chipCompositeText === '🔲 Chip Composite' &&
       gridContextShotSelectNoCoordBefore.chipCompositeVisible &&
       gridContextShotSelectNoCoordBefore.actionOrder.join('|') ===
-        'context-set-ref-map|grid-direct-selection-menu|grid-selected-region-composite-create|grid-shot-local-square-weighted-create|grid-chip-composite-create' &&
+        'context-set-ref-map|grid-selected-region-composite-create|grid-shot-local-square-weighted-create|grid-chip-composite-create|grid-direct-selection-menu' &&
       gridContextShotSelectNoCoordBefore.modalHidden &&
       gridContextShotSelectNoCoordAfter.modalVisible &&
       gridContextShotSelectNoCoordAfter.gridMode &&
