@@ -15557,6 +15557,20 @@ class WaferMapViewer {
 
         const selected = Array.isArray(this.gridSelectedIdxs) ? this.gridSelectedIdxs : [];
         const preserveExistingIfSelected = options.preserveExistingIfSelected !== false;
+        const addToExisting = options.addToExisting === true;
+        if (addToExisting) {
+            const normalized = selected
+                .filter((idx) => Number.isInteger(idx) && idx >= 0 && idx < this.currentGridImages.length);
+            if (!normalized.includes(index)) {
+                normalized.push(index);
+            }
+            normalized.sort((a, b) => a - b);
+            this.gridSelectedIdxs = normalized.filter((idx, idxPos, arr) => arr.indexOf(idx) === idxPos);
+            this.gridSelectedSet = new Set(this.gridSelectedIdxs);
+            this.gridLastClickedIdx = index;
+            this.updateGridSelection();
+            return true;
+        }
         if (preserveExistingIfSelected && selected.includes(index)) {
             const normalized = selected
                 .filter((idx) => Number.isInteger(idx) && idx >= 0 && idx < this.currentGridImages.length)
@@ -16062,9 +16076,20 @@ class WaferMapViewer {
             this.showToast?.('선택할 wafer를 찾을 수 없습니다.', 1600);
             return false;
         }
+        this.gridDirectSelectionMode = null;
+        this.gridDirectSelectionSourceSet?.clear?.();
+        this.gridDirectSelectionHover = null;
+        this._gridDirectSelectionHoverSeq = (this._gridDirectSelectionHoverSeq || 0) + 1;
         this._ensureGridWaferIndexSelected(index, { preserveExistingIfSelected: false });
+        this._scheduleGridCoordinateSelectionOverlayRender?.(0);
         this.showToast?.('1개 Wafer 선택', 1200);
         return true;
+    }
+
+    _getGridDirectSelectionActiveMode() {
+        return this.gridDirectSelectionMode === 'shot' || this.gridDirectSelectionMode === 'chip'
+            ? this.gridDirectSelectionMode
+            : 'wafer';
     }
 
     _ensureGridDirectSelectionSubmenu(contextMenu) {
@@ -16124,11 +16149,12 @@ class WaferMapViewer {
 
         parentItem.style.setProperty('display', 'block', 'important');
         document.getElementById('grid-shot-coordinate-select-open')?.remove();
+        const activeMode = this._getGridDirectSelectionActiveMode();
         [
-            ['grid-direct-shot-select', 'Shot 선택', 'Coord와 무관하게 각 wafer thumbnail에서 Shot을 직접 선택합니다.', () => this._setGridDirectSelectionMode('shot')],
-            ['grid-direct-chip-select', 'Chip 선택', 'Coord와 무관하게 각 wafer thumbnail에서 Chip을 직접 선택합니다.', () => this._setGridDirectSelectionMode('chip')],
-            ['grid-direct-wafer-select', 'Wafer 선택', '우클릭한 wafer 하나만 선택합니다.', () => this._selectGridContextTargetWafer()],
-        ].forEach(([id, text, title, handler]) => {
+            ['grid-direct-wafer-select', 'wafer', 'Wafer 선택', '우클릭한 wafer 하나만 선택합니다.', () => this._selectGridContextTargetWafer()],
+            ['grid-direct-shot-select', 'shot', 'Shot 선택', 'Coord와 무관하게 각 wafer thumbnail에서 Shot을 직접 선택합니다.', () => this._setGridDirectSelectionMode('shot')],
+            ['grid-direct-chip-select', 'chip', 'Chip 선택', 'Coord와 무관하게 각 wafer thumbnail에서 Chip을 직접 선택합니다.', () => this._setGridDirectSelectionMode('chip')],
+        ].forEach(([id, mode, text, title, handler]) => {
             let item = document.getElementById(id);
             if (!item) {
                 item = document.createElement('div');
@@ -16138,12 +16164,15 @@ class WaferMapViewer {
                 submenu.appendChild(item);
             }
             if (!item) return;
-            if (item.parentElement !== submenu) {
-                submenu.appendChild(item);
-            }
+            submenu.appendChild(item);
+            const active = activeMode === mode;
             item.style.setProperty('display', 'block', 'important');
-            item.textContent = text;
+            item.textContent = active ? `✓ ${text}` : text;
             item.title = title;
+            item.dataset.directSelectionMode = mode;
+            item.dataset.directSelectionActive = active ? 'true' : 'false';
+            item.style.background = active ? '#3a3a3a' : '';
+            item.style.fontWeight = active ? '600' : '';
             item.onclick = (clickEvent) => {
                 clickEvent?.preventDefault?.();
                 clickEvent?.stopPropagation?.();
@@ -33781,7 +33810,7 @@ class WaferMapViewer {
         return this._applyCoordinateSelectionLive({ forceClear: true });
     }
 
-    _applyGridDirectShotBoundaryClickSelection(group, event) {
+    _applyGridDirectShotBoundaryClickSelection(group, event, options = {}) {
         const annotator = this.chipAnnotator;
         const shotX = Number(group?.shotX);
         const shotY = Number(group?.shotY);
@@ -33802,7 +33831,7 @@ class WaferMapViewer {
             nextSelection = new Set(previousSelection);
             const allSelected = matchedIndices.every((index) => nextSelection.has(index));
             matchedIndices.forEach((index) => {
-                if (allSelected) nextSelection.delete(index);
+                if (allSelected && options.preserveSelectedOnNewSource !== true) nextSelection.delete(index);
                 else nextSelection.add(index);
             });
         } else if (event?.shiftKey || event?.altKey) {
@@ -33845,7 +33874,9 @@ class WaferMapViewer {
         if (event?.ctrlKey || event?.metaKey) {
             nextSelection = new Set(previousSelection);
             if (nextSelection.has(index)) {
-                nextSelection.delete(index);
+                if (options.preserveSelectedOnNewSource !== true) {
+                    nextSelection.delete(index);
+                }
             } else {
                 nextSelection.add(index);
             }
@@ -33886,11 +33917,20 @@ class WaferMapViewer {
             : null;
         if (directMode) {
             const wrapIndex = Number(wrap.dataset?.index);
-            this._ensureGridWaferIndexSelected(wrapIndex, { preserveExistingIfSelected: true });
+            const additiveDirect = !!(event?.ctrlKey || event?.metaKey || event?.shiftKey || event?.altKey);
+            const previousSourceSet = this.gridDirectSelectionSourceSet instanceof Set
+                ? new Set(this.gridDirectSelectionSourceSet)
+                : new Set();
+            const preserveSelectedOnNewSource = !!((event?.ctrlKey || event?.metaKey) && !previousSourceSet.has(sourceKey));
+            const preservedDirectSelection = this._captureGridDirectSelectionState();
+            this._ensureGridWaferIndexSelected(wrapIndex, {
+                preserveExistingIfSelected: true,
+                addToExisting: additiveDirect,
+            });
             const data = await this._getGridShotBoundaryData(imagePath);
             if (!this._sameImagePath(this._gridCoordinateTargetPath, imagePath)) {
                 const ready = await this._prepareGridCoordinateSelectionTarget(imagePath, {
-                    preserveSelectionState: null,
+                    preserveSelectionState: preservedDirectSelection,
                     restorePending: false,
                 });
                 if (!ready) {
@@ -33902,14 +33942,21 @@ class WaferMapViewer {
             if (directMode === 'chip') {
                 const chip = this._getGridChipBoundaryHit(wrap, event, data);
                 if (!chip) return false;
-                result = this._applyGridChipBoundaryClickSelection(chip, event, { syncCoordinate: false });
+                result = this._applyGridChipBoundaryClickSelection(chip, event, {
+                    syncCoordinate: false,
+                    preserveSelectedOnNewSource,
+                });
             } else {
                 const group = this._getGridShotBoundaryHit(wrap, event, data);
                 if (!group) return false;
-                result = this._applyGridDirectShotBoundaryClickSelection(group, event);
+                result = this._applyGridDirectShotBoundaryClickSelection(group, event, {
+                    preserveSelectedOnNewSource,
+                });
             }
             if (!result) return false;
-            this.gridDirectSelectionSourceSet = new Set([sourceKey]);
+            const nextSourceSet = additiveDirect ? previousSourceSet : new Set();
+            nextSourceSet.add(sourceKey);
+            this.gridDirectSelectionSourceSet = nextSourceSet;
             this._scheduleGridCoordinateSelectionOverlayRender?.(0);
             this.updateGridSelection?.();
             return true;
@@ -34526,6 +34573,40 @@ class WaferMapViewer {
         return keys;
     }
 
+    _captureGridDirectSelectionState() {
+        const annotator = this.chipAnnotator;
+        if (!annotator?.chips?.length || !(annotator.selectedChips instanceof Set) || annotator.selectedChips.size === 0) {
+            return null;
+        }
+
+        const seen = new Set();
+        const coords = [];
+        const pushCoord = (index) => {
+            const chip = annotator.chips?.[index];
+            const xAbs = Number(chip?.x_abs ?? chip?.x);
+            const yAbs = Number(chip?.y_abs ?? chip?.y);
+            if (!Number.isFinite(xAbs) || !Number.isFinite(yAbs)) return;
+            const key = `${xAbs}:${yAbs}`;
+            if (seen.has(key)) return;
+            seen.add(key);
+            coords.push({ x_abs: xAbs, y_abs: yAbs });
+        };
+
+        if (Array.isArray(annotator.selectedChipsOrder)) {
+            annotator.selectedChipsOrder
+                .filter((index) => annotator.selectedChips.has(index))
+                .forEach(pushCoord);
+        }
+        annotator.selectedChips.forEach(pushCoord);
+        if (!coords.length) return null;
+
+        return {
+            selectionMode: annotator.selectionMode === 'shot' ? 'shot' : 'chip',
+            shotBoundaryVisible: false,
+            coords,
+        };
+    }
+
     _findGridAnnotatorChipByAbsCoords(xAbs, yAbs) {
         const annotator = this.chipAnnotator;
         const x = Number(xAbs);
@@ -34632,8 +34713,9 @@ class WaferMapViewer {
         const data = await this._getGridShotBoundaryData(imagePath);
         if (hoverSeq !== this._gridDirectSelectionHoverSeq || this.gridDirectSelectionMode !== mode) return;
         if (!this._sameImagePath(this._gridCoordinateTargetPath, imagePath)) {
+            const preservedDirectSelection = this._captureGridDirectSelectionState();
             const ready = await this._prepareGridCoordinateSelectionTarget(imagePath, {
-                preserveSelectionState: null,
+                preserveSelectionState: preservedDirectSelection,
                 restorePending: false,
             });
             if (!ready || hoverSeq !== this._gridDirectSelectionHoverSeq || this.gridDirectSelectionMode !== mode) {

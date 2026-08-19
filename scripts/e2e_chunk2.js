@@ -4542,7 +4542,10 @@ const { createRunner } = require('./e2e_playwright_session');
       directShotText: document.getElementById('grid-direct-shot-select')?.textContent?.trim() || '',
       directChipText: document.getElementById('grid-direct-chip-select')?.textContent?.trim() || '',
       directWaferText: document.getElementById('grid-direct-wafer-select')?.textContent?.trim() || '',
-      directItemsInSubmenu: ['grid-direct-shot-select', 'grid-direct-chip-select', 'grid-direct-wafer-select']
+      directItemOrder: [...document.querySelectorAll('#grid-direct-selection-submenu > .context-menu-item')]
+        .map((item) => item.id),
+      directActiveItemId: document.querySelector('#grid-direct-selection-submenu > .context-menu-item[data-direct-selection-active="true"]')?.id || '',
+      directItemsInSubmenu: ['grid-direct-wafer-select', 'grid-direct-shot-select', 'grid-direct-chip-select']
         .every((id) => document.getElementById(id)?.parentElement?.id === 'grid-direct-selection-submenu'),
       directTopLevelCount: [...document.querySelectorAll('#grid-context-menu > #grid-direct-shot-select, #grid-context-menu > #grid-direct-chip-select, #grid-context-menu > #grid-direct-wafer-select')].length,
       shotCompositeText: document.getElementById('grid-selected-region-composite-create')?.textContent?.trim() || '',
@@ -4604,6 +4607,8 @@ const { createRunner } = require('./e2e_playwright_session');
         x: rect.left + offsetX + (group.minX + group.width / 2) * scale,
         y: rect.top + offsetY + (group.minY + group.height / 2) * scale,
         chipCount: group.chipCount,
+        shotX: Number(group.shotX),
+        shotY: Number(group.shotY),
       };
     }, { imagePath: target.imagePath });
     expect(gridDirectShotPoint.ok, `grid direct shot click point=${JSON.stringify(gridDirectShotPoint)}`);
@@ -4670,6 +4675,74 @@ const { createRunner } = require('./e2e_playwright_session');
       gridDirectShotAfter.overlay.maxSelectedChipCount === gridDirectShotPoint.chipCount &&
       gridDirectShotAfter.selectedChips === gridDirectShotPoint.chipCount,
     `grid direct Shot selection should not open Coord or create pending source=${JSON.stringify({ gridDirectShotHover, gridDirectShotAfter })}`);
+    const gridDirectSecondShotPoint = await page.evaluate(async ({ imagePath, shotX, shotY }) => {
+      const v = window.viewer;
+      const pathKey = v?.normalizePath?.(imagePath);
+      const wrap = Array.from(document.querySelectorAll('#image-grid .grid-thumb-wrap'))
+        .find((candidate) => v?.normalizePath?.(candidate.dataset.path || '') === pathKey);
+      if (!v || !pathKey || !wrap) return { ok: false, reason: 'missing wrap' };
+      wrap.scrollIntoView({ block: 'center', inline: 'nearest' });
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      v._scheduleGridCoordinateSelectionOverlayRender?.(0);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const data = await v._getGridShotBoundaryData?.(imagePath);
+      const groups = data?.groups || [];
+      const group = groups.find((candidate) =>
+        Number(candidate.shotX) === Number(shotX) &&
+        Number(candidate.shotY) === Number(shotY) &&
+        Number(candidate.chipCount || 0) > 0
+      );
+      const thumbBox = wrap.querySelector('.grid-thumb-imgbox');
+      const rect = thumbBox?.getBoundingClientRect?.();
+      if (!data?.canvasWidth || !data?.canvasHeight || !group || !rect) return { ok: false, reason: 'missing same shot' };
+      const scale = Math.min(rect.width / data.canvasWidth, rect.height / data.canvasHeight);
+      const offsetX = (rect.width - data.canvasWidth * scale) / 2;
+      const offsetY = (rect.height - data.canvasHeight * scale) / 2;
+      return {
+        ok: true,
+        x: rect.left + offsetX + (group.minX + group.width / 2) * scale,
+        y: rect.top + offsetY + (group.minY + group.height / 2) * scale,
+        chipCount: group.chipCount,
+      };
+    }, { imagePath: gridCoordSecond.imagePath, shotX: gridDirectShotPoint.shotX, shotY: gridDirectShotPoint.shotY });
+    expect(gridDirectSecondShotPoint.ok, `grid direct second shot click point=${JSON.stringify(gridDirectSecondShotPoint)}`);
+    await page.keyboard.down('Control');
+    try {
+      await page.mouse.click(gridDirectSecondShotPoint.x, gridDirectSecondShotPoint.y);
+    } finally {
+      await page.keyboard.up('Control');
+    }
+    await page.waitForFunction(
+      ({ chipCount, firstIndex, secondIndex }) => window.viewer?.gridDirectSelectionMode === 'shot' &&
+        window.viewer?.gridDirectSelectionSourceSet?.size === 2 &&
+        window.viewer?.chipAnnotator?.selectedChips?.size === chipCount &&
+        window.viewer?.gridSelectedIdxs?.includes(firstIndex) &&
+        window.viewer?.gridSelectedIdxs?.includes(secondIndex) &&
+        Array.from(document.querySelectorAll('.grid-coordinate-selection-overlay'))
+          .some((canvas) => canvas.dataset.coordinateOverlayRendered === 'true' &&
+            Number(canvas.dataset.coordinateSelectedChipCount || '0') === chipCount),
+      { chipCount: gridDirectShotPoint.chipCount, firstIndex: target.index, secondIndex: gridCoordSecond.index },
+      { timeout: 30000 }
+    );
+    const gridDirectShotCtrlSecondAfter = await page.evaluate(() => ({
+      mode: window.viewer?.gridDirectSelectionMode || '',
+      directSourceCount: window.viewer?.gridDirectSelectionSourceSet?.size || 0,
+      selectedChips: window.viewer?.chipAnnotator?.selectedChips?.size || 0,
+      selectedIdxs: [...(window.viewer?.gridSelectedIdxs || [])].sort((a, b) => a - b),
+      selectedWraps: Array.from(document.querySelectorAll('#image-grid .grid-thumb-wrap.selected'))
+        .map((wrap) => Number(wrap.dataset.index))
+        .sort((a, b) => a - b),
+      modalHidden: getComputedStyle(document.getElementById('chip-coordinate-select-modal')).display === 'none',
+    }));
+    expect(gridDirectShotCtrlSecondAfter.mode === 'shot' &&
+      gridDirectShotCtrlSecondAfter.directSourceCount === 2 &&
+      gridDirectShotCtrlSecondAfter.selectedChips === gridDirectShotPoint.chipCount &&
+      gridDirectShotCtrlSecondAfter.selectedIdxs.includes(target.index) &&
+      gridDirectShotCtrlSecondAfter.selectedIdxs.includes(gridCoordSecond.index) &&
+      gridDirectShotCtrlSecondAfter.selectedWraps.includes(target.index) &&
+      gridDirectShotCtrlSecondAfter.selectedWraps.includes(gridCoordSecond.index) &&
+      gridDirectShotCtrlSecondAfter.modalHidden,
+      `grid direct Shot Ctrl on another wafer must preserve Shot selection=${JSON.stringify(gridDirectShotCtrlSecondAfter)}`);
     await page.locator('#image-grid .grid-thumb-wrap').nth(target.index).click({ button: 'right' });
     await page.waitForFunction(
       () => getComputedStyle(document.getElementById('grid-context-menu')).display !== 'none' &&
@@ -4683,6 +4756,22 @@ const { createRunner } = require('./e2e_playwright_session');
       null,
       { timeout: 10000 }
     );
+    const gridDirectShotMenuState = await page.evaluate(() => ({
+      directShotText: document.getElementById('grid-direct-shot-select')?.textContent?.trim() || '',
+      directChipText: document.getElementById('grid-direct-chip-select')?.textContent?.trim() || '',
+      directWaferText: document.getElementById('grid-direct-wafer-select')?.textContent?.trim() || '',
+      directItemOrder: [...document.querySelectorAll('#grid-direct-selection-submenu > .context-menu-item')]
+        .map((item) => item.id),
+      directActiveItemId: document.querySelector('#grid-direct-selection-submenu > .context-menu-item[data-direct-selection-active="true"]')?.id || '',
+      mode: window.viewer?.gridDirectSelectionMode || '',
+    }));
+    expect(gridDirectShotMenuState.mode === 'shot' &&
+      gridDirectShotMenuState.directShotText === '✓ Shot 선택' &&
+      gridDirectShotMenuState.directChipText === 'Chip 선택' &&
+      gridDirectShotMenuState.directWaferText === 'Wafer 선택' &&
+      gridDirectShotMenuState.directActiveItemId === 'grid-direct-shot-select' &&
+      gridDirectShotMenuState.directItemOrder.join('|') === 'grid-direct-wafer-select|grid-direct-shot-select|grid-direct-chip-select',
+      `grid direct submenu must mark Shot mode=${JSON.stringify(gridDirectShotMenuState)}`);
     await page.locator('#grid-direct-chip-select').click();
     await page.waitForFunction(
       () => window.viewer?.gridMode === true &&
@@ -4718,6 +4807,80 @@ const { createRunner } = require('./e2e_playwright_session');
       gridDirectChipAfter.selectedWraps.includes(target.index) &&
       gridDirectChipAfter.directSourceCount === 1,
       `grid direct Chip selection should select wafer and show overlay=${JSON.stringify(gridDirectChipAfter)}`);
+    const gridDirectChipSelectedCoord = await page.evaluate(() => {
+      const v = window.viewer;
+      const selectedIndex = [...(v?.chipAnnotator?.selectedChips || [])][0];
+      const chip = v?.chipAnnotator?.chips?.[selectedIndex];
+      return {
+        xAbs: Number(chip?.x_abs ?? chip?.x),
+        yAbs: Number(chip?.y_abs ?? chip?.y),
+      };
+    });
+    expect(Number.isFinite(gridDirectChipSelectedCoord.xAbs) && Number.isFinite(gridDirectChipSelectedCoord.yAbs),
+      `grid direct chip selected coord missing=${JSON.stringify(gridDirectChipSelectedCoord)}`);
+    const gridDirectSecondChipPoint = await page.evaluate(async ({ imagePath, xAbs, yAbs }) => {
+      const v = window.viewer;
+      const pathKey = v?.normalizePath?.(imagePath);
+      const wrap = Array.from(document.querySelectorAll('#image-grid .grid-thumb-wrap'))
+        .find((candidate) => v?.normalizePath?.(candidate.dataset.path || '') === pathKey);
+      if (!v || !pathKey || !wrap) return { ok: false, reason: 'missing wrap' };
+      wrap.scrollIntoView({ block: 'center', inline: 'nearest' });
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const data = await v._getGridShotBoundaryData?.(imagePath);
+      const chip = (data?.chips || []).find((candidate) =>
+        Number(candidate.xAbs) === Number(xAbs) &&
+        Number(candidate.yAbs) === Number(yAbs)
+      );
+      const thumbBox = wrap.querySelector('.grid-thumb-imgbox');
+      const rect = thumbBox?.getBoundingClientRect?.();
+      if (!data?.canvasWidth || !data?.canvasHeight || !chip || !rect) return { ok: false, reason: 'missing same chip' };
+      const scale = Math.min(rect.width / data.canvasWidth, rect.height / data.canvasHeight);
+      const offsetX = (rect.width - data.canvasWidth * scale) / 2;
+      const offsetY = (rect.height - data.canvasHeight * scale) / 2;
+      return {
+        ok: true,
+        x: rect.left + offsetX + (chip.minX + chip.width / 2) * scale,
+        y: rect.top + offsetY + (chip.minY + chip.height / 2) * scale,
+      };
+    }, { imagePath: gridCoordSecond.imagePath, ...gridDirectChipSelectedCoord });
+    expect(gridDirectSecondChipPoint.ok, `grid direct second chip click point=${JSON.stringify(gridDirectSecondChipPoint)}`);
+    await page.keyboard.down('Control');
+    try {
+      await page.mouse.click(gridDirectSecondChipPoint.x, gridDirectSecondChipPoint.y);
+    } finally {
+      await page.keyboard.up('Control');
+    }
+    await page.waitForFunction(
+      ({ firstIndex, secondIndex }) => window.viewer?.gridDirectSelectionMode === 'chip' &&
+        window.viewer?.gridDirectSelectionSourceSet?.size === 2 &&
+        window.viewer?.chipAnnotator?.selectedChips?.size === 1 &&
+        window.viewer?.gridSelectedIdxs?.includes(firstIndex) &&
+        window.viewer?.gridSelectedIdxs?.includes(secondIndex) &&
+        Array.from(document.querySelectorAll('.grid-coordinate-selection-overlay'))
+          .some((canvas) => canvas.dataset.coordinateOverlayRendered === 'true' &&
+            Number(canvas.dataset.coordinateSelectedChipCount || '0') === 1),
+      { firstIndex: target.index, secondIndex: gridCoordSecond.index },
+      { timeout: 30000 }
+    );
+    const gridDirectChipCtrlSecondAfter = await page.evaluate(() => ({
+      mode: window.viewer?.gridDirectSelectionMode || '',
+      directSourceCount: window.viewer?.gridDirectSelectionSourceSet?.size || 0,
+      selectedChips: window.viewer?.chipAnnotator?.selectedChips?.size || 0,
+      selectedIdxs: [...(window.viewer?.gridSelectedIdxs || [])].sort((a, b) => a - b),
+      selectedWraps: Array.from(document.querySelectorAll('#image-grid .grid-thumb-wrap.selected'))
+        .map((wrap) => Number(wrap.dataset.index))
+        .sort((a, b) => a - b),
+      modalHidden: getComputedStyle(document.getElementById('chip-coordinate-select-modal')).display === 'none',
+    }));
+    expect(gridDirectChipCtrlSecondAfter.mode === 'chip' &&
+      gridDirectChipCtrlSecondAfter.directSourceCount === 2 &&
+      gridDirectChipCtrlSecondAfter.selectedChips === 1 &&
+      gridDirectChipCtrlSecondAfter.selectedIdxs.includes(target.index) &&
+      gridDirectChipCtrlSecondAfter.selectedIdxs.includes(gridCoordSecond.index) &&
+      gridDirectChipCtrlSecondAfter.selectedWraps.includes(target.index) &&
+      gridDirectChipCtrlSecondAfter.selectedWraps.includes(gridCoordSecond.index) &&
+      gridDirectChipCtrlSecondAfter.modalHidden,
+      `grid direct Chip Ctrl on another wafer must preserve Chip selection=${JSON.stringify(gridDirectChipCtrlSecondAfter)}`);
     await page.locator('#grid-coordinate-select-open-btn').click();
     await page.waitForFunction(
       () => window.viewer?.gridMode === true &&
@@ -4750,7 +4913,10 @@ const { createRunner } = require('./e2e_playwright_session');
       gridContextShotSelectNoCoordBefore.selectionSubmenuHidden &&
       gridContextShotSelectNoCoordBefore.directShotText === 'Shot 선택' &&
       gridContextShotSelectNoCoordBefore.directChipText === 'Chip 선택' &&
-      gridContextShotSelectNoCoordBefore.directWaferText === 'Wafer 선택' &&
+      gridContextShotSelectNoCoordBefore.directWaferText === '✓ Wafer 선택' &&
+      gridContextShotSelectNoCoordBefore.directActiveItemId === 'grid-direct-wafer-select' &&
+      gridContextShotSelectNoCoordBefore.directItemOrder.join('|') ===
+        'grid-direct-wafer-select|grid-direct-shot-select|grid-direct-chip-select' &&
       gridContextShotSelectNoCoordBefore.directItemsInSubmenu &&
       gridContextShotSelectNoCoordBefore.directTopLevelCount === 0 &&
       gridContextShotSelectNoCoordBefore.shotCompositeText === '🎯 Shot Composite' &&
