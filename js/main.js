@@ -24696,6 +24696,18 @@ class WaferMapViewer {
             this.showContextMenu(e, idx);
         };
 
+        const interceptGridShotClick = (event) => {
+            if (!this._shouldInterceptGridShotBoundaryThumbEvent?.(wrap, event)) return;
+            event.preventDefault();
+            event.stopPropagation();
+            if (event.type === 'click' && (!event.detail || event.detail <= 1)) {
+                void this._handleGridShotBoundaryThumbClick?.(wrap, event);
+            }
+        };
+        wrap.addEventListener('mousedown', interceptGridShotClick, true);
+        wrap.addEventListener('click', interceptGridShotClick, true);
+        wrap.addEventListener('dblclick', interceptGridShotClick, true);
+
         const thumbBox = document.createElement('div');
         thumbBox.className = 'grid-thumb-imgbox';
 
@@ -32648,6 +32660,127 @@ class WaferMapViewer {
         });
     }
 
+    _shouldInterceptGridShotBoundaryThumbEvent(wrap, event) {
+        if (!wrap || !event || this.gridMode !== true || this.viewMode === 'gridImage') return false;
+        if (this.gridShotBoundaryVisible !== true || this.isCoordinateSelectionOpen !== true) return false;
+        if (typeof event.button === 'number' && event.button !== 0) return false;
+        const thumbBox = event.target?.closest?.('.grid-thumb-imgbox');
+        return !!thumbBox && wrap.contains(thumbBox);
+    }
+
+    _getGridShotBoundaryHit(wrap, event, data) {
+        if (!wrap || !event || !data?.groups?.length || !(data.canvasWidth > 0) || !(data.canvasHeight > 0)) return null;
+        const thumbBox = wrap.querySelector('.grid-thumb-imgbox');
+        if (!thumbBox) return null;
+        const rect = thumbBox.getBoundingClientRect();
+        const cssWidth = Math.max(1, rect.width || thumbBox.clientWidth || 0);
+        const cssHeight = Math.max(1, rect.height || thumbBox.clientHeight || 0);
+        if (cssWidth <= 1 || cssHeight <= 1) return null;
+        const scale = Math.min(cssWidth / data.canvasWidth, cssHeight / data.canvasHeight);
+        if (!(scale > 0)) return null;
+        const offsetX = (cssWidth - data.canvasWidth * scale) / 2;
+        const offsetY = (cssHeight - data.canvasHeight * scale) / 2;
+        const localX = Number(event.clientX) - rect.left;
+        const localY = Number(event.clientY) - rect.top;
+        const waferX = (localX - offsetX) / scale;
+        const waferY = (localY - offsetY) / scale;
+        if (!Number.isFinite(waferX) || !Number.isFinite(waferY)) return null;
+
+        return data.groups
+            .filter((group) =>
+                waferX >= Number(group.minX) &&
+                waferX <= Number(group.maxX) &&
+                waferY >= Number(group.minY) &&
+                waferY <= Number(group.maxY)
+            )
+            .sort((left, right) => (left.width * left.height) - (right.width * right.height))[0] || null;
+    }
+
+    _applyGridShotBoundaryClickSelection(group, event) {
+        const shotX = Number(group?.shotX);
+        const shotY = Number(group?.shotY);
+        if (!Number.isFinite(shotX) || !Number.isFinite(shotY)) {
+            this.showToast?.('이 Shot의 X/Y 좌표를 찾을 수 없습니다.', 1800);
+            return null;
+        }
+        const state = this.coordinateSelectionLists?.shot;
+        if (!state) return null;
+        const columns = this._coordinateSelectionListConfig('shot').columns;
+        const value = [String(shotX), String(shotY)];
+        const keyFor = (row) => row.map((cell) => String(cell || '').trim()).join('\u001f');
+        const clickedKey = keyFor(value);
+        const currentRows = this._readCoordinateSelectionList('shot')
+            .filter((row) => row.some((cell) => String(cell || '').trim()));
+        const existingKeys = new Set(currentRows.map(keyFor));
+        let nextRows;
+        if (event?.ctrlKey || event?.metaKey) {
+            nextRows = existingKeys.has(clickedKey)
+                ? currentRows.filter((row) => keyFor(row) !== clickedKey)
+                : [...currentRows, value];
+        } else if (event?.shiftKey) {
+            nextRows = existingKeys.has(clickedKey) ? currentRows : [...currentRows, value];
+        } else {
+            nextRows = [value];
+        }
+        state.rows = nextRows.length ? nextRows : [Array(columns).fill('')];
+        state.hasInput = true;
+        state.synced = false;
+        this._activateCoordinateSelectionList('shot');
+        this._clearCoordinateSelectionQuickSearches('shot');
+        this._renderCoordinateSelectionLists();
+        this._setCoordinateSelectionError('');
+        if (this.coordinateSelectionLiveTimer) {
+            clearTimeout(this.coordinateSelectionLiveTimer);
+            this.coordinateSelectionLiveTimer = null;
+        }
+        return this._applyCoordinateSelectionLive({ forceClear: true });
+    }
+
+    async _handleGridShotBoundaryThumbClick(wrap, event) {
+        if (!this._shouldInterceptGridShotBoundaryThumbEvent(wrap, event)) return false;
+        const imagePath = wrap.dataset?.path || '';
+        const sourceKey = this.normalizePath(imagePath);
+        if (!imagePath || !sourceKey) return false;
+
+        const sourceSet = this._getGridCoordinateSelectionSourceSet();
+        if (sourceSet.size && !sourceSet.has(sourceKey)) {
+            this.showToast?.('Coord 대상 wafer에서 Shot을 선택하세요.', 1800);
+            return false;
+        }
+
+        const data = await this._getGridShotBoundaryData(imagePath);
+        const group = this._getGridShotBoundaryHit(wrap, event, data);
+        if (!group) return false;
+
+        if (!this._pendingGridRegionComposite) {
+            this._pendingGridRegionComposite = {
+                sourceImages: [imagePath],
+                targetPath: imagePath,
+                gridModeSource: true,
+                selectedOnly: false,
+                startedAt: Date.now(),
+            };
+        }
+
+        if (!this._sameImagePath(this._gridCoordinateTargetPath, imagePath)) {
+            const ready = await this._prepareGridCoordinateSelectionTarget(imagePath, {
+                preserveSelectionState: null,
+                restorePending: false,
+            });
+            if (!ready) {
+                this.showToast?.('클릭한 wafer의 좌표 정보를 열 수 없습니다.', 1800);
+                return false;
+            }
+            if (this._pendingGridRegionComposite) {
+                this._pendingGridRegionComposite.targetPath = imagePath;
+            }
+        }
+
+        this._applyGridShotBoundaryClickSelection(group, event);
+        this._scheduleGridCoordinateSelectionOverlayRender?.(0);
+        return true;
+    }
+
     _getVisibleGridShotBoundaryWraps() {
         const scrollWrapper = this.getGridScrollWrapper();
         const wraps = Array.isArray(this.gridThumbWraps) && this.gridThumbWraps.length > 0
@@ -33003,8 +33136,13 @@ class WaferMapViewer {
             let group = groups.get(groupKey);
             if (!group) {
                 const shotId = String(layout?.shot_id ?? '').trim() || groupKey;
+                const shotX = Number(layout?.shot_x_pos);
+                const shotY = Number(layout?.shot_y_pos);
                 group = {
                     shotId,
+                    groupKey,
+                    shotX: Number.isFinite(shotX) ? shotX : null,
+                    shotY: Number.isFinite(shotY) ? shotY : null,
                     minX: Infinity,
                     minY: Infinity,
                     maxX: -Infinity,
@@ -33060,6 +33198,9 @@ class WaferMapViewer {
             groups: Array.from(groups.values())
                 .map((group) => ({
                     shotId: group.shotId,
+                    groupKey: group.groupKey,
+                    shotX: group.shotX,
+                    shotY: group.shotY,
                     minX: group.minX,
                     minY: group.minY,
                     maxX: group.maxX,

@@ -4295,6 +4295,103 @@ const { createRunner } = require('./e2e_playwright_session');
     });
     expect(gridCoordShot?.chipCount >= 20 && Number.isFinite(gridCoordShot.shotX) &&
       Number.isFinite(gridCoordShot.shotY), `grid coord shot=${JSON.stringify(gridCoordShot)}`);
+    await page.locator('#grid-shot-boundary-btn').click();
+    await page.waitForFunction(
+      () => window.viewer?.gridShotBoundaryVisible === true &&
+        Array.from(document.querySelectorAll('.grid-shot-boundary-overlay'))
+          .some((canvas) => canvas.dataset.shotOverlayRendered === 'true' &&
+            Number(canvas.dataset.shotBoundaryCount || '0') > 0),
+      null,
+      { timeout: 30000 }
+    );
+    const gridCoordShotClickPoint = await page.evaluate(async ({ imagePath, shotX, shotY }) => {
+      const v = window.viewer;
+      const pathKey = v?.normalizePath?.(imagePath);
+      const wrap = Array.from(document.querySelectorAll('#image-grid .grid-thumb-wrap'))
+        .find((candidate) => v?.normalizePath?.(candidate.dataset.path || '') === pathKey);
+      if (!v || !pathKey || !wrap) return { ok: false, reason: 'missing wrap' };
+      wrap.scrollIntoView({ block: 'center', inline: 'nearest' });
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      v._scheduleGridShotBoundaryOverlayRender?.(0);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const data = await v._getGridShotBoundaryData?.(imagePath);
+      const group = (data?.groups || []).find((candidate) =>
+        Number(candidate.shotX) === Number(shotX) &&
+        Number(candidate.shotY) === Number(shotY)
+      );
+      const thumbBox = wrap.querySelector('.grid-thumb-imgbox');
+      const rect = thumbBox?.getBoundingClientRect?.();
+      if (!data?.canvasWidth || !data?.canvasHeight || !group || !rect) {
+        return {
+          ok: false,
+          reason: 'missing shot hit target',
+          groupCount: data?.groups?.length || 0,
+          shotRows: (data?.groups || []).slice(0, 4).map((candidate) => [candidate.shotX, candidate.shotY]),
+        };
+      }
+      const scale = Math.min(rect.width / data.canvasWidth, rect.height / data.canvasHeight);
+      const offsetX = (rect.width - data.canvasWidth * scale) / 2;
+      const offsetY = (rect.height - data.canvasHeight * scale) / 2;
+      return {
+        ok: true,
+        x: rect.left + offsetX + (group.minX + group.width / 2) * scale,
+        y: rect.top + offsetY + (group.minY + group.height / 2) * scale,
+        chipCount: group.chipCount,
+        shotX: group.shotX,
+        shotY: group.shotY,
+      };
+    }, { imagePath: target.imagePath, shotX: gridCoordShot.shotX, shotY: gridCoordShot.shotY });
+    expect(gridCoordShotClickPoint.ok, `grid coord shot click point=${JSON.stringify(gridCoordShotClickPoint)}`);
+    await page.mouse.click(gridCoordShotClickPoint.x, gridCoordShotClickPoint.y);
+    const gridCoordShotClickReady = await page.waitForFunction(
+      (chipCount) => window.viewer?.chipAnnotator?.selectionMode === 'shot' &&
+        window.viewer.chipAnnotator.selectedChips?.size === chipCount &&
+        window.viewer.chipAnnotator._getSelectedShotGroups?.().size === 1,
+      gridCoordShot.chipCount,
+      { timeout: 10000 }
+    ).then(() => true).catch(() => false);
+    const gridCoordShotClickOverlayReady = await page.waitForFunction(
+      (chipCount) => Array.from(document.querySelectorAll('.grid-coordinate-selection-overlay'))
+        .some((canvas) => canvas.dataset.coordinateOverlayRendered === 'true' &&
+          Number(canvas.dataset.coordinateSelectedChipCount || '0') === chipCount),
+      gridCoordShot.chipCount,
+      { timeout: 30000 }
+    ).then(() => true).catch(() => false);
+    const gridCoordShotClickState = await page.evaluate(() => ({
+      activeList: window.viewer?.coordinateSelectionActiveList || '',
+      target: window.viewer?.coordinateSelectionTarget || '',
+      rows: window.viewer?.coordinateSelectionLists?.shot?.rows || null,
+      selectedCount: window.viewer?.chipAnnotator?.selectedChips?.size || 0,
+      shotGroupCount: window.viewer?.chipAnnotator?._getSelectedShotGroups?.().size || 0,
+      selectedPaths: window.viewer?._getGridSelectedImagePaths?.() || [],
+      pendingSourceCount: window.viewer?._pendingGridRegionComposite?.sourceImages?.length || 0,
+      modalVisible: getComputedStyle(document.getElementById('chip-coordinate-select-modal')).display !== 'none',
+      gridMode: window.viewer?.gridMode === true,
+      viewMode: window.viewer?.viewMode || null,
+      coordOverlayRendered: Array.from(document.querySelectorAll('.grid-coordinate-selection-overlay'))
+        .filter((canvas) => canvas.dataset.coordinateOverlayRendered === 'true').length,
+    }));
+    expect(gridCoordShotClickReady &&
+      gridCoordShotClickOverlayReady &&
+      gridCoordShotClickState.gridMode &&
+      (gridCoordShotClickState.viewMode === null || gridCoordShotClickState.viewMode === '') &&
+      gridCoordShotClickState.activeList === 'shot' &&
+      gridCoordShotClickState.target === 'shot-grid' &&
+      Number(gridCoordShotClickState.rows?.[0]?.[0]) === gridCoordShot.shotX &&
+      Number(gridCoordShotClickState.rows?.[0]?.[1]) === gridCoordShot.shotY &&
+      gridCoordShotClickState.selectedCount === gridCoordShot.chipCount &&
+      gridCoordShotClickState.shotGroupCount === 1 &&
+      gridCoordShotClickState.selectedPaths.length === 2 &&
+      gridCoordShotClickState.pendingSourceCount === 2 &&
+      gridCoordShotClickState.modalVisible &&
+      gridCoordShotClickState.coordOverlayRendered > 0,
+      `grid coord shot thumbnail click=${JSON.stringify({ gridCoordShotClickPoint, gridCoordShotClickState })}`);
+    await page.evaluate(() => window.viewer?._clearCoordinateSelectionList?.('shot'));
+    await page.waitForFunction(
+      () => window.viewer?.chipAnnotator?.selectedChips?.size === 0,
+      null,
+      { timeout: 10000 }
+    );
     await page.locator('[data-coordinate-quick-search="shot"]').fill(`(${gridCoordShot.shotX}, ${gridCoordShot.shotY})`);
     const gridCoordFilteredShot = page.locator('button[data-coordinate-quick-picker="shot"]').first();
     await gridCoordFilteredShot.waitFor({ state: 'visible', timeout: 10000 });
