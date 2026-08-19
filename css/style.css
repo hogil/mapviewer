@@ -3113,6 +3113,32 @@
             gap: 8px;
         }
 
+        .coordinate-select-range-tabs {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+            min-width: 0;
+        }
+
+        .coordinate-select-range-tab {
+            padding: 3px 9px;
+            font-size: 11px;
+            line-height: 1.2;
+            border-color: #4a4a4a;
+            background: #202020;
+            color: #cfcfcf;
+        }
+
+        .coordinate-select-range-tab.is-active {
+            border-color: #78a9d6;
+            background: #233443;
+            color: #f5fbff;
+        }
+
+        .coordinate-select-range-pages {
+            min-width: 0;
+        }
+
         .coordinate-select-range-group {
             min-width: 0;
             padding: 7px;

@@ -285,6 +285,6 @@ argument-hint: [증상-설명]
 
 ### Coord range OR set guard (2026-08-20)
 
-- 증상: Chip X/Y와 Radius range가 단일 AND 필터만 제공하면 떨어진 여러 chip 영역을 한 번에 고르기 어렵고, Chip 범위와 Radius 범위가 별도 group으로 보이면 같은 조건 set인지 혼동된다.
-- 수정 패턴: Coord range UI는 `Add`로 set을 추가한다. 한 set 안에는 `Chip X(mm)`, `Chip Y(mm)`, `Radius(mm)` 3축을 세로 한 열로 두고 AND로 평가한다. 여러 set은 OR로 합친다. 기존 Shot/Chip/Shot Position list가 있으면 list match를 base로 두고 `(base) AND (set1 OR set2 ...)`로 계산한다.
-- E2E 신호: `coordinate-selection-cells`는 1개 set의 3축 세로 구조, 2개 set OR로 서로 다른 chip 2개 선택, Shot list base와 range set AND, set Clear 후 base selection 복원을 확인한다.
+- 증상: Chip X/Y와 Radius range가 단일 AND 필터만 제공하면 떨어진 여러 chip 영역을 한 번에 고르기 어렵고, Chip 범위와 Radius 범위가 별도 group으로 보이면 같은 조건 set인지 혼동된다. 여러 set을 세로 카드로 계속 쌓으면 Coord panel이 길어진다.
+- 수정 패턴: Coord range UI는 기본 `Set 1` tab/page를 항상 가진다. `Add`는 새 tab/page를 만들고 활성 tab을 이동하되, 새 full-range set을 즉시 OR 적용해 선택을 바꾸지 않는다. 한 page 안에는 `Chip X(mm)`, `Chip Y(mm)`, `Radius(mm)` 3축을 세로 한 열로 두고 AND로 평가한다. 여러 set은 OR로 합친다. 기존 Shot/Chip/Shot Position list가 있으면 list match를 base로 두고 `(base) AND (set1 OR set2 ...)`로 계산한다. 마지막 set은 삭제하지 않는다.
+- E2E 신호: `coordinate-selection-cells`는 기본 Set 1 tab/page, 마지막 delete disabled, Add 후 tab 2개/visible page 1개, 2개 set OR로 서로 다른 chip 2개 선택, Shot list base와 range set AND, set Clear 후 base selection 복원을 확인한다.
