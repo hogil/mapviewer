@@ -13824,6 +13824,7 @@ class WaferMapViewer {
         }
         this._hideGridContextSubmenuPanel(document.getElementById('context-mc-submenu'));
         this._hideGridContextSubmenuPanel(document.getElementById('context-mea-submenu'));
+        this._hideGridContextSubmenuPanel(document.getElementById('grid-direct-selection-submenu'));
         document.querySelectorAll('.failbit-panel').forEach(panel => {
             if (panel.id === 'context-mc-submenu' || panel.id === 'context-mea-submenu') return;
             panel.querySelectorAll('.pinned-section, .mc-reset-bar, .mc-generate-wrap, .measure-apply-wrap').forEach(el => el.remove());
@@ -15520,6 +15521,7 @@ class WaferMapViewer {
     _closeGridContextSubmenus() {
         this._hideGridContextSubmenuPanel(document.getElementById('context-mc-submenu'));
         this._hideGridContextSubmenuPanel(document.getElementById('context-mea-submenu'));
+        this._hideGridContextSubmenuPanel(document.getElementById('grid-direct-selection-submenu'));
     }
 
     _markGridContextSubmenusStale() {
@@ -15547,27 +15549,33 @@ class WaferMapViewer {
         this.contextMenuJustShown = true;
     }
 
-    _syncSelectionForGridContextTarget(clickedIdx) {
-        if (!this.gridMode || !Number.isInteger(clickedIdx) || !Array.isArray(this.currentGridImages)) return;
-        if (clickedIdx < 0 || clickedIdx >= this.currentGridImages.length) return;
+    _ensureGridWaferIndexSelected(index, options = {}) {
+        if (!this.gridMode || !Number.isInteger(index) || !Array.isArray(this.currentGridImages)) return false;
+        if (index < 0 || index >= this.currentGridImages.length) return false;
 
         const selected = Array.isArray(this.gridSelectedIdxs) ? this.gridSelectedIdxs : [];
-        if (selected.includes(clickedIdx)) {
+        const preserveExistingIfSelected = options.preserveExistingIfSelected !== false;
+        if (preserveExistingIfSelected && selected.includes(index)) {
             const normalized = selected
                 .filter((idx) => Number.isInteger(idx) && idx >= 0 && idx < this.currentGridImages.length)
                 .filter((idx, index, arr) => arr.indexOf(idx) === index)
                 .sort((a, b) => a - b);
             this.gridSelectedIdxs = normalized;
             this.gridSelectedSet = new Set(normalized);
-            this.gridLastClickedIdx = clickedIdx;
+            this.gridLastClickedIdx = index;
             this.updateGridSelection();
-            return;
+            return true;
         }
 
-        this.gridSelectedIdxs = [clickedIdx];
-        this.gridSelectedSet = new Set([clickedIdx]);
-        this.gridLastClickedIdx = clickedIdx;
+        this.gridSelectedIdxs = [index];
+        this.gridSelectedSet = new Set([index]);
+        this.gridLastClickedIdx = index;
         this.updateGridSelection();
+        return true;
+    }
+
+    _syncSelectionForGridContextTarget(clickedIdx) {
+        this._ensureGridWaferIndexSelected(clickedIdx, { preserveExistingIfSelected: true });
     }
 
     _getGridOverlayBottomLimit(margin = 10) {
@@ -15605,6 +15613,12 @@ class WaferMapViewer {
                 document.getElementById('context-mea-create'),
                 panel,
                 '.mea-ctx-list'
+            );
+        } else if (panel.id === 'grid-direct-selection-submenu') {
+            this._positionGridContextSubmenu(
+                document.getElementById('grid-direct-selection-menu'),
+                panel,
+                null
             );
         }
     }
@@ -15673,6 +15687,8 @@ class WaferMapViewer {
 
         const meaSubmenu = document.getElementById('context-mea-submenu');
         if (meaSubmenu) this._hideGridContextSubmenuPanel(meaSubmenu);
+        const directSubmenu = document.getElementById('grid-direct-selection-submenu');
+        if (directSubmenu) this._hideGridContextSubmenuPanel(directSubmenu);
         if (!mcSubmenu._mcBuilt) {
             this._buildMcContextSubmenu();
             mcSubmenu._mcBuilt = true;
@@ -15698,11 +15714,36 @@ class WaferMapViewer {
 
         const mcSubmenu = document.getElementById('context-mc-submenu');
         if (mcSubmenu) this._hideGridContextSubmenuPanel(mcSubmenu);
+        const directSubmenu = document.getElementById('grid-direct-selection-submenu');
+        if (directSubmenu) this._hideGridContextSubmenuPanel(directSubmenu);
         if (!meaSubmenu._meaBuilt) {
             this._buildMeaContextSubmenu();
             meaSubmenu._meaBuilt = true;
         }
         this._positionGridContextSubmenu(meaCreateItem, meaSubmenu, '.mea-ctx-list');
+    }
+
+    _openGridDirectSelectionSubmenu() {
+        const triggerItem = document.getElementById('grid-direct-selection-menu');
+        const submenu = document.getElementById('grid-direct-selection-submenu');
+        if (!triggerItem || !submenu) return;
+        const contextMenu = document.getElementById('grid-context-menu');
+        const contextVisible = contextMenu && getComputedStyle(contextMenu).display !== 'none';
+        if (!contextVisible || getComputedStyle(triggerItem).display === 'none') {
+            this._hideGridContextSubmenuPanel(submenu);
+            return;
+        }
+        const itemRect = triggerItem.getBoundingClientRect();
+        if (itemRect.width <= 0 || itemRect.height <= 0) {
+            this._hideGridContextSubmenuPanel(submenu);
+            return;
+        }
+
+        const mcSubmenu = document.getElementById('context-mc-submenu');
+        const meaSubmenu = document.getElementById('context-mea-submenu');
+        if (mcSubmenu) this._hideGridContextSubmenuPanel(mcSubmenu);
+        if (meaSubmenu) this._hideGridContextSubmenuPanel(meaSubmenu);
+        this._positionGridContextSubmenu(triggerItem, submenu, null);
     }
 
     syncSubsetStatus(activePageId) {
@@ -15885,6 +15926,16 @@ class WaferMapViewer {
 
     _getGridSelectedRegionCompositeContext(options = {}) {
         if (this.isCompositeMode || this.gridMode !== true) return null;
+        const sourceImages = this._getGridContextSourceImages();
+        if (!sourceImages.length) {
+            return null;
+        }
+        const context = this._buildSelectedRegionCompositeContext(sourceImages, options);
+        return context && context.sourceImages.length > 0 ? context : null;
+    }
+
+    _getGridContextSourceImages() {
+        if (this.gridMode !== true) return [];
         let sourceImages = this._getGridSelectedImagePaths();
         if (!sourceImages.length && Number.isInteger(this.contextMenuTargetIndex)) {
             const imageList = (this.currentGridImages?.length ? this.currentGridImages : this.selectedImages) || [];
@@ -15893,11 +15944,29 @@ class WaferMapViewer {
                 sourceImages = [targetPath];
             }
         }
-        if (!sourceImages.length) {
-            return null;
-        }
-        const context = this._buildSelectedRegionCompositeContext(sourceImages, options);
-        return context && context.sourceImages.length > 0 ? context : null;
+        return [...new Map(
+            (Array.isArray(sourceImages) ? sourceImages : [])
+                .filter(Boolean)
+                .map((path) => [this.normalizePath(path), path])
+                .filter(([key]) => !!key)
+        ).values()];
+    }
+
+    async _resolveGridSelectedRegionCompositeContext(options = {}) {
+        let context = this._getGridSelectedRegionCompositeContext(options);
+        if (context) return context;
+
+        const sourceImages = this._getGridContextSourceImages();
+        if (!sourceImages.length) return null;
+        const targetPath = this.contextMenuTargetPath || sourceImages[0];
+        if (!targetPath) return null;
+        const ready = await this._prepareGridCoordinateSelectionTarget(targetPath, {
+            preserveSelectionState: null,
+            restorePending: false,
+        });
+        if (!ready) return null;
+        context = this._getGridSelectedRegionCompositeContext(options);
+        return context || null;
     }
 
     _ensureGridContextMenuItem(contextMenu, id) {
@@ -15920,21 +15989,22 @@ class WaferMapViewer {
 
     _configureGridCompositeContextItem(item, context, options = {}) {
         if (!item) return;
-        if (!context) {
+        const hasGridSource = this._getGridContextSourceImages().length > 0;
+        if (!context && !hasGridSource) {
             item.style.setProperty('display', 'none', 'important');
             item.onclick = null;
             return;
         }
 
         item.style.setProperty('display', 'block', 'important');
-        const regionPrefix = context.usedAllRegion ? '전체' : '선택';
+        const regionPrefix = context?.usedAllRegion ? '전체' : '선택';
         item.textContent = options.text ||
-            `${regionPrefix} ${context.selectedUnit} Composite Map 만들기 (${context.selectedUnitCount}개)`;
+            `${regionPrefix} ${context?.selectedUnit || '영역'} Composite Map 만들기 (${context?.selectedUnitCount || 0}개)`;
         item.title = options.title || '현재 Grid의 선택 wafer와 선택 영역으로 Composite Map을 만듭니다.';
-        item.onclick = (clickEvent) => {
+        item.onclick = async (clickEvent) => {
             clickEvent?.preventDefault?.();
             clickEvent?.stopPropagation?.();
-            const latestContext = this._getGridSelectedRegionCompositeContext(options.contextOptions || {});
+            const latestContext = await this._resolveGridSelectedRegionCompositeContext(options.contextOptions || {});
             this.hideContextMenu();
             if (!latestContext) {
                 this.showToast?.('Composite Map을 만들 Grid 선택 wafer/좌표 정보가 없습니다.', 1800);
@@ -15980,6 +16050,9 @@ class WaferMapViewer {
     _setGridDirectSelectionMode(mode) {
         if (mode !== 'shot' && mode !== 'chip') return false;
         if (this.gridMode !== true || this.isCompositeMode) return false;
+        this._ensureGridWaferIndexSelected(Number(this.contextMenuTargetIndex), {
+            preserveExistingIfSelected: true,
+        });
         this.gridDirectSelectionMode = mode;
         this.gridDirectSelectionSourceSet?.clear?.();
         if (!this.gridShotBoundaryVisible) {
@@ -15999,30 +16072,81 @@ class WaferMapViewer {
             this.showToast?.('선택할 wafer를 찾을 수 없습니다.', 1600);
             return false;
         }
-        this.gridSelectedIdxs = [index];
-        this.gridSelectedSet = new Set([index]);
-        this.gridLastClickedIdx = index;
-        this.updateGridSelection();
+        this._ensureGridWaferIndexSelected(index, { preserveExistingIfSelected: false });
         this.showToast?.('1개 Wafer 선택', 1200);
         return true;
     }
 
+    _ensureGridDirectSelectionSubmenu(contextMenu) {
+        const parentItem = this._ensureGridContextMenuItem(contextMenu, 'grid-direct-selection-menu');
+        if (!parentItem) return null;
+        parentItem.style.position = 'relative';
+        let label = parentItem.querySelector('.grid-direct-selection-label');
+        if (!label) {
+            label = document.createElement('span');
+            label.className = 'grid-direct-selection-label';
+            parentItem.insertBefore(label, parentItem.firstChild);
+        }
+
+        let submenu = document.getElementById('grid-direct-selection-submenu');
+        if (!submenu) {
+            submenu = document.createElement('div');
+            submenu.id = 'grid-direct-selection-submenu';
+            submenu.className = 'context-menu grid-direct-selection-submenu';
+            submenu.style.cssText = [
+                'display:none',
+                'position:fixed',
+                'background:#333',
+                'border:1px solid #555',
+                'border-radius:4px',
+                'padding:4px 0',
+                'z-index:60001',
+                'min-width:150px',
+            ].join(';');
+            parentItem.appendChild(submenu);
+            submenu.addEventListener('click', (event) => event.stopPropagation());
+            submenu.addEventListener('contextmenu', (event) => event.stopPropagation());
+        }
+
+        return { parentItem, submenu, label };
+    }
+
     _configureGridDirectSelectionContextItems(contextMenu) {
         const visible = this.gridMode === true && !this.isCompositeMode;
-        const shotItem = this._ensureGridContextMenuItem(contextMenu, 'grid-direct-shot-select');
-        const chipItem = this._ensureGridContextMenuItem(contextMenu, 'grid-direct-chip-select');
-        const waferItem = this._ensureGridContextMenuItem(contextMenu, 'grid-direct-wafer-select');
+        const selectionMenu = this._ensureGridDirectSelectionSubmenu(contextMenu);
+        if (!selectionMenu) return;
+        const { parentItem, submenu, label } = selectionMenu;
+        label.textContent = '선택 ▸';
+        parentItem.title = 'Grid wafer, Shot, Chip 선택 방식을 고릅니다.';
+        parentItem.onmouseenter = () => this._openGridDirectSelectionSubmenu();
+        parentItem.onpointerenter = () => this._openGridDirectSelectionSubmenu();
+        parentItem.onclick = (event) => {
+            event?.preventDefault?.();
+            event?.stopPropagation?.();
+            this._openGridDirectSelectionSubmenu();
+        };
+
+        if (!visible) {
+            parentItem.style.setProperty('display', 'none', 'important');
+            this._hideGridContextSubmenuPanel(submenu);
+            return;
+        }
+
+        parentItem.style.setProperty('display', 'block', 'important');
         [
-            [shotItem, 'Shot 선택', 'Grid thumbnail에서 Shot을 직접 선택합니다.', () => this._setGridDirectSelectionMode('shot')],
-            [chipItem, 'Chip 선택', 'Grid thumbnail에서 Chip을 직접 선택합니다.', () => this._setGridDirectSelectionMode('chip')],
-            [waferItem, 'Wafer 선택', '우클릭한 wafer 하나만 선택합니다.', () => this._selectGridContextTargetWafer()],
-        ].forEach(([item, text, title, handler]) => {
-            if (!item) return;
-            if (!visible) {
-                item.style.setProperty('display', 'none', 'important');
-                item.onclick = null;
-                return;
+            ['grid-direct-shot-select', 'Shot 선택', 'Coord와 무관하게 각 wafer thumbnail에서 Shot을 직접 선택합니다.', () => this._setGridDirectSelectionMode('shot')],
+            ['grid-direct-chip-select', 'Chip 선택', 'Coord와 무관하게 각 wafer thumbnail에서 Chip을 직접 선택합니다.', () => this._setGridDirectSelectionMode('chip')],
+            ['grid-direct-wafer-select', 'Wafer 선택', '우클릭한 wafer 하나만 선택합니다.', () => this._selectGridContextTargetWafer()],
+        ].forEach(([id, text, title, handler]) => {
+            let item = document.getElementById(id);
+            if (!item) {
+                item = document.createElement('div');
+                item.id = id;
+                item.className = 'context-menu-item';
+                item.style.cssText = 'padding: 8px 12px; color: #fff; cursor: pointer; font-size: 14px;';
+                submenu.appendChild(item);
             }
+            if (!item) return;
             item.style.setProperty('display', 'block', 'important');
             item.textContent = text;
             item.title = title;
@@ -16139,9 +16263,11 @@ class WaferMapViewer {
         this.hideContextMenuHandler = (e) => {
             const mcSubmenu = document.getElementById('context-mc-submenu');
             const meaSubmenu = document.getElementById('context-mea-submenu');
+            const directSubmenu = document.getElementById('grid-direct-selection-submenu');
             const insideMc = mcSubmenu && mcSubmenu.contains(e.target);
             const insideMea = meaSubmenu && meaSubmenu.contains(e.target);
-            if (!contextMenu.contains(e.target) && !insideMc && !insideMea) {
+            const insideDirect = directSubmenu && directSubmenu.contains(e.target);
+            if (!contextMenu.contains(e.target) && !insideMc && !insideMea && !insideDirect) {
                 this.hideContextMenu();
             }
         };
@@ -16157,6 +16283,7 @@ class WaferMapViewer {
         }
         this._hideGridContextSubmenuPanel(document.getElementById('context-mc-submenu'));
         this._hideGridContextSubmenuPanel(document.getElementById('context-mea-submenu'));
+        this._hideGridContextSubmenuPanel(document.getElementById('grid-direct-selection-submenu'));
 
         if (this.hideContextMenuHandler) {
             document.removeEventListener('click', this.hideContextMenuHandler);
@@ -16255,6 +16382,10 @@ class WaferMapViewer {
                         this._openMeaContextSubmenu();
                         return;
                     }
+                    if (item.id === 'grid-direct-selection-menu') {
+                        this._openGridDirectSelectionSubmenu();
+                        return;
+                    }
                     this._closeGridContextSubmenus();
                 };
                 contextMenu.addEventListener('mouseover', delegatedHover);
@@ -16263,12 +16394,14 @@ class WaferMapViewer {
             }
             const allItems = contextMenu.querySelectorAll('.context-menu-item');
             allItems.forEach(item => {
-                if (item.id === 'context-mc-create' || item.id === 'context-mea-create') return;
+                if (item.id === 'context-mc-create' || item.id === 'context-mea-create' || item.id === 'grid-direct-selection-menu') return;
                 item.addEventListener('mouseenter', () => {
                     const _mcSub = document.getElementById('context-mc-submenu');
                     const _meaSub = document.getElementById('context-mea-submenu');
+                    const _directSub = document.getElementById('grid-direct-selection-submenu');
                     if (_mcSub) _mcSub.style.display = 'none';
                     if (_meaSub) _meaSub.style.display = 'none';
+                    if (_directSub) _directSub.style.display = 'none';
                 });
             });
         }
@@ -32486,6 +32619,7 @@ class WaferMapViewer {
     _closeFailbitPanels() {
         this._hideGridContextSubmenuPanel(document.getElementById('context-mc-submenu'));
         this._hideGridContextSubmenuPanel(document.getElementById('context-mea-submenu'));
+        this._hideGridContextSubmenuPanel(document.getElementById('grid-direct-selection-submenu'));
         document.querySelectorAll('.failbit-panel').forEach(p => {
             if (p.id === 'context-mc-submenu' || p.id === 'context-mea-submenu') return;
             // 동적 생성 요소 모두 제거 (다음 open 시 깨끗하게 재생성)
@@ -33734,6 +33868,8 @@ class WaferMapViewer {
             ? this.gridDirectSelectionMode
             : null;
         if (directMode) {
+            const wrapIndex = Number(wrap.dataset?.index);
+            this._ensureGridWaferIndexSelected(wrapIndex, { preserveExistingIfSelected: true });
             const data = await this._getGridShotBoundaryData(imagePath);
             if (!this._sameImagePath(this._gridCoordinateTargetPath, imagePath)) {
                 const ready = await this._prepareGridCoordinateSelectionTarget(imagePath, {
@@ -33758,6 +33894,7 @@ class WaferMapViewer {
             if (!result) return false;
             this.gridDirectSelectionSourceSet = new Set([sourceKey]);
             this._scheduleGridCoordinateSelectionOverlayRender?.(0);
+            this.updateGridSelection?.();
             return true;
         }
 
@@ -34370,6 +34507,16 @@ class WaferMapViewer {
     }
 
     _getGridCoordinateSelectionSourceSet() {
+        if (this.gridDirectSelectionMode === 'shot' || this.gridDirectSelectionMode === 'chip') {
+            const directOnly = new Set();
+            if (this.gridDirectSelectionSourceSet instanceof Set) {
+                this.gridDirectSelectionSourceSet.forEach((sourceKey) => {
+                    if (sourceKey) directOnly.add(sourceKey);
+                });
+            }
+            return directOnly;
+        }
+
         const pending = this._pendingGridRegionComposite;
         const sourceImages = Array.isArray(pending?.sourceImages) ? pending.sourceImages : [];
         const sourceSet = new Set(sourceImages
@@ -34450,8 +34597,11 @@ class WaferMapViewer {
         const scale = Math.min(cssWidth / data.canvasWidth, cssHeight / data.canvasHeight);
         const offsetX = (cssWidth - data.canvasWidth * scale) / 2;
         const offsetY = (cssHeight - data.canvasHeight * scale) / 2;
-        ctx.fillStyle = 'rgba(255, 216, 64, 0.35)';
-        ctx.strokeStyle = 'rgba(255, 246, 120, 0.95)';
+        const selectedColor = this.chipAnnotator?.selectedColor || 'rgba(255, 255, 0, 0.25)';
+        ctx.fillStyle = selectedColor;
+        ctx.strokeStyle = selectedColor.startsWith('rgba(')
+            ? selectedColor.replace(/[\d.]+\)$/, '0.95)')
+            : this._colorWithAlpha(selectedColor, 0.95);
         ctx.lineWidth = 1;
         ctx.setLineDash([]);
 

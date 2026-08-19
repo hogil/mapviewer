@@ -4530,18 +4530,33 @@ const { createRunner } = require('./e2e_playwright_session');
     const gridContextShotSelectNoCoordBefore = await page.evaluate(() => ({
       text: document.getElementById('grid-shot-coordinate-select-open')?.textContent?.trim() || '',
       visible: getComputedStyle(document.getElementById('grid-shot-coordinate-select-open')).display !== 'none',
+      selectionMenuText: document.querySelector('#grid-direct-selection-menu .grid-direct-selection-label')?.textContent?.trim() || '',
+      selectionMenuVisible: getComputedStyle(document.getElementById('grid-direct-selection-menu')).display !== 'none',
+      selectionSubmenuHidden: getComputedStyle(document.getElementById('grid-direct-selection-submenu')).display === 'none',
       directShotText: document.getElementById('grid-direct-shot-select')?.textContent?.trim() || '',
       directChipText: document.getElementById('grid-direct-chip-select')?.textContent?.trim() || '',
       directWaferText: document.getElementById('grid-direct-wafer-select')?.textContent?.trim() || '',
-      directShotVisible: getComputedStyle(document.getElementById('grid-direct-shot-select')).display !== 'none',
-      directChipVisible: getComputedStyle(document.getElementById('grid-direct-chip-select')).display !== 'none',
-      directWaferVisible: getComputedStyle(document.getElementById('grid-direct-wafer-select')).display !== 'none',
+      directItemsInSubmenu: ['grid-direct-shot-select', 'grid-direct-chip-select', 'grid-direct-wafer-select']
+        .every((id) => document.getElementById(id)?.parentElement?.id === 'grid-direct-selection-submenu'),
+      directTopLevelCount: [...document.querySelectorAll('#grid-context-menu > #grid-direct-shot-select, #grid-context-menu > #grid-direct-chip-select, #grid-context-menu > #grid-direct-wafer-select')].length,
+      shotCompositeText: document.getElementById('grid-selected-region-composite-create')?.textContent?.trim() || '',
+      shotCompositeVisible: getComputedStyle(document.getElementById('grid-selected-region-composite-create')).display !== 'none',
+      shotWtwText: document.getElementById('grid-shot-local-square-weighted-create')?.textContent?.trim() || '',
+      shotWtwVisible: getComputedStyle(document.getElementById('grid-shot-local-square-weighted-create')).display !== 'none',
+      chipCompositeText: document.getElementById('grid-chip-composite-create')?.textContent?.trim() || '',
+      chipCompositeVisible: getComputedStyle(document.getElementById('grid-chip-composite-create')).display !== 'none',
       modalHidden: getComputedStyle(document.getElementById('chip-coordinate-select-modal')).display === 'none',
       gridMode: window.viewer?.gridMode === true,
       viewMode: window.viewer?.viewMode || null,
       selectedPaths: window.viewer?._getGridSelectedImagePaths?.() || [],
       pendingSourceCount: window.viewer?._pendingGridRegionComposite?.sourceImages?.length || 0,
     }));
+    await page.locator('#grid-direct-selection-menu').hover();
+    await page.waitForFunction(
+      () => getComputedStyle(document.getElementById('grid-direct-selection-submenu')).display !== 'none',
+      null,
+      { timeout: 10000 }
+    );
     await page.locator('#grid-direct-shot-select').click();
     await page.waitForFunction(
       () => window.viewer?.gridMode === true &&
@@ -4592,12 +4607,79 @@ const { createRunner } = require('./e2e_playwright_session');
       pendingSourceCount: window.viewer?._pendingGridRegionComposite?.sourceImages?.length || 0,
       directSourceCount: window.viewer?.gridDirectSelectionSourceSet?.size || 0,
       selectedChips: window.viewer?.chipAnnotator?.selectedChips?.size || 0,
+      selectedIdxs: [...(window.viewer?.gridSelectedIdxs || [])].sort((a, b) => a - b),
+      selectedPaths: (window.viewer?._getGridSelectedImagePaths?.() || [])
+        .map((imagePath) => String(imagePath || '').replace(/\\/g, '/'))
+        .sort(),
+      selectedWraps: Array.from(document.querySelectorAll('#image-grid .grid-thumb-wrap.selected'))
+        .map((wrap) => Number(wrap.dataset.index))
+        .sort((a, b) => a - b),
+      overlay: (() => {
+        const rendered = Array.from(document.querySelectorAll('.grid-coordinate-selection-overlay'))
+          .filter((canvas) => canvas.dataset.coordinateOverlayRendered === 'true');
+        return {
+          renderedCount: rendered.length,
+          maxSelectedChipCount: Math.max(0, ...rendered.map((canvas) =>
+            Number(canvas.dataset.coordinateSelectedChipCount || '0'))),
+        };
+      })(),
     }));
     expect(gridDirectShotAfter.mode === 'shot' && gridDirectShotAfter.modalHidden &&
       gridDirectShotAfter.pendingSourceCount === gridContextShotSelectNoCoordBefore.pendingSourceCount &&
       gridDirectShotAfter.directSourceCount === 1 &&
+      gridDirectShotAfter.selectedIdxs.includes(target.index) &&
+      gridDirectShotAfter.selectedWraps.includes(target.index) &&
+      gridDirectShotAfter.overlay.renderedCount > 0 &&
+      gridDirectShotAfter.overlay.maxSelectedChipCount === gridDirectShotPoint.chipCount &&
       gridDirectShotAfter.selectedChips === gridDirectShotPoint.chipCount,
     `grid direct Shot selection should not open Coord or create pending source=${JSON.stringify(gridDirectShotAfter)}`);
+    await page.locator('#image-grid .grid-thumb-wrap').nth(target.index).click({ button: 'right' });
+    await page.waitForFunction(
+      () => getComputedStyle(document.getElementById('grid-context-menu')).display !== 'none' &&
+        getComputedStyle(document.getElementById('grid-direct-selection-menu')).display !== 'none',
+      null,
+      { timeout: 10000 }
+    );
+    await page.locator('#grid-direct-selection-menu').hover();
+    await page.waitForFunction(
+      () => getComputedStyle(document.getElementById('grid-direct-selection-submenu')).display !== 'none',
+      null,
+      { timeout: 10000 }
+    );
+    await page.locator('#grid-direct-chip-select').click();
+    await page.waitForFunction(
+      () => window.viewer?.gridMode === true &&
+        window.viewer?.gridDirectSelectionMode === 'chip' &&
+        window.viewer?.gridShotBoundaryVisible === true &&
+        getComputedStyle(document.getElementById('chip-coordinate-select-modal')).display === 'none',
+      null,
+      { timeout: 30000 }
+    );
+    await page.mouse.click(gridDirectShotPoint.x, gridDirectShotPoint.y);
+    await page.waitForFunction(
+      () => window.viewer?.chipAnnotator?.selectionMode === 'chip' &&
+        window.viewer.chipAnnotator.selectedChips?.size === 1 &&
+        Array.from(document.querySelectorAll('.grid-coordinate-selection-overlay'))
+          .some((canvas) => canvas.dataset.coordinateOverlayRendered === 'true' &&
+            Number(canvas.dataset.coordinateSelectedChipCount || '0') === 1),
+      null,
+      { timeout: 30000 }
+    );
+    const gridDirectChipAfter = await page.evaluate(() => ({
+      mode: window.viewer?.gridDirectSelectionMode || '',
+      selectedChips: window.viewer?.chipAnnotator?.selectedChips?.size || 0,
+      selectedIdxs: [...(window.viewer?.gridSelectedIdxs || [])].sort((a, b) => a - b),
+      selectedWraps: Array.from(document.querySelectorAll('#image-grid .grid-thumb-wrap.selected'))
+        .map((wrap) => Number(wrap.dataset.index))
+        .sort((a, b) => a - b),
+      directSourceCount: window.viewer?.gridDirectSelectionSourceSet?.size || 0,
+    }));
+    expect(gridDirectChipAfter.mode === 'chip' &&
+      gridDirectChipAfter.selectedChips === 1 &&
+      gridDirectChipAfter.selectedIdxs.includes(target.index) &&
+      gridDirectChipAfter.selectedWraps.includes(target.index) &&
+      gridDirectChipAfter.directSourceCount === 1,
+      `grid direct Chip selection should select wafer and show overlay=${JSON.stringify(gridDirectChipAfter)}`);
     await page.locator('#image-grid .grid-thumb-wrap').nth(target.index).click({ button: 'right' });
     await page.waitForFunction(
       () => getComputedStyle(document.getElementById('grid-context-menu')).display !== 'none' &&
@@ -4630,12 +4712,20 @@ const { createRunner } = require('./e2e_playwright_session');
     }));
     expect(gridContextShotSelectNoCoordBefore.text === 'Coord 선택' &&
       gridContextShotSelectNoCoordBefore.visible &&
+      gridContextShotSelectNoCoordBefore.selectionMenuText === '선택 ▸' &&
+      gridContextShotSelectNoCoordBefore.selectionMenuVisible &&
+      gridContextShotSelectNoCoordBefore.selectionSubmenuHidden &&
       gridContextShotSelectNoCoordBefore.directShotText === 'Shot 선택' &&
       gridContextShotSelectNoCoordBefore.directChipText === 'Chip 선택' &&
       gridContextShotSelectNoCoordBefore.directWaferText === 'Wafer 선택' &&
-      gridContextShotSelectNoCoordBefore.directShotVisible &&
-      gridContextShotSelectNoCoordBefore.directChipVisible &&
-      gridContextShotSelectNoCoordBefore.directWaferVisible &&
+      gridContextShotSelectNoCoordBefore.directItemsInSubmenu &&
+      gridContextShotSelectNoCoordBefore.directTopLevelCount === 0 &&
+      gridContextShotSelectNoCoordBefore.shotCompositeText === '🎯 Shot Composite' &&
+      gridContextShotSelectNoCoordBefore.shotCompositeVisible &&
+      gridContextShotSelectNoCoordBefore.shotWtwText === '🧭 Shot Composite W to W' &&
+      gridContextShotSelectNoCoordBefore.shotWtwVisible &&
+      gridContextShotSelectNoCoordBefore.chipCompositeText === '🔲 Chip Composite' &&
+      gridContextShotSelectNoCoordBefore.chipCompositeVisible &&
       gridContextShotSelectNoCoordBefore.modalHidden &&
       gridContextShotSelectNoCoordAfter.modalVisible &&
       gridContextShotSelectNoCoordAfter.gridMode &&

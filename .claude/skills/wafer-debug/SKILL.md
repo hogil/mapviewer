@@ -268,3 +268,10 @@ argument-hint: [증상-설명]
 - 원인: map selector viewer가 `gridMode=true`면 `chip-annotator.js`의 Shot boundary/hover/selected Shot renderer가 early return한다. selector annotator가 main `chipAnnotator` 색을 복사하지 않고 hard-coded 색을 쓰거나, structure canvas가 모든 chip을 흰색과 강한 grid stroke로 그리면 현재 scheme과 분리된다.
 - 수정 패턴: selector는 구조-only를 유지하되 viewer `gridMode=false`, annotator hover/selected/preview/Shot boundary 색은 main annotator에서 복사한다. Chip fill은 active color legend scheme의 palette/grade 색을 쓰고, chip boundary는 보조선 수준으로 약하게만 그린다.
 - E2E 신호: `coordinate-selection-cells`는 map selector open 상태에서 `coordinateMapSelectionViewer.gridMode === false`, main annotator 색 복사, Shot boundary overlay alpha pixel 존재, Shot Map plain click 후 selected Shot group/overlay alpha pixel 존재를 확인한다.
+
+### Grid context direct selection / Composite menu guard (2026-08-19)
+
+- 증상: grid 우클릭 메뉴가 direct `Shot 선택`/`Chip 선택`/`Wafer 선택`을 top-level에 따로 보여 길어지거나, `Shot Composite`/`Shot Composite W to W`/`Chip Composite`가 Coord 또는 positions 준비 상태에 따라 사라질 수 있다. Direct Shot/Chip 선택 뒤 grid wafer border/source가 따라오지 않거나 thumbnail 선택 표시가 단일보기와 다르게 보일 수 있다.
+- 원인: direct 선택 항목을 개별 context item으로 만들고, direct mode/click 경로가 `gridDirectSelectionSourceSet`만 갱신해 `gridSelectedIdxs`를 보장하지 않으면 wafer selection과 region source가 갈라진다. Composite item visibility를 즉시 selected-region context 성공 여부에 묶으면 positions 미준비 상태에서 메뉴가 숨겨진다.
+- 수정 패턴: top-level은 `선택 ▸` 하나, submenu 안에 `Shot 선택`/`Chip 선택`/`Wafer 선택`을 둔다. Wafer selection이 grid 기본 source이고 Coord는 이를 따른다. Direct Shot/Chip은 Coord를 무시하고 클릭한 wafer 내부에서 선택하며, 클릭한 wafer를 grid selected scope에 넣고 thumbnail overlay는 main annotator `selectedColor`를 쓴다. Grid source가 있으면 세 Composite 항목은 항상 보이고, 클릭 시 positions/layout을 준비해 최신 context를 만든다.
+- E2E 신호: `selected-region-composite`는 Coord 전 context menu에서 `선택 ▸` submenu 구조, 세 Composite item visible, direct Shot/Chip 후 target wafer selected wrap/source와 coordinate overlay selected chip count를 확인한다.

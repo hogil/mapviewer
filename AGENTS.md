@@ -376,6 +376,13 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
 - E2E guard: `scripts/e2e_chunk2.js` record `coordinate-selection-cells`는 map selector open 상태에서 `coordinateMapSelectionViewer.gridMode === false`, main annotator 색 복사, Shot boundary overlay alpha pixel 존재, Shot Map plain click 후 selected Shot group/overlay alpha pixel 존재를 확인한다.
 - 파일: `js/main.js`, `scripts/e2e_chunk2.js`
 
+#### BUG-48: Grid context 선택 묶음 / direct Shot-Chip wafer 선택 / Composite 메뉴 회귀 (2026-08-19)
+- 증상: Grid 우클릭 메뉴에 `Shot 선택`, `Chip 선택`, `Wafer 선택`이 각각 top-level로 길게 노출되거나, `Shot Composite`, `Shot Composite W to W`, `Chip Composite`가 Coord/positions 준비 상태에 따라 사라질 수 있었다. Direct Shot/Chip 선택을 해도 grid wafer 선택 border/source가 따라오지 않고, thumbnail 선택 표시가 단일보기 선택 효과와 다르게 보일 수 있었다.
+- 원인: `js/main.js::_configureGridDirectSelectionContextItems()`가 세 direct 선택 항목을 개별 top-level menu item으로 만들었다. Direct Shot/Chip mode 진입과 thumbnail click 경로는 `gridDirectSelectionSourceSet`만 갱신하고 `gridSelectedIdxs/gridSelectedSet`을 보장하지 않았다. `_configureGridCompositeContextItem()`은 `_buildSelectedRegionCompositeContext()`가 즉시 실패하면 메뉴 항목 자체를 숨겨, positions가 아직 준비되지 않은 정상 grid source에서도 Composite 메뉴가 사라졌다.
+- 수정 계약: Grid 우클릭 top-level에는 `선택 ▸` 하나만 보이고 그 submenu 안에 `Shot 선택`, `Chip 선택`, `Wafer 선택`을 둔다. Wafer 선택은 기본 grid source이며 Coord는 grid wafer selection을 따른다. Direct Shot/Chip 선택은 Coord를 무시하고 클릭한 wafer 내부의 Shot/Chip만 선택하되, 클릭한 wafer가 grid 선택 scope에 들어가야 하며 thumbnail overlay는 단일보기 `selectedColor`를 사용한다. Grid source가 있으면 세 Composite 항목은 항상 보이고, 클릭 시 필요한 positions/layout을 준비한 뒤 최신 selected-region context로 실행한다.
+- E2E guard: `scripts/e2e_chunk2.js` record `selected-region-composite`는 Coord 전 grid context에서 `선택 ▸` submenu 구조, direct 항목이 submenu에만 존재, 세 Composite 항목 visible, direct Shot/Chip 후 target wafer selected wrap/source 유지, direct thumbnail overlay rendered chip count를 확인한다.
+- 파일: `js/main.js`, `scripts/e2e_chunk2.js`
+
 ### Available skills
 - deploy-check: Ubuntu 프로덕션 배포 전 점검을 수행한다. 배포 전 민감정보, 설정, SSL/SAML, 환경변수, 운영 체크리스트를 확인할 때 사용한다. (file: D:/project/mapviewer/.claude/skills/deploy-check/SKILL.md)
 - e2e-test: L3 Tracker 전체 기능 E2E 테스트를 Playwright 브라우저 자동화로 수행한다. `/e2e-test`, `E2E 테스트`, `전체 테스트`, `기능 테스트 돌려줘` 같은 요청에 반응한다. (file: D:/project/mapviewer/.claude/skills/e2e-test/skill.md)
