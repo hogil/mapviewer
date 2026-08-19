@@ -3178,7 +3178,8 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(
       selectedGridYield.panelDisplay !== 'none' &&
         selectedGridYield.summaryDisplay !== 'none' &&
-        /^Yld\s+[-0-9.]+%/.test(selectedGridYield.text) &&
+        /^Yld\s+(?:-|[-0-9]+\.[0-9]%)$/.test(selectedGridYield.text) &&
+        !selectedGridYield.text.includes('~') &&
         selectedGridYield.selectedIdxs.length === 3 &&
         selectedGridYield.selectedImages === 3,
       `selected grid yield=${JSON.stringify(selectedGridYield)}`

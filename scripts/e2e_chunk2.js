@@ -3105,6 +3105,25 @@ const { createRunner } = require('./e2e_playwright_session');
         selectedColorCopied: window.viewer?.coordinateMapSelectionAnnotator?.selectedColor === window.viewer?.chipAnnotator?.selectedColor,
         hoverColorCopied: window.viewer?.coordinateMapSelectionAnnotator?.hoverColor === window.viewer?.chipAnnotator?.hoverColor,
         shotBoundaryColorCopied: window.viewer?.coordinateMapSelectionAnnotator?.shotBoundaryColor === window.viewer?.chipAnnotator?.shotBoundaryColor,
+        statusText: document.getElementById('coordinate-map-select-status')?.textContent?.trim() || '',
+        structureFillColors: (() => {
+          const canvas = document.getElementById('coordinate-map-select-image');
+          const annotator = window.viewer?.coordinateMapSelectionAnnotator;
+          const transform = window.viewer?.coordinateMapSelectionViewer?.transform;
+          if (!canvas?.width || !canvas?.height || !annotator?.chips?.length || !transform) return [];
+          const ctx = canvas.getContext('2d');
+          const colors = new Set();
+          for (const chip of annotator.chips.slice(0, 24)) {
+            const rect = chip?.rect;
+            if (!rect) continue;
+            const x = Math.round(((Number(rect.x0) + Number(rect.x1)) / 2) * transform.scale + transform.dx);
+            const y = Math.round(((Number(rect.y0) + Number(rect.y1)) / 2) * transform.scale + transform.dy);
+            if (x < 0 || y < 0 || x >= canvas.width || y >= canvas.height) continue;
+            const pixel = ctx.getImageData(x, y, 1, 1).data;
+            colors.add(`${pixel[0]},${pixel[1]},${pixel[2]}`);
+          }
+          return [...colors].sort();
+        })(),
         boundaryAlphaPixels: (() => {
           const canvas = document.getElementById('coordinate-map-select-overlay');
           if (!canvas?.width || !canvas?.height) return 0;
@@ -3127,6 +3146,9 @@ const { createRunner } = require('./e2e_playwright_session');
       mapPanelStructure.selectedColorCopied &&
       mapPanelStructure.hoverColorCopied &&
       mapPanelStructure.shotBoundaryColorCopied &&
+      /^구조 · \d+ Shot \/ \d+ Chip$/.test(mapPanelStructure.statusText) &&
+      !/\.png\b/i.test(mapPanelStructure.statusText) &&
+      mapPanelStructure.structureFillColors.length === 1 &&
       mapPanelStructure.boundaryAlphaPixels > 0,
     `coordinate map panel structure=${JSON.stringify(mapPanelStructure)}`);
     const shotMapPoint = await page.evaluate(() => {
@@ -6765,9 +6787,14 @@ const { createRunner } = require('./e2e_playwright_session');
       shotPoint.shotCount,
       { timeout: 10000 }
     );
-    const shotVisibleSummary = await page.locator('#selected-chips-list .selected-chips-yield-summary').innerText({ timeout: 10000 });
-    expect(/Yld\s+/.test(shotVisibleSummary) && /G\s+\d+\/B\s+\d+/.test(shotVisibleSummary),
-      `shot visible selection summary=${shotVisibleSummary}`);
+    const shotVisibleSummary = await page.evaluate(() => ({
+      text: document.querySelector('#selected-chips-list .selected-chips-yield-summary')?.textContent?.trim() || '',
+      breakdownCount: document.querySelectorAll('#selected-chips-list .selected-chips-yield-breakdown').length,
+    }));
+    expect(/^Yld\s+(?:-|[-0-9]+\.[0-9]%)$/.test(shotVisibleSummary.text) &&
+      !/G\s+\d+\/B\s+\d+/.test(shotVisibleSummary.text) &&
+      shotVisibleSummary.breakdownCount === 0,
+      `shot visible selection summary=${JSON.stringify(shotVisibleSummary)}`);
     await page.evaluate(() => {
       window.__e2eClipboardTexts = [];
       Object.defineProperty(navigator, 'clipboard', {

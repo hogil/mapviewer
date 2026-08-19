@@ -1891,6 +1891,15 @@ export class ChipAnnotator {
         return `Yld ${yieldText} · G ${good}/B ${bad} · ${source}`;
     }
 
+    formatSelectionYieldOnly(summary = this.getSelectionYieldSummary()) {
+        const count = Number(summary?.chipCount) || 0;
+        if (count <= 0) return 'Yld -';
+        const yieldText = Number.isFinite(Number(summary?.avgYield))
+            ? `${Number(summary.avgYield).toFixed(1)}%`
+            : '-';
+        return `Yld ${yieldText}`;
+    }
+
     _getSelectionChipObjects(chips = null) {
         return Array.isArray(chips)
             ? chips.filter(Boolean)
@@ -2911,7 +2920,7 @@ export class ChipAnnotator {
             const yieldSummary = this.getSelectionYieldSummary(selectedChipObjects);
             const summaryItem = document.createElement('div');
             summaryItem.className = 'selected-chips-yield-summary';
-            summaryItem.textContent = this.formatSelectionYieldSummary(yieldSummary);
+            summaryItem.textContent = this.formatSelectionYieldOnly(yieldSummary);
             summaryItem.title = `Selected chips: ${yieldSummary.chipCount}, Good: ${yieldSummary.goodCount}, Bad: ${yieldSummary.badCount}, Yield source: ${yieldSummary.avgYieldSource}`;
             summaryItem.style.cssText = `
                 padding: 3px 4px;
@@ -2927,37 +2936,6 @@ export class ChipAnnotator {
                 text-overflow: ellipsis;
             `;
             listItems.appendChild(summaryItem);
-
-            const breakdown = this.getSelectionYieldBreakdowns(selectedChipObjects);
-            const shotLine = this.formatSelectionYieldBreakdownLine(breakdown.shotGroups, {
-                label: 'Shot Yld',
-                maxItems: 2,
-            });
-            const positionLine = this.formatSelectionYieldBreakdownLine(breakdown.shotPositionGroups, {
-                label: 'Shot Pos Yld',
-                maxItems: 3,
-            });
-            const breakdownItem = document.createElement('div');
-            breakdownItem.className = 'selected-chips-yield-breakdown';
-            breakdownItem.textContent = `${shotLine} · ${positionLine}`;
-            breakdownItem.title = [
-                this.formatSelectionYieldBreakdownTitle(breakdown.shotGroups, 'Shot Yld'),
-                this.formatSelectionYieldBreakdownTitle(breakdown.shotPositionGroups, 'Shot Pos Yld'),
-            ].join('\n\n');
-            breakdownItem.style.cssText = `
-                padding: 3px 4px;
-                margin-bottom: 4px;
-                background: rgba(20, 20, 20, 0.76);
-                border: 1px solid rgba(90, 90, 90, 0.5);
-                border-radius: 3px;
-                color: #cfcfcf;
-                font-size: 9px;
-                line-height: 1.25;
-                white-space: nowrap;
-                overflow: hidden;
-                text-overflow: ellipsis;
-            `;
-            listItems.appendChild(breakdownItem);
 
             sortedChips.forEach((chipData, listIndex) => {
                 const { idx, x, y } = chipData;

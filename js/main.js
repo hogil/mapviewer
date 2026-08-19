@@ -11198,23 +11198,7 @@ class WaferMapViewer {
     }
 
     _getCoordinateMapSelectionChipColor(chip, annotator, schemeData) {
-        const top = schemeData?.top || {};
-        const bottom = schemeData?.bottom || {};
-        const paletteIndex = Number(chip?.palette_index ?? chip?.paletteIndex);
-        if (Number.isInteger(paletteIndex)) {
-            if (paletteIndex >= 0 && paletteIndex <= 7) {
-                return top[`Grade${paletteIndex}`] || '#ffffff';
-            }
-            if (paletteIndex === 8) return schemeData?.background || '#ffffff';
-            if (paletteIndex === 10) return bottom.Normal || '#ffffff';
-            if (paletteIndex === 11) return bottom.Invalid || '#ffffff';
-            const bottomKeys = ['B285', 'B286', 'B287', 'B288', 'B290', 'B291', 'B300', 'B385', 'B386', 'B388', 'B389', 'B390'];
-            const bottomKey = bottomKeys[paletteIndex - 12];
-            if (bottomKey) return bottom[bottomKey] || '#ffffff';
-        }
-        const gradeIndex = annotator?._getChipGradeIndex?.(chip);
-        if (Number.isInteger(gradeIndex)) return top[`Grade${gradeIndex}`] || '#ffffff';
-        return schemeData?.background || '#ffffff';
+        return schemeData?.top?.Grade0 || '#ffffff';
     }
 
     _getCoordinateMapSelectionBounds(annotator) {
@@ -11279,7 +11263,7 @@ class WaferMapViewer {
         const dy = -bounds.y * scale;
         state.viewer.transform = { scale, dx, dy };
         ctx.setTransform(scale, 0, 0, scale, dx, dy);
-        const strokeColor = this._colorWithAlpha(schemeData?.text || '#000001', 0.12);
+        const strokeColor = annotator.gridColor || this._colorWithAlpha(schemeData?.text || '#00ffff', 0.3);
         const strokeWidth = Math.max(0.25, 0.5 / Math.max(scale, 0.001));
         (annotator.chips || []).forEach((chip) => {
             const rect = chip?.rect;
@@ -11322,11 +11306,16 @@ class WaferMapViewer {
         const selectedShotCount = annotator?.selectionMode === 'shot'
             ? (annotator._getSelectedShotGroups?.().size || 0)
             : 0;
-        const fileName = String(state.imagePath || '').replace(/\\/g, '/').split('/').pop() || '-';
+        const totalChipCount = annotator?.chips?.length || 0;
+        const totalShotCount = annotator?.shotBoundaryGroups?.size || 0;
+        const structureText = totalShotCount > 0
+            ? `${totalShotCount} Shot / ${totalChipCount} Chip`
+            : `${totalChipCount} Chip`;
         if (status) {
-            status.textContent = selectedShotCount > 0
-                ? `${fileName} · ${selectedShotCount} Shot / ${selectedChipCount} Chip`
-                : `${fileName} · ${selectedChipCount} Chip`;
+            status.textContent = `구조 · ${structureText}`;
+            status.title = selectedChipCount > 0
+                ? `Selected: ${selectedShotCount} Shot / ${selectedChipCount} Chip`
+                : structureText;
         }
     }
 
@@ -27844,8 +27833,8 @@ class WaferMapViewer {
     }
 
     _formatGridSelectionYieldSummary(summary) {
-        if (!summary || summary.yieldCount <= 0) return `Yld - · ${summary?.count || 0} img`;
-        return `Yld ${summary.avg.toFixed(3)}% · ${summary.min.toFixed(3)}~${summary.max.toFixed(3)} · ${summary.yieldCount}/${summary.count}`;
+        if (!summary || summary.yieldCount <= 0) return 'Yld -';
+        return `Yld ${summary.avg.toFixed(1)}%`;
     }
 
     updateSelectedGridImagesList() {
