@@ -390,6 +390,13 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
 - E2E guard: `scripts/e2e_chunk2.js` record `selected-region-composite`는 3개 wafer `Shot Composite W to W` 결과를 실제 `switchToCompositeGrid()`로 띄우고, stale direct Shot selection state를 일부러 만든 상태에서도 첫 thumbnail 더블클릭이 `viewMode='gridImage'`, `isCompositeMode=true`, `compositeSession.shotLocalSquareWeighted=true`로 진입하는지 확인한다.
 - 파일: `js/main.js`, `scripts/e2e_chunk2.js`
 
+#### BUG-50: Coord Chip/Radius range 단일 AND set 한계 회귀 (2026-08-20)
+- 증상: Coord panel의 Chip X/Y range와 Radius range가 하나의 전역 AND 조건으로만 존재해, 서로 떨어진 여러 chip 영역을 한 번에 선택하려면 list에 직접 좌표를 나열해야 했다. Chip X, Chip Y, Radius controls도 Chip 범위/Radius 범위로 나뉘어 같은 선택 조건 묶음처럼 보이지 않았다.
+- 원인: `js/main.js`가 `coordinateSelectionRange`와 `coordinateSelectionRadiusRange` 단일 객체만 보관했고, `js/chip-annotator.js::selectByCoordinateConstraints()`도 단일 Chip range와 단일 Radius range를 한 번만 AND 계산했다.
+- 수정 계약: Coord range UI는 `Add`로 range set을 추가한다. 각 set은 `Chip X(mm)`, `Chip Y(mm)`, `Radius(mm)`를 한 열로 표시하고 set 내부 조건은 AND다. 여러 set은 OR로 합쳐 선택한다. Shot/Chip/Shot Position list가 있으면 기존처럼 list 결과를 base로 삼아 `(list base) AND (range set 1 OR range set 2 ...)`로 계산한다. `Clear`는 해당 set만 전체 범위로 되돌리고, set 삭제는 나머지 set OR 결과만 다시 적용해야 한다.
+- E2E guard: `scripts/e2e_chunk2.js` record `coordinate-selection-cells`는 `Add` 후 1개 set에 3개 axis row가 세로로 생기고, 2개 set의 서로 다른 Chip X/Y 조건이 OR로 2개 chip을 선택하며, Shot list 2개를 base로 둔 상태에서 range set은 AND로 1개 chip만 남기고 `Clear` 후 base 48 chip으로 복원되는지 확인한다.
+- 파일: `index.html`, `css/style.css`, `js/main.js`, `js/chip-annotator.js`, `scripts/e2e_chunk2.js`
+
 ### Available skills
 - deploy-check: Ubuntu 프로덕션 배포 전 점검을 수행한다. 배포 전 민감정보, 설정, SSL/SAML, 환경변수, 운영 체크리스트를 확인할 때 사용한다. (file: D:/project/mapviewer/.claude/skills/deploy-check/SKILL.md)
 - e2e-test: L3 Tracker 전체 기능 E2E 테스트를 Playwright 브라우저 자동화로 수행한다. `/e2e-test`, `E2E 테스트`, `전체 테스트`, `기능 테스트 돌려줘` 같은 요청에 반응한다. (file: D:/project/mapviewer/.claude/skills/e2e-test/skill.md)

@@ -1414,9 +1414,27 @@ export class ChipAnnotator {
 
     selectByCoordinateConstraints(filters = {}, options = {}) {
         const operation = ['add', 'remove'].includes(options.operation) ? options.operation : 'replace';
-        const chipRange = filters?.chipRange?.enabled ? filters.chipRange : null;
-        const chipRangeTarget = filters?.chipRangeTarget || chipRange?.target || 'chip-grid';
-        const radiusRange = filters?.radiusRange?.enabled ? filters.radiusRange : null;
+        const rawRangeSets = Array.isArray(filters?.rangeSets)
+            ? filters.rangeSets
+            : [];
+        const singleChipRange = filters?.chipRange?.enabled ? filters.chipRange : null;
+        const singleRadiusRange = filters?.radiusRange?.enabled ? filters.radiusRange : null;
+        const rangeSets = rawRangeSets.length
+            ? rawRangeSets
+                .map((set) => ({
+                    chipRange: set?.chipRange?.enabled ? set.chipRange : null,
+                    chipRangeTarget: set?.chipRangeTarget || set?.chipRange?.target || 'chip-grid',
+                    radiusRange: set?.radiusRange?.enabled ? set.radiusRange : null,
+                }))
+                .filter((set) => set.chipRange || set.radiusRange)
+            : [{
+                chipRange: singleChipRange,
+                chipRangeTarget: filters?.chipRangeTarget || singleChipRange?.target || 'chip-grid',
+                radiusRange: singleRadiusRange,
+            }].filter((set) => set.chipRange || set.radiusRange);
+        if (!rangeSets.length) {
+            rangeSets.push({ chipRange: null, chipRangeTarget: 'chip-grid', radiusRange: null, matchAll: true });
+        }
         const rawBaseIndices = filters?.baseIndices instanceof Set || Array.isArray(filters?.baseIndices)
             ? filters.baseIndices
             : null;
@@ -1429,17 +1447,17 @@ export class ChipAnnotator {
             const rightValue = Number(right);
             return leftValue <= rightValue ? [leftValue, rightValue] : [rightValue, leftValue];
         };
-        const chipXBounds = chipRange ? normalizeBounds(chipRange.xMin, chipRange.xMax) : null;
-        const chipYBounds = chipRange ? normalizeBounds(chipRange.yMin, chipRange.yMax) : null;
-        const radiusBounds = radiusRange ? normalizeBounds(radiusRange.xMin, radiusRange.xMax) : null;
         const inRange = (value, min, max) => finite(value) && finite(min) && finite(max) &&
             Number(value) >= Number(min) && Number(value) <= Number(max);
-        const matchedIndices = new Set();
-
-        this.chips.forEach((chip, chipIndex) => {
-            if (baseIndices && !baseIndices.has(chipIndex)) return;
-            if (!chip) return;
-            if (!this.isChipSelectable(chip)) return;
+        const matchesSet = (chip, set) => {
+            if (set?.matchAll === true) return true;
+            if (!set?.chipRange && !set?.radiusRange) return false;
+            const chipRange = set.chipRange;
+            const chipRangeTarget = set.chipRangeTarget || chipRange?.target || 'chip-grid';
+            const radiusRange = set.radiusRange;
+            const chipXBounds = chipRange ? normalizeBounds(chipRange.xMin, chipRange.xMax) : null;
+            const chipYBounds = chipRange ? normalizeBounds(chipRange.yMin, chipRange.yMax) : null;
+            const radiusBounds = radiusRange ? normalizeBounds(radiusRange.xMin, radiusRange.xMax) : null;
             const layout = chipRangeTarget === 'chip-pos' || radiusRange
                 ? this.getLayoutRowForChip(chip)
                 : null;
@@ -1452,14 +1470,23 @@ export class ChipAnnotator {
                 }
                 if (!inRange(chipX, chipXBounds[0], chipXBounds[1]) ||
                     !inRange(chipY, chipYBounds[0], chipYBounds[1])) {
-                    return;
+                    return false;
                 }
             }
             if (radiusRange) {
                 const centerX = Number(layout?.chip_center_x_pos);
                 const centerY = Number(layout?.chip_center_y_pos);
-                if (!inRange(Math.hypot(centerX, centerY), radiusBounds[0], radiusBounds[1])) return;
+                if (!inRange(Math.hypot(centerX, centerY), radiusBounds[0], radiusBounds[1])) return false;
             }
+            return true;
+        };
+        const matchedIndices = new Set();
+
+        this.chips.forEach((chip, chipIndex) => {
+            if (baseIndices && !baseIndices.has(chipIndex)) return;
+            if (!chip) return;
+            if (!this.isChipSelectable(chip)) return;
+            if (!rangeSets.some((set) => matchesSet(chip, set))) return;
             matchedIndices.add(chipIndex);
         });
 

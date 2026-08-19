@@ -3079,27 +3079,37 @@
             font-size: 12px;
         }
 
-        .coordinate-select-range-toggles {
+        .coordinate-select-range-title {
+            min-width: 0;
+            font-weight: 600;
+        }
+
+        .coordinate-select-range-actions,
+        .coordinate-select-range-set-actions {
             display: inline-flex;
             flex-wrap: wrap;
             align-items: center;
-            gap: 10px;
-        }
-
-        .coordinate-select-range-toggle {
-            display: inline-flex;
-            align-items: center;
             gap: 6px;
-            cursor: pointer;
         }
 
-        .coordinate-select-range-toggle input {
-            accent-color: #78a9d6;
+        .coordinate-select-range-actions .grid-btn {
+            padding: 3px 8px;
+            font-size: 11px;
+            line-height: 1.2;
+        }
+
+        .coordinate-select-range-delete {
+            flex: 0 0 auto;
+            width: 23px;
+            height: 21px;
+            padding: 0;
+            font-size: 13px;
+            line-height: 1;
         }
 
         .coordinate-select-range-fields {
             display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
+            grid-template-columns: minmax(0, 1fr);
             gap: 8px;
         }
 

@@ -282,3 +282,9 @@ argument-hint: [증상-설명]
 - 원인: grid thumbnail capture interceptor가 `dblclick`까지 선택 이벤트로 막고, `switchToCompositeGrid()`가 composite 결과 grid 진입 전에 direct selection mode/source/hover/overlay를 비우지 않았다.
 - 수정 패턴: `switchToCompositeGrid()`는 direct selection state와 thumbnail coordinate overlay를 초기화한다. `_shouldInterceptGridShotBoundaryThumbEvent()`는 `event.type === 'dblclick'`이면 false를 반환해 `enterGridImageViewMode()` 경로를 보장한다.
 - E2E 신호: `selected-region-composite`는 W-to-W 결과를 `switchToCompositeGrid()`로 띄운 뒤 stale direct Shot state를 둔 상태에서도 첫 썸네일 더블클릭이 `viewMode='gridImage'`, `isCompositeMode=true`, `compositeSession.shotLocalSquareWeighted=true`로 진입하는지 확인한다.
+
+### Coord range OR set guard (2026-08-20)
+
+- 증상: Chip X/Y와 Radius range가 단일 AND 필터만 제공하면 떨어진 여러 chip 영역을 한 번에 고르기 어렵고, Chip 범위와 Radius 범위가 별도 group으로 보이면 같은 조건 set인지 혼동된다.
+- 수정 패턴: Coord range UI는 `Add`로 set을 추가한다. 한 set 안에는 `Chip X(mm)`, `Chip Y(mm)`, `Radius(mm)` 3축을 세로 한 열로 두고 AND로 평가한다. 여러 set은 OR로 합친다. 기존 Shot/Chip/Shot Position list가 있으면 list match를 base로 두고 `(base) AND (set1 OR set2 ...)`로 계산한다.
+- E2E 신호: `coordinate-selection-cells`는 1개 set의 3축 세로 구조, 2개 set OR로 서로 다른 chip 2개 선택, Shot list base와 range set AND, set Clear 후 base selection 복원을 확인한다.
