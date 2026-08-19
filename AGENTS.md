@@ -383,6 +383,13 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
 - E2E guard: `scripts/e2e_chunk2.js` record `selected-region-composite`는 Coord 전 grid context에서 `Wafer/Shot/Chip 선택 ▸` submenu 구조와 Composite 아래 위치, Coord 항목 없음, direct 항목이 submenu에만 존재, 기본 `✓ Wafer 선택`, Shot 전환 후 `✓ Shot 선택`, 세 Composite 항목 visible 및 순서, direct Shot hover tooltip/overlay, direct Shot 후 `gridShotBoundaryVisible=false`, Ctrl+다른 wafer의 다른 Shot 클릭 후 `gridDirectSelectionBySource`가 source 2개와 서로 다른 key set을 유지하는지, direct Chip 후 Ctrl+다른 wafer의 다른 Chip 클릭에서도 source 2개와 서로 다른 key set을 유지하는지, target wafer selected wrap/source 유지, direct thumbnail overlay rendered chip count를 확인한다.
 - 파일: `js/main.js`, `js/chip-annotator.js`, `scripts/e2e_chunk2.js`
 
+#### BUG-49: Shot Composite W to W 결과 그리드 더블클릭 진입 회귀 (2026-08-19)
+- 증상: Grid에서 `Shot Composite W to W`를 만든 뒤 결과가 3장짜리 grid로 표시되어도 썸네일 더블클릭으로 `gridImage` 단일 보기로 들어가지 못할 수 있었다.
+- 원인: W-to-W를 만들기 전 grid direct `Shot 선택`/`Chip 선택` 상태가 남아 있으면 `js/main.js::_shouldInterceptGridShotBoundaryThumbEvent()`가 capture 단계에서 `dblclick`까지 선택 이벤트로 가로채 `buildGridThumbWrap()`/`createGridThumbWrap()`의 더블클릭 진입 handler가 실행되지 않았다. `switchToCompositeGrid()`도 composite 결과 grid 진입 시 direct selection state/overlay를 정리하지 않았다.
+- 수정 계약: composite 결과 grid로 전환할 때 `gridDirectSelectionMode`, direct source/key/hover state, coordinate selection thumbnail overlay를 초기화한다. Grid Shot/Chip thumbnail 선택 interceptor는 `mousedown`/`click`만 다루고 `dblclick`은 항상 상세 보기 진입 handler로 흘려보내야 한다.
+- E2E guard: `scripts/e2e_chunk2.js` record `selected-region-composite`는 3개 wafer `Shot Composite W to W` 결과를 실제 `switchToCompositeGrid()`로 띄우고, stale direct Shot selection state를 일부러 만든 상태에서도 첫 thumbnail 더블클릭이 `viewMode='gridImage'`, `isCompositeMode=true`, `compositeSession.shotLocalSquareWeighted=true`로 진입하는지 확인한다.
+- 파일: `js/main.js`, `scripts/e2e_chunk2.js`
+
 ### Available skills
 - deploy-check: Ubuntu 프로덕션 배포 전 점검을 수행한다. 배포 전 민감정보, 설정, SSL/SAML, 환경변수, 운영 체크리스트를 확인할 때 사용한다. (file: D:/project/mapviewer/.claude/skills/deploy-check/SKILL.md)
 - e2e-test: L3 Tracker 전체 기능 E2E 테스트를 Playwright 브라우저 자동화로 수행한다. `/e2e-test`, `E2E 테스트`, `전체 테스트`, `기능 테스트 돌려줘` 같은 요청에 반응한다. (file: D:/project/mapviewer/.claude/skills/e2e-test/skill.md)

@@ -6498,6 +6498,17 @@ const { createRunner } = require('./e2e_playwright_session');
       const sourceNames = imagePaths.map((imagePath) => String(imagePath || '').replace(/\\/g, '/').split('/').pop());
       const sumMaps = Array.isArray(result.sum_maps) ? result.sum_maps : [];
       const filenames = sumMaps.map((entry) => entry.filename || String(entry.path || '').split('/').pop());
+      const gridResult = {
+        output_dir: result.output_dir,
+        image_count: result.image_count,
+        source_images: result.source_images,
+        source_image_paths: result.source_image_paths,
+        selection_mode: result.selection_mode,
+        selected_chip_count: result.selected_chip_count,
+        selected_shot_count: result.selected_shot_count,
+        composite_sample_count: result.composite_sample_count,
+        shot_local_square_weighted: result.shot_local_square_weighted === true,
+      };
       return {
         sourceNames,
         result: {
@@ -6512,6 +6523,7 @@ const { createRunner } = require('./e2e_playwright_session');
           filenames,
           hasShotLocalFilename: filenames.some((filename) => /shot_local/i.test(filename)),
         },
+        gridResult,
       };
     }, {
       imagePaths: [target.imagePath, gridCoordSecond.imagePath, gridCoordThird.imagePath],
@@ -6528,6 +6540,65 @@ const { createRunner } = require('./e2e_playwright_session');
       shotLocalWtwResult.result.filenames.join('|') === shotLocalWtwResult.sourceNames.join('|') &&
       !shotLocalWtwResult.result.hasShotLocalFilename,
       `shot-local WTW must output one original-named image per wafer=${JSON.stringify(shotLocalWtwResult)}`);
+
+    await page.evaluate(async (result) => {
+      const v = window.viewer;
+      if (!v) throw new Error('viewer missing for shot-local WTW grid');
+      v.gridDirectSelectionMode = 'shot';
+      v.gridDirectSelectionSourceSet = new Set(['stale-direct-shot']);
+      v.gridDirectSelectionBySource = new Map([['stale-direct-shot', new Set(['4:5'])]]);
+      v.gridDirectSelectionHover = { mode: 'shot', sourceKey: 'stale-direct-shot' };
+      await v.switchToCompositeGrid(result);
+    }, shotLocalWtwResult.gridResult);
+    await page.waitForFunction(
+      () => {
+        const v = window.viewer;
+        return !!v &&
+          v.gridMode === true &&
+          v.isCompositeMode === true &&
+          v.gridDirectSelectionMode == null &&
+          (v.currentGridImages?.length || 0) === 3 &&
+          document.querySelectorAll('#image-grid .grid-thumb-wrap').length >= 3;
+      },
+      null,
+      { timeout: 60000 }
+    );
+    const shotLocalWtwGridBefore = await page.evaluate(() => ({
+      gridMode: window.viewer?.gridMode === true,
+      directMode: window.viewer?.gridDirectSelectionMode || null,
+      count: window.viewer?.currentGridImages?.length || 0,
+      firstPath: String(window.viewer?.currentGridImages?.[0] || '').replace(/\\/g, '/'),
+    }));
+    await page.locator('#image-grid .grid-thumb-wrap').first().dblclick({ delay: 30 });
+    await page.waitForFunction(
+      () => {
+        const v = window.viewer;
+        return !!v &&
+          v.gridMode === false &&
+          (v.viewMode === 'gridImage' || v.singleImageFromGrid === true) &&
+          v.isCompositeMode === true &&
+          !!v.selectedImagePath;
+      },
+      null,
+      { timeout: 30000 }
+    );
+    const shotLocalWtwDblClick = await page.evaluate(() => ({
+      gridMode: window.viewer?.gridMode === true,
+      viewMode: window.viewer?.viewMode || null,
+      singleImageFromGrid: window.viewer?.singleImageFromGrid === true,
+      compositeMode: window.viewer?.isCompositeMode === true,
+      sessionShotLocal: window.viewer?.compositeSession?.shotLocalSquareWeighted === true,
+      selectedPath: String(window.viewer?.selectedImagePath || '').replace(/\\/g, '/'),
+      savedCount: window.viewer?.savedViewState?.images?.length || 0,
+    }));
+    expect(shotLocalWtwDblClick.gridMode === false &&
+      shotLocalWtwDblClick.viewMode === 'gridImage' &&
+      shotLocalWtwDblClick.singleImageFromGrid &&
+      shotLocalWtwDblClick.compositeMode &&
+      shotLocalWtwDblClick.sessionShotLocal &&
+      shotLocalWtwDblClick.savedCount === 3 &&
+      shotLocalWtwDblClick.selectedPath === shotLocalWtwGridBefore.firstPath,
+      `shot-local WTW grid double-click failed before=${JSON.stringify(shotLocalWtwGridBefore)} after=${JSON.stringify(shotLocalWtwDblClick)}`);
 
     return {
       target,
@@ -6558,6 +6629,8 @@ const { createRunner } = require('./e2e_playwright_session');
       multiShotImageHeight: multiShotResult.result?.height || 0,
       multiShotPositionsCount: multiShotResult.positionsChipCount || 0,
       shotLocalWtwResult,
+      shotLocalWtwGridBefore,
+      shotLocalWtwDblClick,
     };
   });
 

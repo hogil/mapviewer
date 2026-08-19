@@ -13048,6 +13048,12 @@ class WaferMapViewer {
         this._personalizedColorCacheBuster = Date.now();
         this.selectedGrades.clear();
         this.isCompositeMode = true;
+        this.gridDirectSelectionMode = null;
+        this.gridDirectSelectionSourceSet?.clear?.();
+        this.gridDirectSelectionBySource?.clear?.();
+        this.gridDirectSelectionHover = null;
+        this._gridDirectSelectionHoverSeq = (this._gridDirectSelectionHoverSeq || 0) + 1;
+        this._clearGridCoordinateSelectionOverlays?.();
 
         const sourceImages = result.source_image_paths || this.lastCompositeSourceImages || [];
         this.compositeSession = {
@@ -33706,6 +33712,7 @@ class WaferMapViewer {
 
     _shouldInterceptGridShotBoundaryThumbEvent(wrap, event) {
         if (!wrap || !event || this.gridMode !== true || this.viewMode === 'gridImage') return false;
+        if (event.type === 'dblclick') return false;
         if (typeof event.button === 'number' && event.button !== 0) return false;
         const thumbBox = event.target?.closest?.('.grid-thumb-imgbox');
         if (!thumbBox || !wrap.contains(thumbBox)) return false;
