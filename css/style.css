@@ -3105,7 +3105,7 @@
 
         .coordinate-select-range-axis {
             display: grid;
-            grid-template-columns: 72px minmax(0, 1fr) 64px minmax(0, 1fr) 64px;
+            grid-template-columns: 72px minmax(120px, 1fr) minmax(126px, 150px);
             align-items: center;
             gap: 5px;
             color: #aaa;
@@ -3121,10 +3121,90 @@
             font-weight: 600;
         }
 
-        .coordinate-select-range-axis input[type="range"] {
+        .coordinate-select-range-slider {
+            --range-left: 0%;
+            --range-right: 100%;
+            position: relative;
+            height: 26px;
+            min-width: 0;
+        }
+
+        .coordinate-select-range-slider::before,
+        .coordinate-select-range-slider::after {
+            content: "";
+            position: absolute;
+            top: 50%;
+            height: 4px;
+            border-radius: 2px;
+            transform: translateY(-50%);
+            pointer-events: none;
+        }
+
+        .coordinate-select-range-slider::before {
+            left: 0;
+            right: 0;
+            background: #333;
+        }
+
+        .coordinate-select-range-slider::after {
+            left: var(--range-left);
+            right: calc(100% - var(--range-right));
+            background: #78a9d6;
+        }
+
+        .coordinate-select-range-slider input[type="range"] {
+            position: absolute;
+            inset: 0;
             width: 100%;
             min-width: 0;
-            accent-color: #8caecc;
+            height: 26px;
+            margin: 0;
+            background: transparent;
+            pointer-events: none;
+            appearance: none;
+            -webkit-appearance: none;
+        }
+
+        .coordinate-select-range-slider input[type="range"]::-webkit-slider-runnable-track {
+            height: 4px;
+            background: transparent;
+            border: 0;
+        }
+
+        .coordinate-select-range-slider input[type="range"]::-moz-range-track {
+            height: 4px;
+            background: transparent;
+            border: 0;
+        }
+
+        .coordinate-select-range-slider input[type="range"]::-webkit-slider-thumb {
+            width: 14px;
+            height: 14px;
+            margin-top: -5px;
+            border: 1px solid #dcecff;
+            border-radius: 50%;
+            background: #78a9d6;
+            cursor: ew-resize;
+            pointer-events: auto;
+            appearance: none;
+            -webkit-appearance: none;
+        }
+
+        .coordinate-select-range-slider input[type="range"]::-moz-range-thumb {
+            width: 14px;
+            height: 14px;
+            border: 1px solid #dcecff;
+            border-radius: 50%;
+            background: #78a9d6;
+            cursor: ew-resize;
+            pointer-events: auto;
+        }
+
+        .coordinate-select-range-values {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+            gap: 4px;
+            min-width: 0;
         }
 
         .coordinate-select-range-axis input[type="number"] {
@@ -3263,10 +3343,10 @@
         }
 
         .coordinate-map-select-modal-content {
-            width: min(1120px, 96vw);
-            max-width: min(1120px, 96vw);
-            height: min(820px, 92vh);
-            max-height: min(820px, 92vh);
+            width: auto;
+            max-width: 96vw;
+            height: auto;
+            max-height: 92vh;
             overflow: hidden;
             display: flex;
             flex-direction: column;
@@ -3290,7 +3370,7 @@
 
         .coordinate-map-select-stage {
             position: relative;
-            flex: 1 1 auto;
+            flex: 0 0 auto;
             min-height: 0;
             background: #050505;
             border: 1px solid #333;
@@ -3797,7 +3877,12 @@
             }
 
             .coordinate-select-range-axis {
-                grid-template-columns: 70px minmax(0, 1fr) 58px minmax(0, 1fr) 58px;
+                grid-template-columns: minmax(0, 1fr);
+                align-items: stretch;
+            }
+
+            .coordinate-select-range-axis > span:first-child {
+                white-space: normal;
             }
 
             .coordinate-select-table-actions {

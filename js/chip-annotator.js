@@ -1320,10 +1320,13 @@ export class ChipAnnotator {
     selectByCoordinateRange(target, range, options = {}) {
         const operation = ['add', 'remove'].includes(options.operation) ? options.operation : 'replace';
         const finite = (value) => Number.isFinite(Number(value));
-        const xMin = Number(range?.xMin);
-        const xMax = Number(range?.xMax);
-        const yMin = Number(range?.yMin);
-        const yMax = Number(range?.yMax);
+        const normalizeBounds = (left, right) => {
+            const leftValue = Number(left);
+            const rightValue = Number(right);
+            return leftValue <= rightValue ? [leftValue, rightValue] : [rightValue, leftValue];
+        };
+        const [xMin, xMax] = normalizeBounds(range?.xMin, range?.xMax);
+        const [yMin, yMax] = normalizeBounds(range?.yMin, range?.yMax);
         const hasY = target !== 'chip-id' && target !== 'radius' && finite(yMin) && finite(yMax);
         const matchedIndices = new Set();
         this.chips.forEach((chip, chipIndex) => {
@@ -1390,6 +1393,14 @@ export class ChipAnnotator {
         const chipRangeTarget = filters?.chipRangeTarget || chipRange?.target || 'chip-grid';
         const radiusRange = filters?.radiusRange?.enabled ? filters.radiusRange : null;
         const finite = (value) => Number.isFinite(Number(value));
+        const normalizeBounds = (left, right) => {
+            const leftValue = Number(left);
+            const rightValue = Number(right);
+            return leftValue <= rightValue ? [leftValue, rightValue] : [rightValue, leftValue];
+        };
+        const chipXBounds = chipRange ? normalizeBounds(chipRange.xMin, chipRange.xMax) : null;
+        const chipYBounds = chipRange ? normalizeBounds(chipRange.yMin, chipRange.yMax) : null;
+        const radiusBounds = radiusRange ? normalizeBounds(radiusRange.xMin, radiusRange.xMax) : null;
         const inRange = (value, min, max) => finite(value) && finite(min) && finite(max) &&
             Number(value) >= Number(min) && Number(value) <= Number(max);
         const matchedIndices = new Set();
@@ -1407,15 +1418,15 @@ export class ChipAnnotator {
                     chipX = Number(layout?.chip_center_x_pos);
                     chipY = Number(layout?.chip_center_y_pos);
                 }
-                if (!inRange(chipX, chipRange.xMin, chipRange.xMax) ||
-                    !inRange(chipY, chipRange.yMin, chipRange.yMax)) {
+                if (!inRange(chipX, chipXBounds[0], chipXBounds[1]) ||
+                    !inRange(chipY, chipYBounds[0], chipYBounds[1])) {
                     return;
                 }
             }
             if (radiusRange) {
                 const centerX = Number(layout?.chip_center_x_pos);
                 const centerY = Number(layout?.chip_center_y_pos);
-                if (!inRange(Math.hypot(centerX, centerY), radiusRange.xMin, radiusRange.xMax)) return;
+                if (!inRange(Math.hypot(centerX, centerY), radiusBounds[0], radiusBounds[1])) return;
             }
             matchedIndices.add(chipIndex);
         });

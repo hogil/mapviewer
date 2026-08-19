@@ -247,3 +247,10 @@ argument-hint: [증상-설명]
 - 원인: selected Shot canvas가 전체 canonical 영역을 grade 0으로 초기화했고, sum-map 최초 생성/recolor/subset/shot-local WTW가 selected 결과에서도 value range를 `0..max`로 clamp했다. top Composite no-selection은 `_toggleMcPanel()` toast 경로였다.
 - 수정 패턴: `_build_selected_shot_geometry()`는 base를 selected Shot 전용 흰색 index 23으로 시작하고 selected placement rect만 0으로 마킹한다. selected Chip/Shot Composite는 `quantile_clamp_min_to_zero=false`를 response/NPZ에 저장하고, `_save_sum_map_variants()`, `recolor_saved_sum_maps()`, `create_subset_map()`, `_render_shot_local_square_weighted_entry()` 모두 selected mask의 실제 finite min/max를 사용한다. 일반 wafer Composite는 기존 `0..max`를 유지한다. selected Shot output에는 `selected_shot_display.json`을 저장하고 `/api/image`와 thumbnail PLTE 패치 뒤에도 empty slot index 23을 흰색으로 되돌린다. no-wafer Composite는 `wafer를 선택하세요.` alert를 띄운다.
 - E2E 신호: `8,9,10,11`은 no-wafer top Composite alert와 `#mc-panel` 미표시를 확인한다. `selected-region-composite`는 selected result의 `quantile_clamp_min_to_zero === false`와 partial Shot 빈 slot 중심 pixel이 palette index 23 흰색과 일치하고 선택 slot들이 선택된 값끼리 여러 quantile 색으로 분포하는지 확인한다.
+
+### Coordinate Map structure-only selector / range rail guard (2026-08-19)
+
+- 증상: Shot X/Y `Map` 또는 Chip X/Y `Map`이 선택용 구조 모달이어야 하는데 특정 wafer bitmap을 로드하고 크게 표시할 수 있었다. plain click으로 Shot/Chip 선택이 되지 않거나, Chip/Radius 범위 min/max가 독립 rail처럼 보여 좌우 값이 뒤집히기 쉬웠다.
+- 원인: coordinate map selector가 `/api/image` bitmap을 로드해 그렸고, plain click 선택 경로 없이 `ChipAnnotator`의 일반 클릭 해제 동작에 의존했다. 범위 UI는 axis마다 min/max range를 나란히 만들고 crossing 값을 같은 값으로만 보정했다.
+- 수정 패턴: map selector는 positions/layout만 읽고 chip 구조와 Shot boundary만 canvas에 그린다. Shot Map plain click은 Shot 단위 replace, Chip Map plain click은 Chip 단위 replace로 처리하고 blank click은 selection을 지우지 않는다. Chip/Radius 범위 UI는 axis마다 하나의 dual-handle rail을 사용하고, UI state 및 `chip-annotator.js` range 계산 모두 min/max를 작은 값/큰 값으로 정렬한다.
+- E2E 신호: `coordinate-selection-cells`는 map modal에 `coordinateMapSelection.image`가 없고 plain click만으로 Shot/Chip list가 동기화되는지 확인한다. 같은 record는 axis마다 `.coordinate-select-range-slider` 하나와 value group 하나가 있고, reversed min/max 입력 후에도 `min <= max`, 소수점 2자리, Chip/Radius AND 선택이 유지되는지 확인한다.

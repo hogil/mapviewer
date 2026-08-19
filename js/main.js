@@ -9080,6 +9080,43 @@ class WaferMapViewer {
         return Number(value).toFixed(decimals);
     }
 
+    _normalizeCoordinateSelectionRangeAxis(range, axis, meta) {
+        if (!range || !meta) return false;
+        const minKey = `${axis}Min`;
+        const maxKey = `${axis}Max`;
+        const clamp = (value) => Math.min(meta.max, Math.max(meta.min, value));
+        let left = Number(range[minKey]);
+        let right = Number(range[maxKey]);
+        if (!Number.isFinite(left)) left = meta.min;
+        if (!Number.isFinite(right)) right = meta.max;
+        left = clamp(left);
+        right = clamp(right);
+        const nextMin = Math.min(left, right);
+        const nextMax = Math.max(left, right);
+        const changed = Number(range[minKey]) !== nextMin || Number(range[maxKey]) !== nextMax;
+        range[minKey] = nextMin;
+        range[maxKey] = nextMax;
+        return changed;
+    }
+
+    _syncCoordinateSelectionRangeAxisControls(kind, axis, meta, range, config) {
+        if (!this.dom?.coordinateSelectRangeFields || !meta || !range) return;
+        const selector = `input[data-coordinate-range-kind="${kind}"][data-coordinate-range-axis="${axis}"]`;
+        this.dom.coordinateSelectRangeFields.querySelectorAll(selector).forEach((control) => {
+            const controlKey = `${axis}${control.dataset.coordinateRangeBound === 'min' ? 'Min' : 'Max'}`;
+            control.value = this._formatCoordinateRangeValue(range[controlKey], config.decimals);
+        });
+        const slider = this.dom.coordinateSelectRangeFields.querySelector(
+            `.coordinate-select-range-slider[data-coordinate-range-kind="${kind}"][data-coordinate-range-axis="${axis}"]`
+        );
+        if (!slider) return;
+        const span = Number(meta.max) - Number(meta.min);
+        const leftPct = span > 0 ? ((Number(range[`${axis}Min`]) - Number(meta.min)) / span) * 100 : 0;
+        const rightPct = span > 0 ? ((Number(range[`${axis}Max`]) - Number(meta.min)) / span) * 100 : 100;
+        slider.style.setProperty('--range-left', `${Math.min(100, Math.max(0, leftPct))}%`);
+        slider.style.setProperty('--range-right', `${Math.min(100, Math.max(0, rightPct))}%`);
+    }
+
     _updateCoordinateSelectionRangeStatus() {
         const status = this.dom?.coordinateSelectRangeStatus;
         if (!status) return;
@@ -9122,6 +9159,7 @@ class WaferMapViewer {
         }
         const addAxis = (kind, axis, label, meta, range, enabled, config) => {
             if (!meta) return;
+            this._normalizeCoordinateSelectionRangeAxis(range, axis, meta);
             const row = document.createElement('div');
             row.className = 'coordinate-select-range-axis';
             const axisLabel = document.createElement('span');
@@ -9142,14 +9180,24 @@ class WaferMapViewer {
                     config.decimals
                 );
                 input.disabled = !enabled;
-                if (type === 'number') input.setAttribute('aria-label', `${label} ${bound === 'min' ? '시작' : '끝'}`);
+                input.setAttribute('aria-label', `${label} ${bound === 'min' ? '시작' : '끝'}`);
                 return input;
             };
-            row.appendChild(makeControl('min', 'range'));
-            row.appendChild(makeControl('min', 'number'));
-            row.appendChild(makeControl('max', 'range'));
-            row.appendChild(makeControl('max', 'number'));
+            const slider = document.createElement('div');
+            slider.className = 'coordinate-select-range-slider';
+            slider.dataset.coordinateRangeKind = kind;
+            slider.dataset.coordinateRangeAxis = axis;
+            slider.appendChild(makeControl('min', 'range'));
+            slider.appendChild(makeControl('max', 'range'));
+            row.appendChild(slider);
+
+            const values = document.createElement('div');
+            values.className = 'coordinate-select-range-values';
+            values.appendChild(makeControl('min', 'number'));
+            values.appendChild(makeControl('max', 'number'));
+            row.appendChild(values);
             fields.appendChild(row);
+            this._syncCoordinateSelectionRangeAxisControls(kind, axis, meta, range, config);
         };
         addAxis('chip', 'x', 'Chip X(mm)', chipConfig.x, this.coordinateSelectionRange,
             this.coordinateSelectionRange.enabled, chipConfig);
@@ -9171,19 +9219,9 @@ class WaferMapViewer {
         const value = Number(input.value);
         if (!Number.isFinite(value)) return;
         const key = `${axis}${bound === 'min' ? 'Min' : 'Max'}`;
-        const otherKey = `${axis}${bound === 'min' ? 'Max' : 'Min'}`;
         range[key] = Math.min(meta.max, Math.max(meta.min, value));
-        if (bound === 'min' && range[key] > range[otherKey]) {
-            range[otherKey] = range[key];
-        }
-        if (bound === 'max' && range[key] < range[otherKey]) {
-            range[otherKey] = range[key];
-        }
-        const selector = `[data-coordinate-range-kind="${kind}"][data-coordinate-range-axis="${axis}"]`;
-        this.dom.coordinateSelectRangeFields?.querySelectorAll(selector).forEach((control) => {
-            const controlKey = `${axis}${control.dataset.coordinateRangeBound === 'min' ? 'Min' : 'Max'}`;
-            control.value = this._formatCoordinateRangeValue(range[controlKey], config.decimals);
-        });
+        this._normalizeCoordinateSelectionRangeAxis(range, axis, meta);
+        this._syncCoordinateSelectionRangeAxisControls(kind, axis, meta, range, config);
         this._updateCoordinateSelectionRangeStatus();
         this._scheduleCoordinateSelectionLiveApply();
     }
@@ -10525,6 +10563,15 @@ class WaferMapViewer {
         const operation = 'replace';
         let result = null;
         if (this.coordinateSelectionRange.enabled || this.coordinateSelectionRadiusRange?.enabled) {
+            const chipConfig = this._getCoordinateSelectionRangeConfig('chip-pos');
+            if (this.coordinateSelectionRange.enabled && chipConfig.available) {
+                this._normalizeCoordinateSelectionRangeAxis(this.coordinateSelectionRange, 'x', chipConfig.x);
+                this._normalizeCoordinateSelectionRangeAxis(this.coordinateSelectionRange, 'y', chipConfig.y);
+            }
+            const radiusConfig = this._getCoordinateSelectionRangeConfig('radius');
+            if (this.coordinateSelectionRadiusRange?.enabled && radiusConfig.available) {
+                this._normalizeCoordinateSelectionRangeAxis(this.coordinateSelectionRadiusRange, 'x', radiusConfig.x);
+            }
             this.coordinateSelectionSuppressSelectionSync = true;
             try {
                 result = this.chipAnnotator.selectByCoordinateConstraints(
@@ -10843,11 +10890,6 @@ class WaferMapViewer {
             .find(Boolean) || '';
     }
 
-    _getCoordinateMapImageUrl(imagePath) {
-        const personalizedParams = this.getPersonalizedParams ? this.getPersonalizedParams() : '';
-        return `/api/image?path=${encodeURIComponent(imagePath)}${personalizedParams}`;
-    }
-
     _getCoordinateMapSelectionViewer() {
         const stage = this.dom?.coordinateMapSelectStage;
         if (!this.coordinateMapSelectionViewer) {
@@ -10892,22 +10934,33 @@ class WaferMapViewer {
         return this.coordinateMapSelectionAnnotator;
     }
 
-    async _loadCoordinateMapSelectionImage(imagePath) {
-        const img = new Image();
-        img.decoding = 'async';
-        img.src = this._getCoordinateMapImageUrl(imagePath);
-        if (img.decode) {
-            await img.decode();
-        } else {
-            await new Promise((resolve, reject) => {
-                img.onload = resolve;
-                img.onerror = reject;
-            });
+    _getCoordinateMapSelectionBounds(annotator) {
+        const coordCanvas = annotator?.positionsData?.coord?.canvas || {};
+        const canvasWidth = Number(coordCanvas.width);
+        const canvasHeight = Number(coordCanvas.height);
+        if (Number.isFinite(canvasWidth) && Number.isFinite(canvasHeight) &&
+            canvasWidth > 0 && canvasHeight > 0) {
+            return { x: 0, y: 0, width: canvasWidth, height: canvasHeight };
         }
-        return img;
+
+        const rects = (annotator?.chips || [])
+            .map((chip) => chip?.rect)
+            .filter((rect) => rect &&
+                [rect.x0, rect.y0, rect.x1, rect.y1].every((value) => Number.isFinite(Number(value))));
+        if (!rects.length) return { x: 0, y: 0, width: 1, height: 1 };
+        const minX = Math.min(...rects.map((rect) => Number(rect.x0)));
+        const minY = Math.min(...rects.map((rect) => Number(rect.y0)));
+        const maxX = Math.max(...rects.map((rect) => Number(rect.x1)));
+        const maxY = Math.max(...rects.map((rect) => Number(rect.y1)));
+        return {
+            x: minX,
+            y: minY,
+            width: Math.max(1, maxX - minX),
+            height: Math.max(1, maxY - minY),
+        };
     }
 
-    _drawCoordinateMapSelectionImage() {
+    _drawCoordinateMapSelectionStructure() {
         const state = this.coordinateMapSelection;
         const stage = this.dom?.coordinateMapSelectStage;
         const imageCanvas = this.dom?.coordinateMapSelectImageCanvas;
@@ -10915,11 +10968,17 @@ class WaferMapViewer {
         const annotator = this.coordinateMapSelectionAnnotator;
         if (!state || !stage || !imageCanvas || !overlayCanvas || !annotator) return false;
 
-        const rect = stage.getBoundingClientRect();
-        const canvasWidth = Math.max(1, Math.round(rect.width || stage.clientWidth || 0));
-        const canvasHeight = Math.max(1, Math.round(rect.height || stage.clientHeight || 0));
-        if (canvasWidth <= 1 || canvasHeight <= 1) return false;
+        const bounds = this._getCoordinateMapSelectionBounds(annotator);
+        const viewportWidth = Math.max(1, window.innerWidth || 1);
+        const viewportHeight = Math.max(1, window.innerHeight || 1);
+        const maxWidth = Math.min(Math.max(120, viewportWidth - 80), 900);
+        const maxHeight = Math.min(Math.max(120, viewportHeight - 190), 720);
+        const scale = Math.min(maxWidth / bounds.width, maxHeight / bounds.height, 1);
+        const canvasWidth = Math.max(1, Math.round(bounds.width * scale));
+        const canvasHeight = Math.max(1, Math.round(bounds.height * scale));
 
+        stage.style.width = `${canvasWidth}px`;
+        stage.style.height = `${canvasHeight}px`;
         if (imageCanvas.width !== canvasWidth) imageCanvas.width = canvasWidth;
         if (imageCanvas.height !== canvasHeight) imageCanvas.height = canvasHeight;
         if (overlayCanvas.width !== canvasWidth) overlayCanvas.width = canvasWidth;
@@ -10932,19 +10991,25 @@ class WaferMapViewer {
         ctx.fillStyle = '#050505';
         ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
-        const img = state.image;
-        const coordCanvas = annotator.positionsData?.coord?.canvas || {};
-        const imageWidth = Number(img?.naturalWidth) || Number(coordCanvas.width) || canvasWidth;
-        const imageHeight = Number(img?.naturalHeight) || Number(coordCanvas.height) || canvasHeight;
-        const scale = Math.min(canvasWidth / imageWidth, canvasHeight / imageHeight);
-        const dx = (canvasWidth - imageWidth * scale) / 2;
-        const dy = (canvasHeight - imageHeight * scale) / 2;
+        const dx = -bounds.x * scale;
+        const dy = -bounds.y * scale;
         state.viewer.transform = { scale, dx, dy };
-
-        if (img && imageWidth > 0 && imageHeight > 0) {
-            ctx.imageSmoothingEnabled = false;
-            ctx.drawImage(img, dx, dy, imageWidth * scale, imageHeight * scale);
-        }
+        ctx.setTransform(scale, 0, 0, scale, dx, dy);
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.035)';
+        ctx.strokeStyle = 'rgba(210, 210, 210, 0.32)';
+        ctx.lineWidth = Math.max(0.75, 1 / Math.max(scale, 0.001));
+        (annotator.chips || []).forEach((chip) => {
+            const rect = chip?.rect;
+            if (!rect) return;
+            const x0 = Number(rect.x0);
+            const y0 = Number(rect.y0);
+            const x1 = Number(rect.x1);
+            const y1 = Number(rect.y1);
+            if (![x0, y0, x1, y1].every(Number.isFinite)) return;
+            ctx.fillRect(x0, y0, Math.max(0, x1 - x0), Math.max(0, y1 - y0));
+            ctx.strokeRect(x0, y0, Math.max(0, x1 - x0), Math.max(0, y1 - y0));
+        });
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
 
         annotator.render?.();
         return true;
@@ -11027,7 +11092,7 @@ class WaferMapViewer {
             }
         }
         annotator.selectionMode = listName === 'shot' ? 'shot' : 'chip';
-        annotator.shotBoundaryVisible = listName === 'shot';
+        annotator.shotBoundaryVisible = true;
         annotator.showGrid = true;
         annotator.render?.();
         this._updateCoordinateMapSelectionStatus();
@@ -11055,7 +11120,6 @@ class WaferMapViewer {
         this.coordinateMapSelection = {
             listName,
             imagePath,
-            image: null,
             viewer,
             loading: true,
         };
@@ -11067,33 +11131,31 @@ class WaferMapViewer {
         annotator.selectedChipsOrder = [];
         annotator.selectionMode = listName === 'shot' ? 'shot' : 'chip';
         annotator.showGrid = true;
-        annotator.shotBoundaryVisible = listName === 'shot';
+        annotator.shotBoundaryVisible = true;
         annotator.clearLayoutData?.({ resetVisibility: false });
 
         try {
-            const imagePromise = this._loadCoordinateMapSelectionImage(imagePath);
             const positionsPromise = annotator.loadPositions(imagePath, { loadAnnotations: false, render: false });
             const processId = this._getLayoutProcessId(imagePath);
             const layoutRowsPromise = processId
                 ? this._getLayoutRowsForProcess(processId).catch(() => [])
                 : Promise.resolve([]);
-            const [image, positionsLoaded, layoutRows] = await Promise.all([imagePromise, positionsPromise, layoutRowsPromise]);
+            const [positionsLoaded, layoutRows] = await Promise.all([positionsPromise, layoutRowsPromise]);
             if (this._coordinateMapSelectionRequestId !== requestId) return false;
             if (!positionsLoaded) {
                 this._setCoordinateSelectionError('Map 선택에 필요한 Chip 위치 정보를 찾을 수 없습니다.');
                 return false;
             }
-            this.coordinateMapSelection.image = image;
             if (processId) annotator.setLayoutData(processId, layoutRows);
             annotator.selectionMode = listName === 'shot' ? 'shot' : 'chip';
             annotator.showGrid = true;
-            annotator.shotBoundaryVisible = listName === 'shot';
-            this._drawCoordinateMapSelectionImage();
+            annotator.shotBoundaryVisible = true;
+            this._drawCoordinateMapSelectionStructure();
             this.coordinateMapSelection.loading = false;
             this._restoreCoordinateMapSelectionFromLists(listName);
             this._setCoordinateSelectionError('');
             if (!this.coordinateMapSelectionResizeHandler) {
-                this.coordinateMapSelectionResizeHandler = () => this._drawCoordinateMapSelectionImage();
+                this.coordinateMapSelectionResizeHandler = () => this._drawCoordinateMapSelectionStructure();
                 window.addEventListener('resize', this.coordinateMapSelectionResizeHandler);
             }
             return true;
@@ -11103,6 +11165,42 @@ class WaferMapViewer {
             this._setCoordinateSelectionError('Wafer map 선택 모달을 열 수 없습니다.');
             return false;
         }
+    }
+
+    _handleCoordinateMapSelectionPlainPointer(event) {
+        if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return false;
+        const modal = this.dom?.coordinateMapSelectModal;
+        const overlayCanvas = this.dom?.coordinateMapSelectOverlayCanvas;
+        const annotator = this.coordinateMapSelectionAnnotator;
+        const state = this.coordinateMapSelection;
+        if (!modal || getComputedStyle(modal).display === 'none' || !overlayCanvas || !annotator || !state || state.loading) {
+            return false;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation?.();
+
+        const rect = overlayCanvas.getBoundingClientRect();
+        if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+        const canvasX = (event.clientX - rect.left) * (overlayCanvas.width / rect.width);
+        const canvasY = (event.clientY - rect.top) * (overlayCanvas.height / rect.height);
+        const chip = annotator.findChipAtPixel?.(canvasX, canvasY);
+        if (!chip) return false;
+
+        const listName = state.listName === 'shot' ? 'shot' : 'chip';
+        annotator.selectionMode = listName;
+        annotator.showGrid = true;
+        annotator.shotBoundaryVisible = true;
+        const selectionIndices = (annotator._getSelectionIndicesForChip?.(chip) || [])
+            .filter((index) => Number.isInteger(index) && annotator.chips?.[index]);
+        annotator.selectedChips = new Set(selectionIndices);
+        annotator.selectedChipsOrder = selectionIndices.filter((index) => annotator.selectedChips.has(index));
+        annotator.render?.();
+        annotator.updateSelectedChipsList?.({ notifyViewer: false });
+        this._syncCoordinateMapSelectionListFromSelection();
+        this._setCoordinateSelectionError('');
+        return true;
     }
 
     closeCoordinateMapSelectionModal(options = {}) {
@@ -11698,6 +11796,10 @@ class WaferMapViewer {
         const close = () => this.closeCoordinateMapSelectionModal();
         dom.coordinateMapSelectClose?.addEventListener('click', close);
         dom.coordinateMapSelectDone?.addEventListener('click', close);
+        dom.coordinateMapSelectOverlayCanvas?.addEventListener('mousedown',
+            (event) => this._handleCoordinateMapSelectionPlainPointer(event),
+            true
+        );
         dom.coordinateMapSelectClear?.addEventListener('click', (event) => {
             event.preventDefault();
             event.stopPropagation();

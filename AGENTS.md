@@ -355,6 +355,13 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
 - E2E guard: `scripts/e2e_chunk1.js` record `8,9,10,11`은 선택 없는 top Composite click에서 alert 메시지와 `#mc-panel` 미표시를 확인한다. `scripts/e2e_chunk2.js` record `selected-region-composite`는 selected 결과의 `quantile_clamp_min_to_zero === false`, partial Shot 빈 slot 중심 pixel이 palette index 23 흰색과 같고 선택 slot들이 선택된 값끼리 여러 quantile 색으로 분포하는지 확인한다.
 - 파일: `api/composite_map.py`, `js/main.js`, `scripts/e2e_chunk1.js`, `scripts/e2e_chunk2.js`
 
+#### BUG-45: Coordinate Map 구조-only 선택과 범위 single-rail 회귀 (2026-08-19)
+- 증상: coordinate panel의 Shot X/Y `Map` 또는 Chip X/Y `Map`이 선택용 구조 모달이어야 하는데 특정 wafer bitmap을 크게 로드했고, plain click으로 Shot/Chip 선택이 되지 않을 수 있었다. Chip/Radius 범위 선택은 min/max range가 두 개의 독립 rail처럼 보여 왼쪽 값이 오른쪽 값보다 커지는 상태를 만들기 쉬웠다.
+- 원인: `js/main.js::openCoordinateMapSelectionModal()`이 `/api/image` bitmap을 `_loadCoordinateMapSelectionImage()`로 받아 `_drawCoordinateMapSelectionImage()`에 그렸고, map plain click은 `ChipAnnotator`의 일반 클릭 해제 동작에 맡겨져 선택 입력 경로가 없었다. `_renderCoordinateSelectionRange()`는 min/max range를 나란히 만들고 crossing 값을 같은 값으로만 보정해 좌우 rail 의미를 UI에서 보장하지 못했다.
+- 수정 계약: coordinate map selector는 positions/layout만 로드하고 실제 wafer bitmap은 절대 요청하지 않는다. `#coordinate-map-select-stage`는 coordinate canvas/rect bounds와 viewport로만 크기를 정하고, 배경 canvas에는 chip 구조를, overlay에는 Shot boundary와 선택을 그린다. Shot X/Y Map의 plain click은 Shot 단위 replace selection, Chip X/Y Map의 plain click은 Chip 단위 replace selection이어야 하며, blank plain click은 선택을 지우지 않는다. Chip/Radius range row는 axis마다 하나의 dual-handle rail과 min/max 숫자 입력을 갖고, UI 상태와 `chip-annotator.js`의 range/constraint 계산 모두 작은 값을 min, 큰 값을 max로 정렬해야 한다.
+- E2E guard: `scripts/e2e_chunk2.js` record `coordinate-selection-cells`는 Shot/Chip Map 모달에서 `coordinateMapSelection.image`가 없고 plain click만으로 Shot/Chip list와 main selected chips가 동기화되는지 확인한다. 같은 record는 range axis마다 `.coordinate-select-range-slider` 하나와 value group 하나만 있고, reversed min/max 입력 후에도 `min <= max`, 소수점 2자리 표시, Chip/Radius AND 선택이 유지되는지 확인한다.
+- 파일: `js/main.js`, `js/chip-annotator.js`, `css/style.css`, `scripts/e2e_chunk2.js`
+
 ### Available skills
 - deploy-check: Ubuntu 프로덕션 배포 전 점검을 수행한다. 배포 전 민감정보, 설정, SSL/SAML, 환경변수, 운영 체크리스트를 확인할 때 사용한다. (file: D:/project/mapviewer/.claude/skills/deploy-check/SKILL.md)
 - e2e-test: L3 Tracker 전체 기능 E2E 테스트를 Playwright 브라우저 자동화로 수행한다. `/e2e-test`, `E2E 테스트`, `전체 테스트`, `기능 테스트 돌려줘` 같은 요청에 반응한다. (file: D:/project/mapviewer/.claude/skills/e2e-test/skill.md)

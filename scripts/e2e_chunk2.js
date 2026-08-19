@@ -3073,6 +3073,7 @@ const { createRunner } = require('./e2e_playwright_session');
       () => getComputedStyle(document.getElementById('coordinate-map-select-modal')).display !== 'none' &&
         window.viewer?.coordinateSelectionMapMode?.listName === 'shot' &&
         window.viewer?.coordinateMapSelectionAnnotator?.selectionMode === 'shot' &&
+        !window.viewer?.coordinateMapSelection?.image &&
         window.viewer?.coordinateMapSelectionAnnotator?.shotBoundaryVisible === true,
       null,
       { timeout: 10000 }
@@ -3093,9 +3094,7 @@ const { createRunner } = require('./e2e_playwright_session');
       };
     });
     expect(!!shotMapPoint, `shot map point=${JSON.stringify(shotMapPoint)}`);
-    await page.keyboard.down('Control');
     await page.mouse.click(shotMapPoint.x, shotMapPoint.y);
-    await page.keyboard.up('Control');
     await page.waitForFunction(
       () => [...document.querySelectorAll('#chip-coordinate-select-shot-tbody input[data-coordinate-row]')]
         .map((input) => input.value)
@@ -3126,7 +3125,9 @@ const { createRunner } = require('./e2e_playwright_session');
     await page.waitForFunction(
       () => getComputedStyle(document.getElementById('coordinate-map-select-modal')).display !== 'none' &&
         window.viewer?.coordinateSelectionMapMode?.listName === 'chip' &&
-        window.viewer?.coordinateMapSelectionAnnotator?.selectionMode === 'chip',
+        window.viewer?.coordinateMapSelectionAnnotator?.selectionMode === 'chip' &&
+        window.viewer?.coordinateMapSelectionAnnotator?.shotBoundaryVisible === true &&
+        !window.viewer?.coordinateMapSelection?.image,
       null,
       { timeout: 10000 }
     );
@@ -3145,9 +3146,7 @@ const { createRunner } = require('./e2e_playwright_session');
       };
     });
     expect(!!chipMapPoint, `chip map point=${JSON.stringify(chipMapPoint)}`);
-    await page.keyboard.down('Control');
     await page.mouse.click(chipMapPoint.x, chipMapPoint.y);
-    await page.keyboard.up('Control');
     await page.waitForFunction(
       () => [...document.querySelectorAll('#chip-coordinate-select-chip-tbody input[data-coordinate-row]')]
         .map((input) => input.value)
@@ -3860,9 +3859,38 @@ const { createRunner } = require('./e2e_playwright_session');
     await openCoordinateModal();
     await page.locator('#chip-coordinate-select-range-enabled').check();
     const rangeControls = await page.locator('#chip-coordinate-select-range-fields [data-coordinate-range-axis]').count();
+    const rangeStructure = await page.evaluate(() => ({
+      rows: document.querySelectorAll('#chip-coordinate-select-range-fields .coordinate-select-range-axis').length,
+      sliders: document.querySelectorAll('#chip-coordinate-select-range-fields .coordinate-select-range-slider').length,
+      valueGroups: document.querySelectorAll('#chip-coordinate-select-range-fields .coordinate-select-range-values').length,
+      childCounts: [...document.querySelectorAll('#chip-coordinate-select-range-fields .coordinate-select-range-axis')]
+        .map((row) => row.children.length),
+    }));
+    expect(rangeStructure.rows === 3 && rangeStructure.sliders === 3 &&
+      rangeStructure.valueGroups === 3 && rangeStructure.childCounts.every((count) => count === 3),
+    `Range controls should use one dual-handle rail per axis=${JSON.stringify(rangeStructure)}`);
     const setRangeNumber = async (kind, axis, bound, value) => {
       await page.locator(`#chip-coordinate-select-range-fields input[type="number"][data-coordinate-range-kind="${kind}"][data-coordinate-range-axis="${axis}"][data-coordinate-range-bound="${bound}"]`).fill(String(value));
     };
+    const reversedRangeState = await page.evaluate(() => {
+      const fields = document.getElementById('chip-coordinate-select-range-fields');
+      const minInput = fields?.querySelector('input[type="number"][data-coordinate-range-kind="chip"][data-coordinate-range-axis="x"][data-coordinate-range-bound="min"]');
+      const maxInput = fields?.querySelector('input[type="number"][data-coordinate-range-kind="chip"][data-coordinate-range-axis="x"][data-coordinate-range-bound="max"]');
+      const slider = fields?.querySelector('.coordinate-select-range-slider[data-coordinate-range-kind="chip"][data-coordinate-range-axis="x"]');
+      if (!minInput || !maxInput || !slider) return null;
+      minInput.value = maxInput.max;
+      minInput.dispatchEvent(new Event('input', { bubbles: true }));
+      maxInput.value = minInput.min;
+      maxInput.dispatchEvent(new Event('input', { bubbles: true }));
+      return {
+        min: Number(minInput.value),
+        max: Number(maxInput.value),
+        left: slider.style.getPropertyValue('--range-left'),
+        right: slider.style.getPropertyValue('--range-right'),
+      };
+    });
+    expect(reversedRangeState && reversedRangeState.min <= reversedRangeState.max,
+      `Reversed range input should normalize left/right=${JSON.stringify(reversedRangeState)}`);
     await page.locator(`#chip-coordinate-select-range-fields input[type="range"][data-coordinate-range-kind="chip"][data-coordinate-range-axis="x"][data-coordinate-range-bound="min"]`).evaluate((element, value) => {
       element.value = String(value);
       element.dispatchEvent(new Event('input', { bubbles: true }));
@@ -3900,8 +3928,9 @@ const { createRunner } = require('./e2e_playwright_session');
     const radiusRangeControls = await page.evaluate(() => ({
       chipRangeEnabled: document.getElementById('chip-coordinate-select-range-enabled')?.checked,
       radiusRangeEnabled: document.getElementById('chip-coordinate-select-radius-range-enabled')?.checked,
-      chipAxisCount: document.querySelectorAll('#chip-coordinate-select-range-fields [data-coordinate-range-kind="chip"]').length,
-      radiusAxisCount: document.querySelectorAll('#chip-coordinate-select-range-fields [data-coordinate-range-kind="radius"]').length,
+      chipInputCount: document.querySelectorAll('#chip-coordinate-select-range-fields input[data-coordinate-range-kind="chip"]').length,
+      radiusInputCount: document.querySelectorAll('#chip-coordinate-select-range-fields input[data-coordinate-range-kind="radius"]').length,
+      sliderCount: document.querySelectorAll('#chip-coordinate-select-range-fields .coordinate-select-range-slider').length,
       labels: [...document.querySelectorAll('#chip-coordinate-select-range-fields .coordinate-select-range-axis span')].map((element) => element.textContent),
     }));
     const radiusRangeMin = Number((selectionTarget.radiusExact - 0.01).toFixed(3));
@@ -3929,7 +3958,8 @@ const { createRunner } = require('./e2e_playwright_session');
         .map((input) => input.value),
     }));
     expect(radiusRangeControls.chipRangeEnabled && radiusRangeControls.radiusRangeEnabled &&
-      radiusRangeControls.chipAxisCount === 8 && radiusRangeControls.radiusAxisCount === 4 &&
+      radiusRangeControls.chipInputCount === 8 && radiusRangeControls.radiusInputCount === 4 &&
+      radiusRangeControls.sliderCount === 3 &&
       radiusRangeControls.labels.join('|') === 'Chip X(mm)|Chip Y(mm)|Radius(mm)' && radiusRangeSelection.selected === 1 &&
       radiusRangeSelection.mode === 'chip' &&
       !/[+-]?\d+\.\d{3,}/.test(radiusRangeSelection.status) &&
@@ -3964,7 +3994,7 @@ const { createRunner } = require('./e2e_playwright_session');
       chips: window.viewer.chipAnnotator.selectedChips.size,
       chipId: [...window.viewer.chipAnnotator.selectedChips][0],
     }));
-    return { initialModal, selectionTarget, filterSelectionGuard, quickPickerInitial, paletteLinked, dragPreview, wildcardShotState, quickShotMultiState, quickShotMultiRows, quickShotClearState, shotCells, posCells, afterShot, shotPicker, pickerPositionOnly, partialShotPicker, combinedRow, operationRemoved, rangeControls, rangeSelection, radiusRangeControls, radiusRangeSelection, afterPos };
+    return { initialModal, selectionTarget, filterSelectionGuard, quickPickerInitial, paletteLinked, dragPreview, wildcardShotState, quickShotMultiState, quickShotMultiRows, quickShotClearState, shotCells, posCells, afterShot, shotPicker, pickerPositionOnly, partialShotPicker, combinedRow, operationRemoved, rangeControls, rangeStructure, reversedRangeState, rangeSelection, radiusRangeControls, radiusRangeSelection, afterPos };
   });
 
   await record('selected-region-composite', '선택 Chip/Shot Composite Map 및 결과 positions 정합성', async () => {
