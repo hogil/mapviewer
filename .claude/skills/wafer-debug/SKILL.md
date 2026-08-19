@@ -289,3 +289,9 @@ argument-hint: [증상-설명]
 - 증상: Chip X/Y와 Radius range가 단일 AND 필터만 제공하면 떨어진 여러 chip 영역을 한 번에 고르기 어렵고, Chip 범위와 Radius 범위가 별도 group으로 보이면 같은 조건 set인지 혼동된다. 여러 set tab을 field 영역에 넣으면 panel에 불필요한 세로 줄이 생긴다.
 - 수정 패턴: Coord range UI는 기본 `Set 1` tab/page를 항상 가진다. `Set 1`, `Set 2` tab은 field 영역이 아니라 `Add` 바로 옆 액션 줄에 둔다. `Add`는 새 tab/page를 만들고 활성 tab을 이동하되, 새 full-range set을 즉시 OR 적용해 선택을 바꾸지 않는다. 한 page 안에는 `Chip X(mm)`, `Chip Y(mm)`, `Radius(mm)` 3축을 세로 한 열로 두고 AND로 평가한다. 여러 set은 OR로 합친다. 기존 Shot/Chip/Shot Position list가 있으면 list match를 base로 두고 `(base) AND (set1 OR set2 ...)`로 계산한다. 마지막 set은 삭제하지 않는다.
 - E2E 신호: `coordinate-selection-cells`는 기본 Set 1 tab/page, tab container가 `Add` 바로 뒤에 있고 field 영역에 tab이 없는지, 마지막 delete disabled, Add 후 tab 2개/visible page 1개, 2개 set OR로 서로 다른 chip 2개 선택, Shot list base와 range set AND, set Clear 후 base selection 복원을 확인한다.
+
+### Coord selected yield summary height guard (2026-08-20)
+
+- 증상: Coord panel 상단 summary에 `Yld`, `Shot Yld`, `Shot Pos Yld`를 표시하면 modal 높이가 늘어나 닫기/완료 버튼이 화면 아래로 밀릴 수 있다.
+- 수정 패턴: Coord panel selection summary는 `Chip N · Shot M`처럼 선택 개수만 표시한다. 수율과 Shot별/Position별 breakdown은 Coord modal에 렌더하지 않는다.
+- E2E 신호: `coordinate-selection-cells`는 Shot 2개 선택 후 summary가 `Chip 48 · Shot 2`이고 `Yld`, `Shot Yld`, `Shot Pos Yld` 텍스트와 `.coordinate-select-summary-group` row가 없는지 확인한다.

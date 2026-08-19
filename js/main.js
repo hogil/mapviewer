@@ -9513,35 +9513,15 @@ class WaferMapViewer {
         const selectedIndices = Array.from(annotator.selectedChips || []).filter((index) => annotator.chips?.[index]);
         const shotGroups = [...(annotator._getSelectedShotGroups?.() || [])];
         if (!selectedIndices.length) {
-            summary.textContent = 'Yld - · G 0/B 0';
+            summary.textContent = 'Chip 0';
             summary.title = 'No selected chips';
             return;
         }
-        const selectedChips = selectedIndices.map((index) => annotator.chips[index]).filter(Boolean);
-        const yieldSummary = annotator.getSelectionYieldSummary?.(selectedChips);
-        const yieldText = annotator.formatSelectionYieldSummary?.(yieldSummary) || 'Yld - · G 0/B 0';
         const shotText = shotGroups.length ? ` · Shot ${shotGroups.length}` : '';
-        const breakdown = annotator.getSelectionYieldBreakdowns?.(selectedChips) || {};
-        const shotYieldLine = annotator.formatSelectionYieldBreakdownLine?.(
-            breakdown.shotGroups,
-            { label: 'Shot Yld', maxItems: 4 }
-        ) || 'Shot Yld: -';
-        const positionYieldLine = annotator.formatSelectionYieldBreakdownLine?.(
-            breakdown.shotPositionGroups,
-            { label: 'Shot Pos Yld', maxItems: 8 }
-        ) || 'Shot Pos Yld: -';
-        const totalLine = `${yieldText} · Chip ${selectedIndices.length}${shotText}`;
+        const totalLine = `Chip ${selectedIndices.length}${shotText}`;
         const escape = (value) => this._escapeCoordinateSummaryText(value);
-        summary.innerHTML = `
-            <div class="coordinate-select-summary-total">${escape(totalLine)}</div>
-            <div class="coordinate-select-summary-group">${escape(shotYieldLine)}</div>
-            <div class="coordinate-select-summary-group">${escape(positionYieldLine)}</div>
-        `;
-        summary.title = [
-            `Selected chips: ${selectedIndices.length}, selected shots: ${shotGroups.length}`,
-            annotator.formatSelectionYieldBreakdownTitle?.(breakdown.shotGroups, 'Shot Yld') || shotYieldLine,
-            annotator.formatSelectionYieldBreakdownTitle?.(breakdown.shotPositionGroups, 'Shot Pos Yld') || positionYieldLine,
-        ].join('\n');
+        summary.innerHTML = `<div class="coordinate-select-summary-total">${escape(totalLine)}</div>`;
+        summary.title = `Selected chips: ${selectedIndices.length}, selected shots: ${shotGroups.length}`;
     }
 
     _renderCoordinateSelectionShotPicker() {

@@ -3586,7 +3586,7 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(initialModal.listPanels === 3 && initialModal.listColumnCounts.join(',') === '2,2,1' &&
       initialModal.coordinateListViewportMaxHeights.every((height) => height === '320px') &&
       initialModal.coordinateListViewportOverflow.every((overflow) => overflow === 'auto') &&
-      initialModal.hasSummary && /^Yld/.test(initialModal.summaryText) && !initialModal.hasHint && initialModal.modeless &&
+      initialModal.hasSummary && initialModal.summaryText === 'Chip 0' && !initialModal.hasHint && initialModal.modeless &&
       initialModal.position === 'fixed' && initialModal.ariaModal === 'false', `initial modal=${JSON.stringify(initialModal)}`);
     await pasteIntoList('shot',
       `${selectionTarget.shotRows[0].x}\t${selectionTarget.shotRows[0].y}\n${selectionTarget.shotRows[1].x},${selectionTarget.shotRows[1].y}`
@@ -3613,6 +3613,7 @@ const { createRunner } = require('./e2e_playwright_session');
       chips: window.viewer.chipAnnotator.selectedChips.size,
       shots: window.viewer.chipAnnotator._getSelectedShotGroups().size,
       summaryText: document.getElementById('chip-coordinate-select-summary')?.innerText?.trim() || '',
+      summaryGroups: document.querySelectorAll('#chip-coordinate-select-summary .coordinate-select-summary-group').length,
       linkedChipValues: [...document.querySelectorAll('#chip-coordinate-select-chip-tbody input[data-coordinate-row]')]
         .map((input) => input.value)
         .filter(Boolean),
@@ -3620,9 +3621,11 @@ const { createRunner } = require('./e2e_playwright_session');
         .map((input) => input.value)
         .filter(Boolean),
     }));
-    expect(/^Yld/.test(afterShot.summaryText) && afterShot.summaryText.includes('Chip 48') &&
-      afterShot.summaryText.includes('Shot Yld') && afterShot.summaryText.includes('Shot Pos Yld'),
-      `coordinate selected yield summary=${JSON.stringify(afterShot)}`);
+    expect(afterShot.summaryText === 'Chip 48 · Shot 2' &&
+      !afterShot.summaryText.includes('Yld') &&
+      !afterShot.summaryText.includes('Shot Yld') && !afterShot.summaryText.includes('Shot Pos Yld') &&
+      afterShot.summaryGroups === 0,
+      `coordinate selection summary=${JSON.stringify(afterShot)}`);
     expect(afterShot.linkedChipValues.length === 96 && afterShot.linkedPositionValues.length === 24,
       `Shot X/Y input did not sync Chip X/Y and Shot Position lists=${JSON.stringify(afterShot)}`);
     const shotPicker = await page.evaluate(() => {
@@ -3904,7 +3907,7 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(
       reopenedModal.selectedChips === 48 && reopenedModal.pickerGroups === 1 &&
         reopenedModal.pickerChecked === 24 && !reopenedModal.hasHint &&
-        reopenedModal.hasSummary && /^Yld/.test(reopenedModal.summaryText),
+        reopenedModal.hasSummary && reopenedModal.summaryText === 'Chip 48 · Shot 1',
       `reopened coordinate modal=${JSON.stringify(reopenedModal)}`
     );
     await pasteIntoList('shot',
