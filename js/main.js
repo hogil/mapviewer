@@ -827,6 +827,7 @@ class WaferMapViewer {
             coordinateMapSelectClear: document.getElementById('coordinate-map-select-clear'),
             coordinateMapSelectShotMode: document.getElementById('coordinate-map-select-shot-mode'),
             coordinateMapSelectChipMode: document.getElementById('coordinate-map-select-chip-mode'),
+            coordinateMapSelectShotBoundary: document.getElementById('coordinate-map-select-shot-boundary'),
             coordinateMapSelectStatus: document.getElementById('coordinate-map-select-status'),
             coordinateMapSelectStage: document.getElementById('coordinate-map-select-stage'),
             coordinateMapSelectImageCanvas: document.getElementById('coordinate-map-select-image'),
@@ -11201,6 +11202,10 @@ class WaferMapViewer {
         return schemeData?.top?.Grade0 || '#ffffff';
     }
 
+    _getCoordinateMapSelectionChipBoundaryColor(schemeData) {
+        return schemeData?.bottom?.Normal || schemeData?.bottom?.Border || '#BEBEBE';
+    }
+
     _getCoordinateMapSelectionBounds(annotator) {
         const coordCanvas = annotator?.positionsData?.coord?.canvas || {};
         const canvasWidth = Number(coordCanvas.width);
@@ -11263,7 +11268,7 @@ class WaferMapViewer {
         const dy = -bounds.y * scale;
         state.viewer.transform = { scale, dx, dy };
         ctx.setTransform(scale, 0, 0, scale, dx, dy);
-        const strokeColor = annotator.gridColor || this._colorWithAlpha(schemeData?.text || '#00ffff', 0.3);
+        const strokeColor = this._getCoordinateMapSelectionChipBoundaryColor(schemeData);
         const strokeWidth = Math.max(0.25, 0.5 / Math.max(scale, 0.001));
         (annotator.chips || []).forEach((chip) => {
             const rect = chip?.rect;
@@ -11287,6 +11292,7 @@ class WaferMapViewer {
         });
         ctx.setTransform(1, 0, 0, 1, 0, 0);
 
+        annotator.shotBoundaryVisible = state.showShotBoundary !== false;
         annotator.render?.();
         return true;
     }
@@ -11330,6 +11336,27 @@ class WaferMapViewer {
             button.classList.toggle('is-active', active);
             button.setAttribute('aria-pressed', active ? 'true' : 'false');
         });
+        this._syncCoordinateMapSelectionShotBoundaryButton();
+    }
+
+    _syncCoordinateMapSelectionShotBoundaryButton() {
+        const button = this.dom?.coordinateMapSelectShotBoundary;
+        if (!button) return;
+        const active = this.coordinateMapSelection?.showShotBoundary !== false;
+        button.classList.toggle('is-active', active);
+        button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    }
+
+    _setCoordinateMapSelectionShotBoundaryVisible(visible) {
+        if (!this.coordinateMapSelection) return false;
+        this.coordinateMapSelection.showShotBoundary = visible !== false;
+        const annotator = this.coordinateMapSelectionAnnotator;
+        if (annotator) {
+            annotator.shotBoundaryVisible = this.coordinateMapSelection.showShotBoundary;
+            annotator.render?.();
+        }
+        this._syncCoordinateMapSelectionShotBoundaryButton();
+        return true;
     }
 
     _setCoordinateMapSelectionMode(listName) {
@@ -11342,7 +11369,7 @@ class WaferMapViewer {
         if (annotator) {
             annotator.selectionMode = listName === 'shot' ? 'shot' : 'chip';
             annotator.showGrid = false;
-            annotator.shotBoundaryVisible = true;
+            annotator.shotBoundaryVisible = this.coordinateMapSelection.showShotBoundary !== false;
             if (annotator.positionsData) {
                 this._restoreCoordinateMapSelectionFromLists(listName);
             } else {
@@ -11409,7 +11436,7 @@ class WaferMapViewer {
             }
         }
         annotator.selectionMode = listName === 'shot' ? 'shot' : 'chip';
-        annotator.shotBoundaryVisible = true;
+        annotator.shotBoundaryVisible = this.coordinateMapSelection?.showShotBoundary !== false;
         annotator.showGrid = false;
         annotator.render?.();
         this._syncCoordinateMapSelectionModeButtons();
@@ -11451,6 +11478,7 @@ class WaferMapViewer {
             listName,
             imagePath,
             viewer,
+            showShotBoundary: true,
             loading: true,
         };
         this._updateCoordinateMapSelectionStatus();
@@ -11461,7 +11489,7 @@ class WaferMapViewer {
         annotator.selectedChipsOrder = [];
         annotator.selectionMode = listName === 'shot' ? 'shot' : 'chip';
         annotator.showGrid = false;
-        annotator.shotBoundaryVisible = true;
+        annotator.shotBoundaryVisible = this.coordinateMapSelection.showShotBoundary;
         annotator.clearLayoutData?.({ resetVisibility: false });
 
         try {
@@ -11484,7 +11512,7 @@ class WaferMapViewer {
             if (processId) annotator.setLayoutData(processId, layoutRows);
             annotator.selectionMode = listName === 'shot' ? 'shot' : 'chip';
             annotator.showGrid = false;
-            annotator.shotBoundaryVisible = true;
+            annotator.shotBoundaryVisible = this.coordinateMapSelection.showShotBoundary;
             this._drawCoordinateMapSelectionStructure();
             this.coordinateMapSelection.loading = false;
             this._restoreCoordinateMapSelectionFromLists(listName);
@@ -11527,7 +11555,7 @@ class WaferMapViewer {
         const listName = state.listName === 'shot' ? 'shot' : 'chip';
         annotator.selectionMode = listName;
         annotator.showGrid = false;
-        annotator.shotBoundaryVisible = true;
+        annotator.shotBoundaryVisible = state.showShotBoundary !== false;
         const selectionIndices = (annotator._getSelectionIndicesForChip?.(chip) || [])
             .filter((index) => Number.isInteger(index) && annotator.chips?.[index]);
         annotator.selectedChips = new Set(selectionIndices);
@@ -12163,6 +12191,12 @@ class WaferMapViewer {
             event.preventDefault();
             event.stopPropagation();
             this._setCoordinateMapSelectionMode(modeButton.dataset.coordinateMapSelectMode);
+        });
+        dom.coordinateMapSelectShotBoundary?.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const active = this.coordinateMapSelection?.showShotBoundary !== false;
+            this._setCoordinateMapSelectionShotBoundaryVisible(!active);
         });
         dom.coordinateMapSelectOverlayCanvas?.addEventListener('mousedown',
             (event) => this._handleCoordinateMapSelectionPlainPointer(event),

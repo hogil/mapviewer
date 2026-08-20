@@ -3101,10 +3101,19 @@ const { createRunner } = require('./e2e_playwright_session');
         shotModePressed: document.getElementById('coordinate-map-select-shot-mode')?.getAttribute('aria-pressed') || '',
         chipModePressed: document.getElementById('coordinate-map-select-chip-mode')?.getAttribute('aria-pressed') || '',
         modeButtons: [...document.querySelectorAll('[data-coordinate-map-select-mode]')].map((button) => button.textContent.trim()),
+        shotBoundaryButtonPressed: document.getElementById('coordinate-map-select-shot-boundary')?.getAttribute('aria-pressed') || '',
         viewerGridMode: window.viewer?.coordinateMapSelectionViewer?.gridMode,
         selectedColorCopied: window.viewer?.coordinateMapSelectionAnnotator?.selectedColor === window.viewer?.chipAnnotator?.selectedColor,
         hoverColorCopied: window.viewer?.coordinateMapSelectionAnnotator?.hoverColor === window.viewer?.chipAnnotator?.hoverColor,
         shotBoundaryColorCopied: window.viewer?.coordinateMapSelectionAnnotator?.shotBoundaryColor === window.viewer?.chipAnnotator?.shotBoundaryColor,
+        chipBoundaryColor: (() => {
+          const scheme = window.viewer?._getCoordinateMapSelectionSchemeData?.();
+          return window.viewer?._getCoordinateMapSelectionChipBoundaryColor?.(scheme) || '';
+        })(),
+        expectedChipBoundaryColor: (() => {
+          const scheme = window.viewer?._getCoordinateMapSelectionSchemeData?.();
+          return scheme?.bottom?.Normal || scheme?.bottom?.Border || '';
+        })(),
         statusText: document.getElementById('coordinate-map-select-status')?.textContent?.trim() || '',
         structureFillColors: (() => {
           const canvas = document.getElementById('coordinate-map-select-image');
@@ -3141,16 +3150,48 @@ const { createRunner } = require('./e2e_playwright_session');
       mapPanelStructure.panelPosition === 'fixed' &&
       mapPanelStructure.shotModePressed === 'true' &&
       mapPanelStructure.chipModePressed === 'false' &&
+      mapPanelStructure.shotBoundaryButtonPressed === 'true' &&
       mapPanelStructure.modeButtons.join('|') === 'Shot 선택|Chip 선택' &&
       mapPanelStructure.viewerGridMode === false &&
       mapPanelStructure.selectedColorCopied &&
       mapPanelStructure.hoverColorCopied &&
       mapPanelStructure.shotBoundaryColorCopied &&
+      mapPanelStructure.chipBoundaryColor === mapPanelStructure.expectedChipBoundaryColor &&
       /^구조 · \d+ Shot \/ \d+ Chip$/.test(mapPanelStructure.statusText) &&
       !/\.png\b/i.test(mapPanelStructure.statusText) &&
       mapPanelStructure.structureFillColors.length === 1 &&
       mapPanelStructure.boundaryAlphaPixels > 0,
     `coordinate map panel structure=${JSON.stringify(mapPanelStructure)}`);
+    await page.locator('#coordinate-map-select-shot-boundary').click();
+    await page.waitForFunction(
+      () => window.viewer?.coordinateMapSelectionAnnotator?.shotBoundaryVisible === false &&
+        document.getElementById('coordinate-map-select-shot-boundary')?.getAttribute('aria-pressed') === 'false',
+      null,
+      { timeout: 10000 }
+    );
+    const shotBoundaryOff = await page.evaluate(() => {
+      const canvas = document.getElementById('coordinate-map-select-overlay');
+      if (!canvas?.width || !canvas?.height) return { alphaPixels: -1 };
+      const data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+      let count = 0;
+      for (let i = 3; i < data.length; i += 4 * 8) {
+        if (data[i] > 0) count += 1;
+      }
+      return {
+        pressed: document.getElementById('coordinate-map-select-shot-boundary')?.getAttribute('aria-pressed') || '',
+        visible: window.viewer?.coordinateMapSelectionAnnotator?.shotBoundaryVisible === true,
+        alphaPixels: count,
+      };
+    });
+    expect(shotBoundaryOff.pressed === 'false' && shotBoundaryOff.visible === false && shotBoundaryOff.alphaPixels === 0,
+      `coordinate map shot boundary off=${JSON.stringify(shotBoundaryOff)}`);
+    await page.locator('#coordinate-map-select-shot-boundary').click();
+    await page.waitForFunction(
+      () => window.viewer?.coordinateMapSelectionAnnotator?.shotBoundaryVisible === true &&
+        document.getElementById('coordinate-map-select-shot-boundary')?.getAttribute('aria-pressed') === 'true',
+      null,
+      { timeout: 10000 }
+    );
     const shotMapPoint = await page.evaluate(() => {
       const v = window.viewer;
       const annotator = v?.coordinateMapSelectionAnnotator;

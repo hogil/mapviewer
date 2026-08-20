@@ -158,7 +158,7 @@ argument-hint: [증상-설명]
 ### Coord range / map selector / grid direct selection 회귀 (2026-08-19)
 
 - Chip/Radius range는 active Shot/Chip coordinate list와 AND 조건이어야 한다. list가 비어 있을 때만 전체 wafer 기준 range로 동작한다. range를 수정할 때 이전 range 결과 `selectedChips`를 base로 쓰면 slider 변경 때 selection이 계속 축소되므로, `matchCoordinateRows()` 같은 non-mutating matcher로 base를 다시 만든 뒤 constraint를 적용한다.
-- Coordinate Map selector는 실제 wafer bitmap을 로드하지 않는다. positions/layout만 사용해 Grade0 fill chip, 기본 chip boundary, Shot boundary, 선택 highlight를 그리는 structure-only panel이어야 한다. source wafer filename이나 chip별 defect/palette 색은 selector에 표시하지 않는다. 배경 overlay는 투명하고 pointer-events를 막아야 하며 panel만 fixed/draggable로 동작한다.
+- Coordinate Map selector는 실제 wafer bitmap을 로드하지 않는다. positions/layout만 사용해 Grade0 fill chip, scheme `bottom.Normal` chip boundary, Shot boundary, 선택 highlight를 그리는 structure-only panel이어야 한다. source wafer filename이나 chip별 defect/palette 색은 selector에 표시하지 않는다. Shot boundary는 `Shot 경계` button으로 켜고 끌 수 있어야 한다. 배경 overlay는 투명하고 pointer-events를 막아야 하며 panel만 fixed/draggable로 동작한다.
 - Grid context의 direct `Shot 선택`/`Chip 선택`/`Wafer 선택`은 Coord modal과 분리한다. direct 선택은 `_pendingGridRegionComposite`를 만들거나 sourceImages를 바꾸지 않고, 표시가 필요하면 direct 전용 source set으로 thumbnail selection overlay만 그린다. Coord 진입은 grid toolbar `Coord` 버튼으로 유지한다.
 - E2E 신호: `coordinate-selection-cells`는 modeless map selector, mode buttons, `showGrid=false`, range base AND와 Clear 복원을 확인한다. `selected-region-composite`는 grid direct Shot 선택이 Coord modal/pending source를 건드리지 않는지 확인한다.
 
@@ -267,8 +267,8 @@ argument-hint: [증상-설명]
 
 - 증상: Shot X/Y `Map`에서 chip을 눌러도 Shot 선택이 화면에 안 된 것처럼 보이고, map selector 색/선택 효과/Shot boundary가 현재 단일보기 wafer와 다르게 보일 수 있다. Chip boundary도 selector에서 과하게 진하게 보일 수 있다.
 - 원인: map selector viewer가 `gridMode=true`면 `chip-annotator.js`의 Shot boundary/hover/selected Shot renderer가 early return한다. selector annotator가 main `chipAnnotator` 색을 복사하지 않고 hard-coded 색을 쓰거나, structure canvas가 모든 chip을 흰색과 강한 grid stroke로 그리면 현재 scheme과 분리된다.
-- 수정 패턴: selector는 구조-only를 유지하되 viewer `gridMode=false`, annotator hover/selected/preview/Shot boundary 색은 main annotator에서 복사한다. Chip fill은 source wafer의 chip별 palette/defect 색을 쓰지 않고 active color legend scheme의 Grade0 색 하나로 통일하며, status는 source filename 없이 `구조 · N Shot / M Chip`만 표시한다. chip boundary는 기본 grid color 보조선 수준으로 약하게만 그린다.
-- E2E 신호: `coordinate-selection-cells`는 map selector open 상태에서 `coordinateMapSelectionViewer.gridMode === false`, main annotator 색 복사, status filename 미표시, sampled chip fill color 1개, Shot boundary overlay alpha pixel 존재, Shot Map plain click 후 selected Shot group/overlay alpha pixel 존재를 확인한다.
+- 수정 패턴: selector는 구조-only를 유지하되 viewer `gridMode=false`, annotator hover/selected/preview/Shot boundary 색은 main annotator에서 복사한다. Chip fill은 source wafer의 chip별 palette/defect 색을 쓰지 않고 active color legend scheme의 Grade0 색 하나로 통일하며, chip boundary는 palette index 10과 같은 scheme `bottom.Normal` 색을 쓴다. status는 source filename 없이 `구조 · N Shot / M Chip`만 표시한다. `Shot 경계` button은 `annotator.shotBoundaryVisible`을 토글하고 overlay를 즉시 다시 그려야 한다.
+- E2E 신호: `coordinate-selection-cells`는 map selector open 상태에서 `coordinateMapSelectionViewer.gridMode === false`, main annotator 색 복사, chip boundary color가 scheme `bottom.Normal`, status filename 미표시, sampled chip fill color 1개, `Shot 경계` toggle 전후 overlay alpha 변화, Shot Map plain click 후 selected Shot group/overlay alpha pixel 존재를 확인한다.
 
 ### Selection visible yield-only guard (2026-08-20)
 
