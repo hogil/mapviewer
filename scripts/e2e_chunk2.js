@@ -3103,9 +3103,25 @@ const { createRunner } = require('./e2e_playwright_session');
         modeButtons: [...document.querySelectorAll('[data-coordinate-map-select-mode]')].map((button) => button.textContent.trim()),
         shotBoundaryButtonPressed: document.getElementById('coordinate-map-select-shot-boundary')?.getAttribute('aria-pressed') || '',
         viewerGridMode: window.viewer?.coordinateMapSelectionViewer?.gridMode,
-        selectedColorCopied: window.viewer?.coordinateMapSelectionAnnotator?.selectedColor === window.viewer?.chipAnnotator?.selectedColor,
-        hoverColorCopied: window.viewer?.coordinateMapSelectionAnnotator?.hoverColor === window.viewer?.chipAnnotator?.hoverColor,
-        shotBoundaryColorCopied: window.viewer?.coordinateMapSelectionAnnotator?.shotBoundaryColor === window.viewer?.chipAnnotator?.shotBoundaryColor,
+        chipHeaderMapClearGap: (() => {
+          const panel = document.querySelector('[data-coordinate-list-panel="chip"]');
+          const mapButton = panel?.querySelector('[data-coordinate-list-map="chip"]');
+          const clearButton = panel?.querySelector('[data-coordinate-list-clear="chip"]');
+          const mapRect = mapButton?.getBoundingClientRect?.();
+          const clearRect = clearButton?.getBoundingClientRect?.();
+          if (!mapRect || !clearRect) return null;
+          return Math.round(clearRect.left - mapRect.right);
+        })(),
+        mapOverlayColors: (() => {
+          const annotator = window.viewer?.coordinateMapSelectionAnnotator;
+          return {
+            grid: annotator?.gridColor || '',
+            hover: annotator?.hoverColor || '',
+            selected: annotator?.selectedColor || '',
+            preview: annotator?.selectionPreviewColor || '',
+            shotBoundary: annotator?.shotBoundaryColor || '',
+          };
+        })(),
         chipBoundaryColor: (() => {
           const scheme = window.viewer?._getCoordinateMapSelectionSchemeData?.();
           return window.viewer?._getCoordinateMapSelectionChipBoundaryColor?.(scheme) || '';
@@ -3153,9 +3169,9 @@ const { createRunner } = require('./e2e_playwright_session');
       mapPanelStructure.shotBoundaryButtonPressed === 'true' &&
       mapPanelStructure.modeButtons.join('|') === 'Shot 선택|Chip 선택' &&
       mapPanelStructure.viewerGridMode === false &&
-      mapPanelStructure.selectedColorCopied &&
-      mapPanelStructure.hoverColorCopied &&
-      mapPanelStructure.shotBoundaryColorCopied &&
+      mapPanelStructure.chipHeaderMapClearGap >= 0 &&
+      mapPanelStructure.chipHeaderMapClearGap <= 8 &&
+      Object.values(mapPanelStructure.mapOverlayColors || {}).every((color) => color === mapPanelStructure.expectedChipBoundaryColor) &&
       mapPanelStructure.chipBoundaryColor === mapPanelStructure.expectedChipBoundaryColor &&
       /^구조 · \d+ Shot \/ \d+ Chip$/.test(mapPanelStructure.statusText) &&
       !/\.png\b/i.test(mapPanelStructure.statusText) &&

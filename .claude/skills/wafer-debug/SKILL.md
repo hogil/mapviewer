@@ -265,10 +265,10 @@ argument-hint: [증상-설명]
 
 ### Coordinate Map Shot render / scheme color guard (2026-08-19)
 
-- 증상: Shot X/Y `Map`에서 chip을 눌러도 Shot 선택이 화면에 안 된 것처럼 보이고, map selector 색/선택 효과/Shot boundary가 현재 단일보기 wafer와 다르게 보일 수 있다. Chip boundary도 selector에서 과하게 진하게 보일 수 있다.
-- 원인: map selector viewer가 `gridMode=true`면 `chip-annotator.js`의 Shot boundary/hover/selected Shot renderer가 early return한다. selector annotator가 main `chipAnnotator` 색을 복사하지 않고 hard-coded 색을 쓰거나, structure canvas가 모든 chip을 흰색과 강한 grid stroke로 그리면 현재 scheme과 분리된다.
-- 수정 패턴: selector는 구조-only를 유지하되 viewer `gridMode=false`, annotator hover/selected/preview/Shot boundary 색은 main annotator에서 복사한다. Chip fill은 source wafer의 chip별 palette/defect 색을 쓰지 않고 active color legend scheme의 Grade0 색 하나로 통일하며, chip boundary는 palette index 10과 같은 scheme `bottom.Normal` 색을 쓴다. status는 source filename 없이 `구조 · N Shot / M Chip`만 표시한다. `Shot 경계` button은 `annotator.shotBoundaryVisible`을 토글하고 overlay를 즉시 다시 그려야 한다.
-- E2E 신호: `coordinate-selection-cells`는 map selector open 상태에서 `coordinateMapSelectionViewer.gridMode === false`, main annotator 색 복사, chip boundary color가 scheme `bottom.Normal`, status filename 미표시, sampled chip fill color 1개, `Shot 경계` toggle 전후 overlay alpha 변화, Shot Map plain click 후 selected Shot group/overlay alpha pixel 존재를 확인한다.
+- 증상: Shot X/Y `Map`에서 chip을 눌러도 Shot 선택이 화면에 안 된 것처럼 보이고, map selector 색/선택 효과/Shot boundary가 현재 scheme와 다르게 보일 수 있다. Chip boundary도 selector에서 과하게 진하게 보일 수 있고, Chip X/Y heading의 `Map`/`Clear` button이 서로 떨어질 수 있다.
+- 원인: map selector viewer가 `gridMode=true`면 `chip-annotator.js`의 Shot boundary/hover/selected Shot renderer가 early return한다. selector annotator가 main `chipAnnotator` 색을 복사하거나 hard-coded 색을 쓰면 구조-only map이 scheme 3색 계약에서 벗어난다. `.coordinate-select-list-heading`이 title, `Map`, `Clear` 3개 flex item에 `space-between`을 쓰면 버튼 간격이 벌어진다.
+- 수정 패턴: selector는 구조-only를 유지하되 viewer `gridMode=false`여야 한다. Selector canvas visible color는 active scheme의 background, `top.Grade0`, `bottom.Normal` 3개만 사용한다. `js/main.js::_syncCoordinateMapSelectionSchemeColors()`로 selector annotator의 grid/hover/selected/preview/Shot boundary 색을 모두 `bottom.Normal`으로 맞추고 main annotator 색을 복사하지 않는다. Chip fill은 source wafer의 chip별 palette/defect 색을 쓰지 않고 active color legend scheme의 Grade0 색 하나로 통일한다. status는 source filename 없이 `구조 · N Shot / M Chip`만 표시한다. `Shot 경계` button은 `annotator.shotBoundaryVisible`을 토글하고 overlay를 즉시 다시 그려야 한다. Coordinate list heading은 title에 `margin-right:auto`를 두어 `Map`/`Clear`를 붙여 둔다.
+- E2E 신호: `coordinate-selection-cells`는 map selector open 상태에서 `coordinateMapSelectionViewer.gridMode === false`, selector overlay colors가 모두 scheme `bottom.Normal`, chip boundary color가 scheme `bottom.Normal`, status filename 미표시, sampled chip fill color 1개, `Shot 경계` toggle 전후 overlay alpha 변화, Shot Map plain click 후 selected Shot group/overlay alpha pixel 존재, Chip X/Y `Map`/`Clear` gap `<= 8px`를 확인한다.
 
 ### Selection visible yield-only guard (2026-08-20)
 

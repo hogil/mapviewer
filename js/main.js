@@ -11149,14 +11149,7 @@ class WaferMapViewer {
             this.coordinateMapSelectionAnnotator.ctx = overlayCanvas.getContext('2d');
             this.coordinateMapSelectionAnnotator.viewer = viewer;
         }
-        const sourceAnnotator = this.chipAnnotator;
-        if (sourceAnnotator) {
-            this.coordinateMapSelectionAnnotator.gridColor = sourceAnnotator.gridColor;
-            this.coordinateMapSelectionAnnotator.hoverColor = sourceAnnotator.hoverColor;
-            this.coordinateMapSelectionAnnotator.selectedColor = sourceAnnotator.selectedColor;
-            this.coordinateMapSelectionAnnotator.selectionPreviewColor = sourceAnnotator.selectionPreviewColor;
-            this.coordinateMapSelectionAnnotator.shotBoundaryColor = sourceAnnotator.shotBoundaryColor;
-        }
+        this._syncCoordinateMapSelectionSchemeColors(this.coordinateMapSelectionAnnotator);
         return this.coordinateMapSelectionAnnotator;
     }
 
@@ -11204,6 +11197,19 @@ class WaferMapViewer {
 
     _getCoordinateMapSelectionChipBoundaryColor(schemeData) {
         return schemeData?.bottom?.Normal || schemeData?.bottom?.Border || '#BEBEBE';
+    }
+
+    _syncCoordinateMapSelectionSchemeColors(annotator = this.coordinateMapSelectionAnnotator, schemeData = null) {
+        if (!annotator) return false;
+        const boundaryColor = this._getCoordinateMapSelectionChipBoundaryColor(
+            schemeData || this._getCoordinateMapSelectionSchemeData(),
+        );
+        annotator.gridColor = boundaryColor;
+        annotator.hoverColor = boundaryColor;
+        annotator.selectedColor = boundaryColor;
+        annotator.selectionPreviewColor = boundaryColor;
+        annotator.shotBoundaryColor = boundaryColor;
+        return true;
     }
 
     _getCoordinateMapSelectionBounds(annotator) {
@@ -11259,6 +11265,7 @@ class WaferMapViewer {
         const ctx = imageCanvas.getContext('2d');
         if (!ctx) return false;
         const schemeData = this._getCoordinateMapSelectionSchemeData();
+        this._syncCoordinateMapSelectionSchemeColors(annotator, schemeData);
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.clearRect(0, 0, canvasWidth, canvasHeight);
         ctx.fillStyle = schemeData?.background || '#050505';
@@ -11352,6 +11359,7 @@ class WaferMapViewer {
         this.coordinateMapSelection.showShotBoundary = visible !== false;
         const annotator = this.coordinateMapSelectionAnnotator;
         if (annotator) {
+            this._syncCoordinateMapSelectionSchemeColors(annotator);
             annotator.shotBoundaryVisible = this.coordinateMapSelection.showShotBoundary;
             annotator.render?.();
         }
@@ -11367,6 +11375,7 @@ class WaferMapViewer {
         this._activateCoordinateSelectionList(listName);
         const annotator = this.coordinateMapSelectionAnnotator;
         if (annotator) {
+            this._syncCoordinateMapSelectionSchemeColors(annotator);
             annotator.selectionMode = listName === 'shot' ? 'shot' : 'chip';
             annotator.showGrid = false;
             annotator.shotBoundaryVisible = this.coordinateMapSelection.showShotBoundary !== false;
@@ -11435,6 +11444,7 @@ class WaferMapViewer {
                 this.coordinateMapSelection.loading = false;
             }
         }
+        this._syncCoordinateMapSelectionSchemeColors(annotator);
         annotator.selectionMode = listName === 'shot' ? 'shot' : 'chip';
         annotator.shotBoundaryVisible = this.coordinateMapSelection?.showShotBoundary !== false;
         annotator.showGrid = false;
@@ -11487,6 +11497,7 @@ class WaferMapViewer {
         if (!annotator) return false;
         annotator.selectedChips = new Set();
         annotator.selectedChipsOrder = [];
+        this._syncCoordinateMapSelectionSchemeColors(annotator);
         annotator.selectionMode = listName === 'shot' ? 'shot' : 'chip';
         annotator.showGrid = false;
         annotator.shotBoundaryVisible = this.coordinateMapSelection.showShotBoundary;
@@ -11510,6 +11521,7 @@ class WaferMapViewer {
                 return false;
             }
             if (processId) annotator.setLayoutData(processId, layoutRows);
+            this._syncCoordinateMapSelectionSchemeColors(annotator);
             annotator.selectionMode = listName === 'shot' ? 'shot' : 'chip';
             annotator.showGrid = false;
             annotator.shotBoundaryVisible = this.coordinateMapSelection.showShotBoundary;
@@ -11553,6 +11565,7 @@ class WaferMapViewer {
         if (!chip) return false;
 
         const listName = state.listName === 'shot' ? 'shot' : 'chip';
+        this._syncCoordinateMapSelectionSchemeColors(annotator);
         annotator.selectionMode = listName;
         annotator.showGrid = false;
         annotator.shotBoundaryVisible = state.showShotBoundary !== false;
