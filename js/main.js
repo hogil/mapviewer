@@ -2274,6 +2274,29 @@ class WaferMapViewer {
             annotator.selectedChips.size > 0;
     }
 
+    _restoreGridSelectionFromSourceImages(sourceImages) {
+        if (!this.gridMode || !Array.isArray(sourceImages) || !sourceImages.length) return false;
+        const imageList = Array.isArray(this.currentGridImages) && this.currentGridImages.length
+            ? this.currentGridImages
+            : (Array.isArray(this.selectedImages) ? this.selectedImages : []);
+        if (!imageList.length) return false;
+        const sourceKeys = new Set(
+            sourceImages
+                .map(path => this.normalizePath(path))
+                .filter(Boolean)
+        );
+        if (!sourceKeys.size) return false;
+        const indices = imageList
+            .map((path, index) => sourceKeys.has(this.normalizePath(path)) ? index : -1)
+            .filter(index => index >= 0);
+        if (!indices.length) return false;
+        this.gridSelectedIdxs = indices;
+        this.gridSelectedSet = new Set(indices);
+        this.updateGridSelection?.();
+        this.flushGridSelectionUpdates?.();
+        return true;
+    }
+
     _applyGridCoordinateSelectionStateToAnnotator(selectionState, targetPath = null, options = {}) {
         if (!selectionState || !this.gridMode || this.viewMode === 'gridImage') return false;
         const resolvedTargetPath = targetPath || selectionState.targetPath || selectionState.pendingGridRegionComposite?.targetPath || null;
@@ -2312,6 +2335,9 @@ class WaferMapViewer {
             const pending = this._serializeGridRegionCompositeState(selectionState.pendingGridRegionComposite);
             if (pending) {
                 this._pendingGridRegionComposite = pending;
+                if (pending.selectedOnly === true) {
+                    this._restoreGridSelectionFromSourceImages(pending.sourceImages);
+                }
             }
         }
         annotator.render?.();
@@ -3169,6 +3195,20 @@ class WaferMapViewer {
                 applyPageGridSelection();
                 requestAnimationFrame(applyPageGridSelection);
                 setTimeout(applyPageGridSelection, 120);
+            }
+            const pendingSourceImages = state.gridCoordinateSelectionState?.pendingGridRegionComposite?.selectedOnly === true
+                ? state.gridCoordinateSelectionState.pendingGridRegionComposite.sourceImages
+                : null;
+            if (Array.isArray(pendingSourceImages) && pendingSourceImages.length > 0) {
+                const applyPendingGridSourceSelection = () => {
+                    if (page?.id && this.pageManager?.activePageId !== page.id) return;
+                    if (!this.gridMode || this.viewMode === 'gridImage') return;
+                    this._restoreGridSelectionFromSourceImages(pendingSourceImages);
+                };
+                applyPendingGridSourceSelection();
+                requestAnimationFrame(applyPendingGridSourceSelection);
+                setTimeout(applyPendingGridSourceSelection, 120);
+                setTimeout(applyPendingGridSourceSelection, 350);
             }
         }
 
@@ -10721,6 +10761,30 @@ class WaferMapViewer {
         return { sets, chipConfig, radiusConfig };
     }
 
+    _isCoordinateSelectionRangeFullExtent(range, config, axes) {
+        if (!range || !config?.available) return false;
+        const tolerance = Math.max(Number(config.step || 0) / 2, 1e-9);
+        return axes.every((axis) => {
+            const meta = config?.[axis];
+            if (!meta || !Number.isFinite(Number(meta.min)) || !Number.isFinite(Number(meta.max))) return false;
+            const minValue = Number(range[`${axis}Min`]);
+            const maxValue = Number(range[`${axis}Max`]);
+            return Number.isFinite(minValue) &&
+                Number.isFinite(maxValue) &&
+                Math.abs(minValue - Number(meta.min)) <= tolerance &&
+                Math.abs(maxValue - Number(meta.max)) <= tolerance;
+        });
+    }
+
+    _hasEffectiveCoordinateSelectionRangeFilters(rangeFilter) {
+        const sets = Array.isArray(rangeFilter?.sets) ? rangeFilter.sets : [];
+        return sets.some((set) => {
+            if (set.chipRange && !this._isCoordinateSelectionRangeFullExtent(set.chipRange, rangeFilter?.chipConfig, ['x', 'y'])) return true;
+            if (set.radiusRange && !this._isCoordinateSelectionRangeFullExtent(set.radiusRange, rangeFilter?.radiusConfig, ['x'])) return true;
+            return false;
+        });
+    }
+
     _updateCoordinateSelectionRangeStatus() {
         const status = this.dom?.coordinateSelectRangeStatus;
         if (!status) return;
@@ -10781,7 +10845,7 @@ class WaferMapViewer {
         const operation = 'replace';
         let result = null;
         const rangeFilter = this._getCoordinateSelectionConstraintRangeSets({ normalize: true });
-        if (rangeFilter.sets.length) {
+        if (this._hasEffectiveCoordinateSelectionRangeFilters(rangeFilter)) {
             const base = this._getCoordinateSelectionRangeBase();
             if (!base.ready) {
                 this._setCoordinateSelectionError(base.error);
@@ -12332,7 +12396,7 @@ class WaferMapViewer {
         const operation = 'replace';
         let result;
         const rangeFilter = this._getCoordinateSelectionConstraintRangeSets({ normalize: true });
-        if (rangeFilter.sets.length) {
+        if (this._hasEffectiveCoordinateSelectionRangeFilters(rangeFilter)) {
             const base = this._getCoordinateSelectionRangeBase();
             if (!base.ready) {
                 this._setCoordinateSelectionError(base.error);

@@ -296,6 +296,13 @@ argument-hint: [증상-설명]
 - 수정 패턴: Coord range UI는 기본 `Set 1` tab/page를 항상 가진다. `Set 1`, `Set 2` tab은 field 영역이 아니라 `Add` 바로 옆 액션 줄에 둔다. `Add`는 새 tab/page를 만들고 활성 tab을 이동하되, 새 full-range set을 즉시 OR 적용해 선택을 바꾸지 않는다. 한 page 안에는 `Chip X(mm)`, `Chip Y(mm)`, `Radius(mm)` 3축을 세로 한 열로 두고 AND로 평가한다. 여러 set은 OR로 합친다. 기존 Shot/Chip/Shot Position list가 있으면 list match를 base로 두고 `(base) AND (set1 OR set2 ...)`로 계산한다. 마지막 set은 삭제하지 않는다.
 - E2E 신호: `coordinate-selection-cells`는 기본 Set 1 tab/page, tab container가 `Add` 바로 뒤에 있고 field 영역에 tab이 없는지, 마지막 delete disabled, Add 후 tab 2개/visible page 1개, 2개 set OR로 서로 다른 chip 2개 선택, Shot list base와 range set AND, set Clear 후 base selection 복원을 확인한다.
 
+### Coord Map full-range no-op / grid source restore (2026-08-23)
+
+- 증상: Shot X/Y `Map` 클릭 뒤 list와 selected chip 수는 맞지만 main `chipAnnotator.selectionMode`가 `chip`으로 남아 Shot 선택 표시/동작이 깨질 수 있다. Grid Coord/Shot Composite page restore 뒤 selected chip과 pending overlay는 남아도 grid wafer selection source가 target 1개로 줄거나 현재 grid order에 맞지 않는 index로 보일 수 있다.
+- 원인: Coord modal 기본 Range `Set 1` 전체 범위도 constraint로 처리되어 `selectByCoordinateConstraints()`가 항상 `selectionMode='chip'`을 덮었다. Grid Coord restore는 pending `sourceImages`를 저장해도 chip coords/pending만 복원하고 grid selected wafer set은 sourceImages 기준으로 재매핑하지 않았다.
+- 수정 패턴: full extent Chip/Radius range는 selection 계산에서 no-op으로 보고, 실제로 좁혀진 range가 있을 때만 constraint 경로를 탄다. full-range 상태의 Shot Map/list 선택은 `selectByCoordinateRows('shot-grid', ...)`를 유지해야 한다. `pendingGridRegionComposite.selectedOnly=true` 복원 시 sourceImages를 current grid image list에 매핑해 `gridSelectedIdxs/gridSelectedSet`을 즉시/rAF/short timeout으로 재적용한다. No-selection all-loaded Coord는 grid wafer selection을 강제로 만들지 않는다.
+- E2E 신호: `coordinate-selection-cells`는 Shot Map plain click 뒤 Shot rows, map/main selected count, main `selectionMode='shot'`을 같이 확인하고 full-range `Clear` 후 Shot base가 48 chip/2 Shot으로 복원되는지 본다. `selected-region-composite`는 Coord가 Shot boundary OFF 상태를 자동 ON 하지 않는지, context-menu Composite payload를 async handler 호출까지 기다리는지, source wafer paths와 coord overlay가 page-state restore 및 thumbnail double-click 전후 유지되는지 확인한다.
+
 ### Coord selected yield summary height guard (2026-08-20)
 
 - 증상: Coord panel 상단 summary에 `Yld`, `Shot Yld`, `Shot Pos Yld`를 표시하면 modal 높이가 늘어나 닫기/완료 버튼이 화면 아래로 밀릴 수 있다.
