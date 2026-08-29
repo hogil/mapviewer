@@ -34784,10 +34784,10 @@ class WaferMapViewer {
         const scale = Math.min(cssWidth / data.canvasWidth, cssHeight / data.canvasHeight);
         const offsetX = (cssWidth - data.canvasWidth * scale) / 2;
         const offsetY = (cssHeight - data.canvasHeight * scale) / 2;
-        const shotBoundaryStroke = this.chipAnnotator?.shotBoundaryColor || 'rgba(170, 120, 210, 0.45)';
+        const shotBoundaryStroke = this.chipAnnotator?.shotBoundaryColor || 'rgba(0, 200, 255, 0.9)';
         ctx.strokeStyle = shotBoundaryStroke;
-        ctx.lineWidth = 0.75;
-        ctx.setLineDash([1, 3]);
+        ctx.lineWidth = 1.25;
+        ctx.setLineDash([2, 3]);
 
         let drawn = 0;
         data.groups.forEach((group) => {
@@ -34806,7 +34806,7 @@ class WaferMapViewer {
         canvas.dataset.shotOverlayWidth = String(pixelWidth);
         canvas.dataset.shotOverlayHeight = String(pixelHeight);
         canvas.dataset.shotBoundaryStroke = shotBoundaryStroke;
-        canvas.dataset.shotBoundaryDash = '1,3';
+        canvas.dataset.shotBoundaryDash = '2,3';
     }
 
     async renderGridShotBoundaryOverlays() {

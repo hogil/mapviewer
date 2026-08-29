@@ -132,7 +132,7 @@ export class ChipAnnotator {
         this._shotBoundaryCache = new Map();
         this._shotMedianCellSize = null;
         this.shotBoundaryVisible = false;
-        this.shotBoundaryColor = 'rgba(170, 120, 210, 0.45)';
+        this.shotBoundaryColor = 'rgba(0, 200, 255, 0.9)';
 
         // Event handlers (bind once)
         this._onMouseMove = this._handleMouseMove.bind(this);
@@ -944,8 +944,8 @@ export class ChipAnnotator {
         ctx.save();
         ctx.resetTransform();
         ctx.strokeStyle = this.shotBoundaryColor;
-        ctx.lineWidth = 0.65;
-        ctx.setLineDash([1, 3]);
+        ctx.lineWidth = 1.4;
+        ctx.setLineDash([2, 3]);
 
         let drawn = 0;
         this.shotBoundaryGroups.forEach((group) => {
