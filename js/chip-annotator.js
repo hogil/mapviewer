@@ -122,6 +122,7 @@ export class ChipAnnotator {
         this.coordYield = document.getElementById('coord-yield');
         this.coordSys = document.getElementById('coord-sys');
         this.coordBin = document.getElementById('coord-bin');
+        this.selectionYieldPanel = document.getElementById('selection-yield-panel');
 
         // Current image path
         this.currentImagePath = null;
@@ -132,7 +133,7 @@ export class ChipAnnotator {
         this._shotBoundaryCache = new Map();
         this._shotMedianCellSize = null;
         this.shotBoundaryVisible = false;
-        this.shotBoundaryColor = 'rgba(0, 200, 255, 0.9)';
+        this.shotBoundaryColor = 'rgba(0, 190, 240, 0.78)';
 
         // Event handlers (bind once)
         this._onMouseMove = this._handleMouseMove.bind(this);
@@ -944,7 +945,7 @@ export class ChipAnnotator {
         ctx.save();
         ctx.resetTransform();
         ctx.strokeStyle = this.shotBoundaryColor;
-        ctx.lineWidth = 1.4;
+        ctx.lineWidth = 1.25;
         ctx.setLineDash([2, 3]);
 
         let drawn = 0;
@@ -1900,6 +1901,30 @@ export class ChipAnnotator {
         return `Yld ${yieldText}`;
     }
 
+    updateSelectionYieldPanel(chips = null) {
+        const panel = this.selectionYieldPanel || document.getElementById('selection-yield-panel');
+        if (!panel) return;
+        this.selectionYieldPanel = panel;
+
+        const chipObjects = Array.isArray(chips)
+            ? chips.filter(Boolean)
+            : Array.from(this.selectedChips || [])
+                .map((index) => this.chips?.[index])
+                .filter(Boolean);
+
+        if (this.viewer?.gridMode || chipObjects.length === 0) {
+            panel.style.display = 'none';
+            panel.textContent = 'Yld -';
+            panel.title = '';
+            return;
+        }
+
+        const summary = this.getSelectionYieldSummary(chipObjects);
+        panel.textContent = this.formatSelectionYieldOnly(summary);
+        panel.title = `Selected chips: ${summary.chipCount}, Good: ${summary.goodCount}, Bad: ${summary.badCount}, Yield source: ${summary.avgYieldSource}`;
+        panel.style.display = 'inline-flex';
+    }
+
     _getSelectionChipObjects(chips = null) {
         return Array.isArray(chips)
             ? chips.filter(Boolean)
@@ -2666,6 +2691,7 @@ export class ChipAnnotator {
 
         // 1. gridMode이면 모든 칩 관련 UI 숨김
         if (viewer.gridMode) {
+            this.updateSelectionYieldPanel([]);
             const listContainer = document.getElementById('selected-chips-list');
             if (listContainer) {
                 listContainer.style.display = 'none';
@@ -2677,6 +2703,7 @@ export class ChipAnnotator {
 
         // 2. 현재 이미지가 없으면 숨김 (viewMode가 없더라도 currentImage를 우선 신뢰)
         if (!viewer.currentImage) {
+            this.updateSelectionYieldPanel([]);
             const listContainer = document.getElementById('selected-chips-list');
             if (listContainer) {
                 listContainer.style.display = 'none';
@@ -2917,25 +2944,7 @@ export class ChipAnnotator {
             const selectedChipObjects = sortedChips
                 .map((chipData) => this.chips[chipData.idx])
                 .filter(Boolean);
-            const yieldSummary = this.getSelectionYieldSummary(selectedChipObjects);
-            const summaryItem = document.createElement('div');
-            summaryItem.className = 'selected-chips-yield-summary';
-            summaryItem.textContent = this.formatSelectionYieldOnly(yieldSummary);
-            summaryItem.title = `Selected chips: ${yieldSummary.chipCount}, Good: ${yieldSummary.goodCount}, Bad: ${yieldSummary.badCount}, Yield source: ${yieldSummary.avgYieldSource}`;
-            summaryItem.style.cssText = `
-                padding: 3px 4px;
-                margin-bottom: 2px;
-                background: rgba(20, 20, 20, 0.88);
-                border: 1px solid rgba(120, 120, 120, 0.55);
-                border-radius: 3px;
-                color: #e0e0e0;
-                font-size: 10px;
-                line-height: 1.25;
-                white-space: nowrap;
-                overflow: hidden;
-                text-overflow: ellipsis;
-            `;
-            listItems.appendChild(summaryItem);
+            this.updateSelectionYieldPanel(selectedChipObjects);
 
             sortedChips.forEach((chipData, listIndex) => {
                 const { idx, x, y } = chipData;
@@ -3032,6 +3041,7 @@ export class ChipAnnotator {
             
         } else {
             // 선택된 칩이 없으면 숨김
+            this.updateSelectionYieldPanel([]);
             listContainer.style.display = 'none';
             listItems.innerHTML = '';
             if (notifyViewer && typeof viewer.handleChipSelectionCleared === 'function') {

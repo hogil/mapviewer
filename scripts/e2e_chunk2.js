@@ -6932,11 +6932,25 @@ const { createRunner } = require('./e2e_playwright_session');
       { timeout: 10000 }
     );
     const shotVisibleSummary = await page.evaluate(() => ({
-      text: document.querySelector('#selected-chips-list .selected-chips-yield-summary')?.textContent?.trim() || '',
+      text: document.querySelector('#selection-yield-panel')?.textContent?.trim() || '',
+      display: document.querySelector('#selection-yield-panel')
+        ? getComputedStyle(document.querySelector('#selection-yield-panel')).display
+        : '',
+      background: document.querySelector('#selection-yield-panel')
+        ? getComputedStyle(document.querySelector('#selection-yield-panel')).backgroundColor
+        : '',
+      color: document.querySelector('#selection-yield-panel')
+        ? getComputedStyle(document.querySelector('#selection-yield-panel')).color
+        : '',
+      listYieldRows: document.querySelectorAll('#selected-chips-list .selected-chips-yield-summary').length,
       breakdownCount: document.querySelectorAll('#selected-chips-list .selected-chips-yield-breakdown').length,
     }));
     expect(/^Yld\s+(?:-|[-0-9]+\.[0-9]%)$/.test(shotVisibleSummary.text) &&
+      shotVisibleSummary.display.includes('flex') &&
+      /^rgba?\(0,\s*0,\s*0/.test(shotVisibleSummary.background) &&
+      shotVisibleSummary.color === 'rgb(255, 255, 255)' &&
       !/G\s+\d+\/B\s+\d+/.test(shotVisibleSummary.text) &&
+      shotVisibleSummary.listYieldRows === 0 &&
       shotVisibleSummary.breakdownCount === 0,
       `shot visible selection summary=${JSON.stringify(shotVisibleSummary)}`);
     await page.evaluate(() => {

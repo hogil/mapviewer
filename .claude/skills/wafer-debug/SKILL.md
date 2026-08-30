@@ -270,11 +270,11 @@ argument-hint: [증상-설명]
 - 수정 패턴: selector는 구조-only를 유지하되 viewer `gridMode=false`여야 한다. Selector canvas visible color는 active scheme의 background, `top.Grade0`, `bottom.Normal` 3개만 사용한다. `js/main.js::_syncCoordinateMapSelectionSchemeColors()`로 selector annotator의 grid/hover/selected/preview/Shot boundary 색을 모두 `bottom.Normal`으로 맞추고 main annotator 색을 복사하지 않는다. Chip fill은 source wafer의 chip별 palette/defect 색을 쓰지 않고 active color legend scheme의 Grade0 색 하나로 통일한다. status는 source filename 없이 `구조 · N Shot / M Chip`만 표시한다. `Shot 경계` button은 `annotator.shotBoundaryVisible`을 토글하고 overlay를 즉시 다시 그려야 한다. Coordinate list heading은 title에 `margin-right:auto`를 두어 `Map`/`Clear`를 붙여 둔다.
 - E2E 신호: `coordinate-selection-cells`는 map selector open 상태에서 `coordinateMapSelectionViewer.gridMode === false`, selector overlay colors가 모두 scheme `bottom.Normal`, chip boundary color가 scheme `bottom.Normal`, status filename 미표시, sampled chip fill color 1개, `Shot 경계` toggle 전후 overlay alpha 변화, Shot Map plain click 후 selected Shot group/overlay alpha pixel 존재, Chip X/Y `Map`/`Clear` gap `<= 8px`를 확인한다.
 
-### Selection visible yield-only guard (2026-08-20)
+### Selection visible yield-only guard (2026-08-20, updated 2026-08-31)
 
-- 증상: 단일보기 selection list와 grid 선택 패널에 `G/B`, source, Shot/Position breakdown, min~max range를 같이 표시하면 패널 높이가 커지고 사용자가 원하는 전체 선택 Yld만 빠르게 보기 어렵다.
-- 수정 패턴: 단일보기 selection list visible summary는 전체 선택 집합의 `Yld NNN.N%` 한 줄만 표시하고, grid 우측하단 선택 패널도 filename yield 평균을 `Yld NNN.N%` 한 줄로 표시한다. 상세 Good/Bad/group yield는 TSV/clipboard 같은 데이터 경로에만 유지한다.
-- E2E 신호: `selected-region-export`는 `.selected-chips-yield-summary`가 소수 1자리 Yld만 포함하고 `.selected-chips-yield-breakdown`이 없는지 확인한다. `grid-context-actions`는 `#selected-grid-yield-summary`가 `~` range 없이 소수 1자리 Yld만 표시하는지 확인한다.
+- 증상: 단일보기 selection list와 grid 선택 패널에 `G/B`, source, Shot/Position breakdown, min~max range를 같이 표시하면 패널 높이가 커지고 사용자가 원하는 전체 선택 Yld만 빠르게 보기 어렵다. 단일보기 Selection 리스트 안에 Yld 행을 넣으면 좌표 목록이 밀리고 패널이 커진다.
+- 수정 패턴: 단일보기 visible summary는 Selection 리스트 내부가 아니라 Device 정보 박스 위의 작은 검정/흰글씨 `#selection-yield-panel`에 전체 선택 집합의 `Yld NNN.N%` 한 줄만 표시한다. Selection 리스트에는 좌표 항목만 둔다. grid 우측하단 선택 패널은 filename yield 평균을 `Yld NNN.N%` 한 줄로 표시하고, grid 좌표/direct 선택 thumbnail에는 좌상단 작은 검정/흰글씨 배지를 쓴다. 상세 Good/Bad/group yield는 TSV/clipboard 같은 데이터 경로에만 유지한다.
+- E2E 신호: `selected-region-export`는 `#selection-yield-panel`이 소수 1자리 Yld, 검정 배경, 흰 글씨로 보이고 `.selected-chips-yield-summary`/`.selected-chips-yield-breakdown`이 Selection 리스트에 없는지 확인한다. `grid-context-actions`는 `#selected-grid-yield-summary`가 `~` range 없이 소수 1자리 Yld만 표시하는지 확인한다.
 
 ### Grid context direct selection / Composite menu guard (2026-08-19)
 

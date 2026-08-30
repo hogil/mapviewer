@@ -2243,6 +2243,29 @@
         .grid-coordinate-selection-overlay {
             z-index: 3;
         }
+
+        .grid-coordinate-yield-badge {
+            position: absolute;
+            top: 5px;
+            left: 5px;
+            z-index: 4;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 58px;
+            height: 20px;
+            padding: 2px 7px;
+            background: rgba(0, 0, 0, 0.88);
+            border: 1px solid rgba(255, 255, 255, 0.24);
+            border-radius: 3px;
+            color: #fff;
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 10px;
+            font-weight: 700;
+            line-height: 1;
+            pointer-events: none;
+            white-space: nowrap;
+        }
         
         .grid-thumb-img.lazy,
         .grid-thumb-img:not(.lazy) {
@@ -2557,6 +2580,27 @@
             font-family: 'Consolas', 'Courier New', monospace;
             font-size: 11px;
             box-shadow: 0 4px 18px rgba(0, 0, 0, 0.4);
+        }
+
+        #selection-yield-panel {
+            display: none;
+            align-items: center;
+            justify-content: center;
+            min-width: 70px;
+            max-width: 165px;
+            height: 22px;
+            padding: 2px 8px;
+            background: rgba(0, 0, 0, 0.9);
+            border: 1px solid rgba(255, 255, 255, 0.22);
+            border-radius: 3px;
+            color: #fff;
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 12px;
+            font-weight: 700;
+            line-height: 1;
+            box-shadow: 0 3px 12px rgba(0, 0, 0, 0.45);
+            pointer-events: none;
+            white-space: nowrap;
         }
 
         #chip-coordinate-box .coord-row {
@@ -4486,6 +4530,7 @@
         
         /* 방법 3: CSS 클래스 우선순위 처리 - 칩 선택 패널 강제 숨김 */
         body.grid-mode-active #chip-selection-panel,
+        body.grid-mode-active #selection-yield-panel,
         body.grid-mode-active #selected-chips-list,
         body.grid-mode-active [id*="chip-selection"],
         body.grid-mode-active [class*="chip-selection"],
