@@ -412,6 +412,13 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
 - E2E guard: `scripts/e2e_chunk2.js` record `selected-region-export`는 `#selection-yield-panel` visible, 검정 배경, 흰 글씨, 소수 1자리 Yld와 Selection 리스트 내부 `.selected-chips-yield-summary` 부재를 확인한다. `selected-region-composite` 또는 focused browser probe는 grid thumbnail `.grid-coordinate-yield-badge`가 selected chip count와 함께 생성되고 stale overlay cleanup 때 제거되는지 확인한다.
 - 파일: `index.html`, `css/style.css`, `js/chip-annotator.js`, `js/main.js`, `scripts/e2e_chunk2.js`
 
+#### BUG-53: Cold restart unknown grid thumbnail latency regression (2026-08-31)
+- 증상: 서버 재시작 후 `unknown` 5000장 grid 대량 보기에서 첫 visible thumbnail이 평소보다 크게 늦어질 수 있었다. 특히 서버가 열린 뒤 몇 초 지난 시점에 grid를 열면 thumbnail 네트워크가 600ms 이상으로 튀었다.
+- 원인: `api/full_app.py::_lifespan_background_init()`의 composite/measure warm이 2.5초 뒤 바로 실행되며 `api.measure_composite` import 시 `ProcessPoolExecutor` worker를 미리 깨웠다. Bootstrap `/api/thumbnail`은 `api.main.py::get_thumbnail()`에서 `api.full_app.get_thumbnail()` 함수를 직접 호출하므로 full-app middleware의 `BACKGROUND_TASKS_PAUSED`가 thumbnail 요청을 보지 못했고, startup warm이 사용자 grid thumbnail과 CPU/IO를 경쟁할 수 있었다.
+- 수정 계약: startup composite warm은 `STARTUP_COMPOSITE_WARM_DELAY_SECONDS` 이후에만 실행하고, 실행 직전 `BACKGROUND_TASKS_PAUSED`와 최근 user thumbnail 요청(`STARTUP_THUMBNAIL_IDLE_SECONDS`)을 확인해 idle 상태에서만 시작한다. 운영/개발 start script는 delay/thumbnail idle 값을 명시한다. Grid UI, thumbnail cache key, composite 계산 결과는 변경하지 않는다.
+- E2E guard: focused browser probe는 별도 cold server를 띄운 뒤 `unknown` 5000장 grid를 열어 `thumbnailNetwork.p90`과 `visibleLoadedMs`를 기록한다. 회귀 신호는 warm 충돌 타이밍에서 thumbnail p90이 수백 ms로 튀거나 visible loaded가 1초 이상 늦어지는 것이다. 정식 E2E를 실행할 경우 기존 `scripts/e2e_chunk1.js` phase `0` grid readiness와 server log guard가 같은 증상을 보강한다.
+- 파일: `api/full_app.py`, `start.sh`, `start.ps1`
+
 ### Available skills
 - deploy-check: Ubuntu 프로덕션 배포 전 점검을 수행한다. 배포 전 민감정보, 설정, SSL/SAML, 환경변수, 운영 체크리스트를 확인할 때 사용한다. (file: D:/project/mapviewer/.claude/skills/deploy-check/SKILL.md)
 - e2e-test: L3 Tracker 전체 기능 E2E 테스트를 Playwright 브라우저 자동화로 수행한다. `/e2e-test`, `E2E 테스트`, `전체 테스트`, `기능 테스트 돌려줘` 같은 요청에 반응한다. (file: D:/project/mapviewer/.claude/skills/e2e-test/skill.md)

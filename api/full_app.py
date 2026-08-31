@@ -743,6 +743,7 @@ THUMBNAIL_EXECUTOR = ThreadPoolExecutor(max_workers=_THUMBNAIL_EXECUTOR_WORKERS)
 
 USER_ACTIVITY_FLAG = False
 BACKGROUND_TASKS_PAUSED = False
+LAST_THUMBNAIL_REQUEST_AT = 0.0
 INDEX_LOCK_WAIT_SECONDS = int(os.getenv("INDEX_LOCK_WAIT_SECONDS", "600"))
 INDEX_CACHE_FILE = ROOT_DIR / ".file_index_cache.txt"
 # 🔥 포트별 lock 파일 → 같은 ROOT_DIR에서 여러 서버 동시 실행 가능
@@ -1981,11 +1982,20 @@ async def _lifespan_background_init():
     )
     warm_count = max(0, int(os.getenv("STARTUP_THUMB_WARM_COUNT", "24")))
     warm_composite_modules = os.getenv("STARTUP_WARM_COMPOSITE_MODULES", "1").strip().lower() in {"1", "true", "yes", "y", "on"}
+    composite_warm_delay_seconds = max(0.0, float(os.getenv("STARTUP_COMPOSITE_WARM_DELAY_SECONDS", "20.0") or "20.0"))
+    thumbnail_idle_seconds = max(0.0, float(os.getenv("STARTUP_THUMBNAIL_IDLE_SECONDS", "2.0") or "2.0"))
     warm_layout = os.getenv("STARTUP_WARM_LAYOUT", "1").strip().lower() in {"1", "true", "yes", "y", "on"}
 
     async def _wait_for_user_idle(label: str) -> None:
         waited = 0.0
-        while BACKGROUND_TASKS_PAUSED:
+        while True:
+            recent_thumbnail = (
+                thumbnail_idle_seconds > 0 and
+                LAST_THUMBNAIL_REQUEST_AT > 0 and
+                (time.monotonic() - LAST_THUMBNAIL_REQUEST_AT) < thumbnail_idle_seconds
+            )
+            if not BACKGROUND_TASKS_PAUSED and not recent_thumbnail:
+                break
             await asyncio.sleep(0.1)
             waited += 0.1
         if waited >= 0.1:
@@ -2086,7 +2096,8 @@ async def _lifespan_background_init():
 
     # 0.7) Composite/Measure 모듈 워밍업 — 첫 요청 lazy import/ProcessPool 비용을 사용자 클릭에서 제거
     async def _warm_composite_modules():
-        await asyncio.sleep(max(2.5, user_first_seconds + 1.0))
+        await asyncio.sleep(max(composite_warm_delay_seconds, user_first_seconds + 1.0))
+        await _wait_for_user_idle("composite/measure warm")
 
         def _warm():
             from . import composite_map as _composite_map  # noqa: F401
@@ -8161,6 +8172,10 @@ async def get_thumbnail(
     gradient_filter: Optional[str] = None,
 ):
     try:
+        global LAST_THUMBNAIL_REQUEST_AT
+        if not _is_internal_startup_warm_request(request):
+            LAST_THUMBNAIL_REQUEST_AT = time.monotonic()
+
         # LoginId가 있으면 우선 사용, 없으면 anonymous scheme fallback
         if personalized and not scheme:
             scheme = get_user_color_scheme(_current_login_id(request))

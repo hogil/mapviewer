@@ -308,3 +308,10 @@ argument-hint: [증상-설명]
 - 증상: Coord panel 상단 summary에 `Yld`, `Shot Yld`, `Shot Pos Yld`를 표시하면 modal 높이가 늘어나 닫기/완료 버튼이 화면 아래로 밀릴 수 있다.
 - 수정 패턴: Coord panel selection summary는 `Chip N · Shot M`처럼 선택 개수만 표시한다. 수율과 Shot별/Position별 breakdown은 Coord modal에 렌더하지 않는다.
 - E2E 신호: `coordinate-selection-cells`는 Shot 2개 선택 후 summary가 `Chip 48 · Shot 2`이고 `Yld`, `Shot Yld`, `Shot Pos Yld` 텍스트와 `.coordinate-select-summary-group` row가 없는지 확인한다.
+
+### Cold restart unknown grid thumbnail latency guard (2026-08-31)
+
+- 증상: 서버 재시작 직후나 몇 초 뒤 `unknown` 5000장 grid를 열 때 첫 visible thumbnail이 평소보다 늦고, `/api/thumbnail` 응답 시간이 수백 ms로 튈 수 있다.
+- 원인 후보: startup composite/measure warm이 너무 빨리 시작되어 `api.measure_composite` import의 `ProcessPoolExecutor` worker spawn 또는 Numba warm이 grid thumbnail과 CPU/IO를 경쟁한다. Bootstrap이 직접 `api.full_app.get_thumbnail()`을 호출하는 경로는 full-app HTTP middleware를 지나지 않으므로, thumbnail 요청이 background pause로 반영되지 않을 수 있다.
+- 수정 패턴: `api/full_app.py::_lifespan_background_init()`에서 composite warm은 `STARTUP_COMPOSITE_WARM_DELAY_SECONDS` 이후에 실행하고, 실행 직전 `BACKGROUND_TASKS_PAUSED` 및 최근 user thumbnail 요청 idle window를 확인한다. `get_thumbnail()`은 internal startup warm이 아닌 user thumbnail request time을 기록한다. 운영/개발 start script에는 delay/idle env를 명시한다.
+- 확인 신호: cold server 별도 포트를 띄운 뒤 `unknown` 5000장 grid probe를 즉시와 warm 충돌 타이밍에 반복한다. 정상 신호는 `thumbnailNetwork.p90`이 한 자리~수십 ms 범위이고 `visibleLoadedMs`가 1초 안팎 이하인 것이다. 느린 원인을 숨기려고 E2E timeout을 늘리지 않는다.
