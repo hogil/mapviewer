@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("all", "1", "2", "3")]
+    [ValidateSet("all", "1", "2", "3", "extended", "extended-navigation", "extended-storage", "extended-composite", "extended-edges")]
     [string]$Chunk = "all",
     [switch]$WithSmoke,
     [switch]$Headless,
@@ -443,6 +443,11 @@ if ($WithSmoke) {
 }
 
 $scripts = switch ($Chunk) {
+    "extended" { @("scripts/e2e_extended_navigation.js", "scripts/e2e_extended_storage.js", "scripts/e2e_extended_composite.js", "scripts/e2e_extended_edges.js") }
+    "extended-navigation" { @("scripts/e2e_extended_navigation.js") }
+    "extended-storage" { @("scripts/e2e_extended_storage.js") }
+    "extended-composite" { @("scripts/e2e_extended_composite.js") }
+    "extended-edges" { @("scripts/e2e_extended_edges.js") }
     "1" { @("scripts/e2e_chunk1.js") }
     "2" { @("scripts/e2e_chunk2.js") }
     "3" { @("scripts/e2e_chunk3.js") }
@@ -1144,7 +1149,7 @@ function Stop-E2ETrackedPidProcesses {
 }
 
 function Get-E2EResidualProcesses {
-    $e2eNodePattern = 'scripts[\\/](e2e_chunk[123]|e2e_saml_bootstrap_smoke|e2e_fresh_boot_smoke|e2e_visible_smoke)\.js'
+    $e2eNodePattern = 'scripts[\\/](e2e_chunk[123]|e2e_extended_(navigation|storage|composite|edges)|e2e_saml_bootstrap_smoke|e2e_fresh_boot_smoke|e2e_visible_smoke)\.js'
     $tracked = @(Get-E2ETrackedPidProcesses -PidFilters @("e2e-node-*.pid", "e2e-browser-*.pid"))
     $patternMatches = @(Get-CimInstance Win32_Process | Where-Object {
         ($_.Name -eq "node.exe" -and $_.CommandLine -match $e2eNodePattern) -or
@@ -1229,6 +1234,11 @@ function Invoke-E2EServerLogGuards {
                     pattern = "stats.json.tmp"
                 }
             }
+            foreach ($pattern in @("[PYRAMID] 오류:", "[PYRAMID] 파일 생성 실패", "encoding error 6", "unable to call webpsave", "[IMAGE API ERROR]", "[NPZ] save failed", "[NPZ] rename failed", "[COMPOSITE POSITIONS] copy failed")) {
+                if ($text.Contains($pattern)) {
+                    $matches += [pscustomobject]@{ file = $logPath; pattern = $pattern }
+                }
+            }
         }
     }
 
@@ -1261,7 +1271,7 @@ foreach ($script in $scripts) {
     $progressPath = Join-Path $outputDir "$name.progress.log"
     Remove-Item $stdoutPath, $stderrPath, $progressPath -Force -ErrorAction SilentlyContinue
 
-    if ($name -eq "e2e_chunk1") {
+    if ($name -eq "e2e_chunk1" -or $name.StartsWith("e2e_extended_")) {
         Write-Host "WARMUP search cache"
         if (-not (Wait-ForSearchReady -BaseUrl $baseUrl)) {
             if (-not $KeepServer -and $serverInfo -and $serverInfo.pid) {

@@ -6615,3 +6615,29 @@ return {
 - Coordinate modal live apply must preserve the active edited list while syncing the other lists from the resulting chip selection. Shot X/Y input should populate Chip X/Y and Shot Position; Chip X/Y input should populate Shot X/Y and Shot Position.
 - Guard: `scripts/e2e_chunk2.js` record `selected-region-composite` checks no-selection Coord all-loaded source count, single-view Shot/Coord/Border linkage, and overlay canvas pixel size. Record `coordinate-selection-cells` checks Shot-to-Chip/Position and Chip-to-Shot/Position list synchronization.
 - Files: `js/main.js`, `scripts/e2e_chunk2.js`.
+
+## 2026-09-11 감사 회귀 및 성능 비교 계약
+- chunk1 audit-regressions를 생략하지 않는다: raw static 차단, 공개 asset 유지, 누락 이미지404, 예약 MY LOT 그룹400, real unknown 이미지 저장/rename/다시 열기의 실제 visible canvas 픽셀과 chip count를 확인한다.
+- scripts/check-audit-frontend.mjs, scripts/check_audit_mylot.py, scripts/check_audit_api.py, scripts/check_pyramid_regressions.py를 집중 검사로 사용하며 이것만으로 전체 E2E를 대체하지 않는다.
+- 2026-08-23 전체 두 세션은 38/38 PASS이나 server stdout에 WebP Q100 effort1 실패/잘못된 원본 fallback이 있었다. 기존 server-log-guards가 stats 오류만 봐서 놓쳤으므로 encoder failure와 IMAGE API ERROR도 검사한다.
+- start-e2e-server.ps1은 실제 start.ps1과 같은 JPEG/Q100/cubic을 명시한다. 이전 WEBP 실행과 수치를 비교할 때 포맷 차이를 반드시 보고한다. WebP는 별도 실제 인코더 회귀에서 출력4480x4480/포맷/실패 시 미발행/동시 temp 정리를 검증한다.
+
+### 2026-09-11 현행 Shot/Coord와 검사 오버헤드
+- Shot 경계 현재 계약은 cyan rgba(0,190,240,0.78), dash[2,3] (Aug31 변경). 이전 magenta 픽셀 판정은 잘못된0pixel 실패를 만든다. 현행색 pixel의 OFF/ON/OFF와 기존 latency gate를 유지한다.
+- Coord range sets는 reopen 후 보존된다. OR 세트 검증 다음 Shot48chip 독립 검사는 범위 보존을 먼저 확인하고 두 번째 set삭제+첫setClear UI로 준비한다.
+- content-visibility:auto 하위 offscreen img 전수 geometry 읽기는 E2E 자체의 렌더 부하를 만든다. 먼저 wrapper viewport 교차를 검사하고 visible img만 검사하며 integrityCheckMs를 별도 기록한다. loadMs는 이 후속 검사시간을 포함하지 않는다.
+- Composite 완료 이후 1500ms 지연 NPZ writer와 다음 cleanup 사이 경합은 기존 UI PASS 뒤에도 서버 `[NPZ] save failed`로 남았다. 완료는 필요한 NPZ/positions/gradient 저장 완료를 뜻해야 한다. selected-region-composite는 UI 완료 직후 재시도 없이 Subset200/2개와 positions1개를 확인하고 NPZ save/rename 로그도 실패 처리한다. 저장을 완료 경로에 포함한 후 Composite 생성 시간을 다시 측정한다.
+
+### 2026-09-11 확장 복합 동작 lane
+- `-Chunk extended -Headless`는 navigation/storage/composite/edges를 실행하며 개별 `extended-<lane>`도 가능하다. 입력 seed17/53/101, 화면1280×720/1440×900/1920×1080, 실제 응답 역전과 오류 후 복구, 사용자별 저장, 소스1/2/5×영역3종을 교차한다. 기존 all 검사와 별도 범위이며 둘의 결과를 합쳐 실행했다고 보고하지 않는다.
+- `restoreCachedPageView/applyPageState` 지연 scroll은 활성 탭·grid·새 사용자 scroll을 검사한다. 이전 cached callback이 사용자700을0으로 덮은 회귀는 `extended-tabs-viewport`가 저장값과 복원값으로 잡는다.
+- 열 입력 Enter가 blur 후 grid Enter 단축키까지 전파되어 이미지를 여는 회귀는 gridColsInput에서 stopPropagation하고 seed 혼합 동작에서 columns 직후 실제 visible grid를 검사한다.
+- MY LOT batch는 없는 paths를 errors/error_count에 합친다. `storage-partial-accounting`은 duplicate1/valid1/missing1의 저장1·중복1·실패1와 toast를 확인한다. `check_extended_batch.py`는 전부누락과 기존복사실패+누락도 검사한다.
+- 공통 visibleGrid polling에는 실제 함수를 넘긴다. 문자열 arrow는 truthy 함수 객체만 반환하여 대기를 건너뛸 수 있다. 성공 poll 자체의 상태를 증거로 저장하고 placeholder data URL을 실제 이미지로 세지 않는다. STEP 등 progress의 모든 행은 newline으로 종료하여 뒤의 PASS/FAIL record가 집계에서 빠지지 않게 한다.
+- 캐시 탭 복원은 `setupGridLazyLoader()`를 재시작해야 한다. 빈 탭 진입 시 teardown된 scroll 감지가 복원되지 않으면 scroll 이후 placeholder가 남는다. `extended-tabs-viewport`는 scroll 후 visible 실제 썸네일 broken=0을 요구한다. `loadImage`는 runtime 준비 await 전부터 요청 세대와 grid 출처를 고정하고 준비/메타데이터 await 뒤 취소를 확인하여 Next 직후 grid 복귀를 이전 요청이 단일뷰로 되돌리지 않게 한다.
+- MY LOT 초기화: `js/my-lot.js::open`은 처음 창을 즉시 표시하되 refresh 뒤 setMode를 다시 호출해 새 선택의 entries를 초기화하지 않는다. open/close 세대와 현재 그룹을 유지하며 완료를 await할 수 있어야 한다. `openSelectionInViewer`는 실제 LoginId로 folder scope를 구성한다. `storage-mylot-persistence`, `storage-save-switch`, `storage-user-isolation`은 실제 목록·저장 대상·양쪽833칩을 확인한다.
+- Composite 출력 수명: `api/full_app.py::_composite_output_lock`으로 동일 사용자 generation/cleanup/recolor/subset worker를 직렬화한다. lock은 executor 안에서 획득하여 다른 사용자와 event loop를 막지 않는다. 느린 이전 전체833칩 writer가 최신1칩 작업을 덮는 문제는 `composite-same-user-overlap`의 PNG200×200·positions1·즉시Subset200×200으로 잡는다. cleanup 실패는 성공으로 숨기지 않는다.
+- Composite 좌표 캐시: `js/chip-annotator.js::loadPositions`에서 덮어써지는 composite_map 경로는 메모리 캐시를 재사용하지 않고 no-store 조회한다. 원본 파일 캐시는 유지한다. `composite-source-region-matrix`와 focused 같은 경로1→21→24칩 검사가 신호다.
+- 삭제 중 이미지 조회: `get_image`에서 현재 source와 filename이 같은 FileNotFoundError는404로 반환한다. 다른 내부 파일 오류까지404로 숨기지 않는다. `check_extended_batch.py`는 source lookup 후 삭제404와 다른 내부 파일 실패500을 구분한다. `api/my_lot.py::delete_group`는 images rmtree 실패를 전파하여 positions만 지우고 성공을 반환하지 않는다.
+- 추가 탐색 원인: `scheduleShowGrid`의 예약된 열 수 렌더링이 단일뷰 진입 뒤 실행되어 grid 출처를 지웠다. 예약 당시 page id와 실행 시 grid 모드를 검사한다. seed17의 열 변경→단일뷰→Grade→Next→복귀32장 신호 및 `check-audit-frontend.mjs`의 예약 렌더 취소 검사를 유지한다.
+- Windows 복사본 읽기/삭제: thumbnail뿐 아니라 pyramid/background, 원본 응답, 칩 grade와 palette numpy decode도 PNG 핸들을 유지했다. `api/full_app.py::_mutable_image_guard/_mutable_image_snapshot`은 classification/classification_chips/my-lot의 짧은 source read만 같은 그룹 mutation과 직렬화하고, decode/응답은 bytes를 사용한다. class delete/rename/batch-delete는 worker에서 대기하며 MY LOT은 기존 storage lock을 공유한다. 원본 immutable decoder와 HEAD 헤더 응답은 유지한다. `check_mutable_thumbnail.py`, `check_mutable_image_races.py` 및 `storage-active-class-delete/storage-save-rename-delete`가 열린16MB reader·다른그룹 진행·실제삭제·이미지/positions 보존을 검증한다. 정확히 삭제된 현재 source의 pipeline 작업은 취소/404이며 내부 캐시 오류를 함께 숨기지 않는다.

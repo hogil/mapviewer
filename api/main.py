@@ -31,7 +31,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
-from starlette.staticfiles import StaticFiles
 
 from . import config
 from .access_logger import logger_instance
@@ -1381,6 +1380,9 @@ async def get_thumbnail(request: Request):
 
 async def serve_js(request: Request):
     filename = request.path_params["filename"]
+    asset_path = (_JS_DIR / filename).resolve()
+    if not asset_path.is_relative_to(_JS_DIR.resolve()) or asset_path.suffix != ".js":
+        return PlainTextResponse("Not found", status_code=404)
     entry = _get_js_entry(filename)
     if entry is not None:
         raw, gz, etag, _mtime = entry
@@ -1413,6 +1415,9 @@ async def serve_js(request: Request):
 
 async def serve_css(request: Request):
     filename = request.path_params["filename"]
+    asset_path = (_CSS_DIR / filename).resolve()
+    if not asset_path.is_relative_to(_CSS_DIR.resolve()) or asset_path.suffix != ".css":
+        return PlainTextResponse("Not found", status_code=404)
     entry = _get_css_entry(filename)
     if entry is not None:
         raw, gz, etag, _mtime = entry
@@ -1762,6 +1767,14 @@ async def api_search(request: Request):
         return JSONResponse({"success": False, "detail": str(exc)}, status_code=500)
 
 
+async def serve_color_legends(request: Request):
+    path = Path(__file__).parent.parent / "logs" / "color-legends.json"
+    if not path.is_file():
+        return JSONResponse({})
+    return FileResponse(path, media_type="application/json", headers={"Cache-Control": "no-cache"})
+
+
+app.add_route("/logs/color-legends.json", serve_color_legends, methods=["GET", "HEAD"])
 app.add_route("/api/config", api_config, methods=["GET"])
 app.add_route("/api/index-status", api_index_status, methods=["GET"])
 app.add_route("/api/current-folder", get_current_folder, methods=["GET"])
@@ -1785,8 +1798,6 @@ app.add_route("/js/{filename:path}", serve_js, methods=["GET"])
 app.add_route("/css/{filename:path}", serve_css, methods=["GET"])
 app.add_route("/", read_root, methods=["GET"])
 app.add_route("/main.js", get_main_js, methods=["GET"])
-app.mount("/logs", StaticFiles(directory="logs", check_dir=False), name="logs")
-app.mount("/static", StaticFiles(directory=".", check_dir=False), name="static")
 app.mount("/", LazyFullAppProxy(_FULL_APP), name="full-app-proxy")
 
 

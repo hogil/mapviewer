@@ -2258,7 +2258,7 @@ const { createRunner } = require('./e2e_playwright_session');
           const red = pixels[index];
           const green = pixels[index + 1];
           const blue = pixels[index + 2];
-          if (red > 100 && blue > 120 && red > green * 1.2 && blue > green * 1.2) {
+          if (red < 60 && green > 140 && blue > 180 && pixels[index + 3] > 30) {
             shotBoundaryPixels += 1;
           }
         }
@@ -2283,7 +2283,7 @@ const { createRunner } = require('./e2e_playwright_session');
           const red = pixels[index];
           const green = pixels[index + 1];
           const blue = pixels[index + 2];
-          if (red > 100 && blue > 120 && red > green * 1.2 && blue > green * 1.2) count += 1;
+          if (red < 60 && green > 140 && blue > 180 && pixels[index + 3] > 30) count += 1;
         }
         return count;
       };
@@ -4215,8 +4215,21 @@ const { createRunner } = require('./e2e_playwright_session');
       rangeOrSelection.rows === 6 && rangeOrSelection.visibleRows === 3 && rangeOrSelection.status.includes(' OR '),
     `Range sets should OR selected chips=${JSON.stringify(rangeOrSelection)}`);
 
+    const rangeOrValues = await page.locator('#chip-coordinate-select-range-fields input[type="number"]')
+      .evaluateAll(inputs => inputs.map(input => Number(input.value)));
     await page.locator('#chip-coordinate-select-close').click();
     await openCoordinateModal();
+    const persistedRangeValues = await page.locator('#chip-coordinate-select-range-fields input[type="number"]')
+      .evaluateAll(inputs => inputs.map(input => Number(input.value)));
+    expect(await page.locator('#chip-coordinate-select-range-fields .coordinate-select-range-set').count() === 2 &&
+      JSON.stringify(persistedRangeValues) === JSON.stringify(rangeOrValues),
+    `Reopened OR ranges should persist: before=${JSON.stringify(rangeOrValues)} after=${JSON.stringify(persistedRangeValues)}`);
+    // Start the independent Shot AND range case with one unrestricted range set.
+    await page.locator('#chip-coordinate-select-range-tabs [data-coordinate-range-tab]').nth(1).click();
+    await page.locator('#chip-coordinate-select-range-fields .coordinate-select-range-set').nth(1)
+      .locator('[data-coordinate-range-delete]').click();
+    await page.locator('#chip-coordinate-select-range-fields .coordinate-select-range-set').first()
+      .locator('[data-coordinate-range-clear="set"]').click();
     await pasteIntoList('shot',
       `${selectionTarget.shotRows[0].x}\t${selectionTarget.shotRows[0].y}\n${selectionTarget.shotRows[1].x},${selectionTarget.shotRows[1].y}`
     );
@@ -4598,8 +4611,8 @@ const { createRunner } = require('./e2e_playwright_session');
       gridShotOverlay.overlayCount > 0 &&
       gridShotOverlay.renderedCount > 0 &&
       gridShotOverlay.boundaryCount > 0 &&
-      gridShotOverlay.stroke === 'rgba(170, 120, 210, 0.45)' &&
-      gridShotOverlay.dash === '1,3' &&
+      gridShotOverlay.stroke === 'rgba(0, 190, 240, 0.78)' &&
+      gridShotOverlay.dash === '2,3' &&
       gridShotOverlay.pixelWidth === gridShotOverlay.cssWidth &&
       gridShotOverlay.pixelHeight === gridShotOverlay.cssHeight &&
       gridShotOverlay.nonTransparent > 0 &&
@@ -6171,26 +6184,42 @@ const { createRunner } = require('./e2e_playwright_session');
     const chipResult = await page.evaluate(async () => {
       const v = window.viewer;
       const imagePath = v.currentGridImages?.[0] || '';
-      const deadline = Date.now() + 30000;
-      let responseOk = false;
-      let positions = null;
-      while (Date.now() < deadline) {
-        const response = await fetch(
+      // Completion must publish NPZ and positions before an immediate dependent request.
+      const subsetStartedAt = performance.now();
+      const subsetPromise = fetch('/api/composite-subset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ output_dir: v.compositeSession.outputDir, selected_grades: [0, 1] }),
+      }).then(async (response) => {
+        const data = await response.json();
+        return {
+          status: response.status,
+          success: data.success === true,
+          count: Array.isArray(data.subset_maps) ? data.subset_maps.length : 0,
+          elapsedMs: Math.round((performance.now() - subsetStartedAt) * 10) / 10,
+          error: data.detail || null,
+        };
+      });
+      const [response, immediateSubset] = await Promise.all([
+        fetch(
           `/api/chip-positions?path=${encodeURIComponent(imagePath)}&include_fq=0`,
           { cache: 'no-store' }
-        );
-        responseOk = response.ok;
-        positions = response.ok ? await response.json() : null;
-        if (Array.isArray(positions?.chips) && positions.chips.length === 1) break;
-        await new Promise((resolve) => setTimeout(resolve, 250));
-      }
+        ),
+        subsetPromise,
+      ]);
+      const positions = response.ok ? await response.json() : null;
       return {
         imagePath,
-        responseOk,
+        responseOk: response.ok,
+        positionsStatus: response.status,
         positionsChipCount: Array.isArray(positions?.chips) ? positions.chips.length : 0,
         compositeSession: v.compositeSession,
+        immediateSubset,
       };
     });
+    expect(chipResult.immediateSubset.status === 200 && chipResult.immediateSubset.success &&
+      chipResult.immediateSubset.count >= 2,
+    `Completed Composite must support immediate subset creation=${JSON.stringify(chipResult.immediateSubset)}`);
     const chipPixels = await page.evaluate(async ({ imagePath, selectedPoint, selectionCrop }) => {
       if (!imagePath || !selectedPoint) return null;
       const response = await fetch(`/api/image?path=${encodeURIComponent(imagePath)}`, { cache: 'no-store' });
@@ -7090,19 +7119,28 @@ const { createRunner } = require('./e2e_playwright_session');
     const t0 = Date.now();
     await loadFolder('unknown');
     const loadMs = Date.now() - t0;
+    const integrityStartedAt = Date.now();
     const data = await page.evaluate(async () => {
       const wrapper = document.querySelector('.grid-scroll-wrapper');
       const wrapperRect = wrapper?.getBoundingClientRect();
-      const imgs = Array.from(document.querySelectorAll('#image-grid img'))
+      const viewport = wrapperRect || {
+        top: 0,
+        right: window.innerWidth,
+        bottom: window.innerHeight,
+        left: 0,
+      };
+      // Offscreen content-visibility cells must stay skipped while sampling images.
+      const visibleWraps = Array.from(document.querySelectorAll('#image-grid .grid-thumb-wrap'))
+        .filter((wrap) => {
+          const rect = wrap.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0 &&
+            rect.bottom > viewport.top && rect.top < viewport.bottom &&
+            rect.right > viewport.left && rect.left < viewport.right;
+        });
+      const imgs = visibleWraps.flatMap(wrap => Array.from(wrap.querySelectorAll('img')))
         .filter((img) => {
           const rect = img.getBoundingClientRect();
           const style = getComputedStyle(img);
-          const viewport = wrapperRect || {
-            top: 0,
-            right: window.innerWidth,
-            bottom: window.innerHeight,
-            left: 0,
-          };
           return (
             style.display !== 'none' &&
             style.visibility !== 'hidden' &&
@@ -7125,11 +7163,14 @@ const { createRunner } = require('./e2e_playwright_session');
         status,
       };
     });
+    const integrityCheckMs = Date.now() - integrityStartedAt;
     expect(data.count === 5000, `count=${data.count}`);
     expect(data.wraps === 5000, `wraps=${data.wraps}`);
+    expect(data.visibleImages > 0, `visibleImages=${data.visibleImages}`);
+    expect(data.loadedVisible > 0, `loadedVisible=${data.loadedVisible}`);
     expect(data.broken === 0, `broken=${data.broken}`);
     expect(data.status.ready === true, `status=${JSON.stringify(data.status)}`);
-    return { ...data, loadMs };
+    return { ...data, loadMs, integrityCheckMs };
   });
 
   console.log(JSON.stringify(results, null, 2));

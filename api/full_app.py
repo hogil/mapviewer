@@ -44,7 +44,6 @@ from urllib.parse import urlparse, parse_qs
 from fastapi import FastAPI, HTTPException, Query, Request, Path as PathParam, Depends, BackgroundTasks, Body
 from fastapi import Response as FastAPIResponse
 from fastapi.responses import JSONResponse, FileResponse, Response, RedirectResponse, PlainTextResponse, HTMLResponse
-from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -419,6 +418,7 @@ from .composite_colors import (
     save_measure_color_settings,
 )
 from .my_lot import (
+    _LOCK as MY_LOT_STORAGE_LOCK,
     add_entry as my_lot_add_entry,
     add_lot_batch as my_lot_add_lot_batch,
     create_placeholder_image as my_lot_create_placeholder,
@@ -733,6 +733,8 @@ THUMBNAIL_SEM = asyncio.Semaphore(THUMBNAIL_SEM_SIZE)
 COMPOSITE_TASKS: Dict[str, Dict[str, Any]] = {}
 COMPOSITE_TASKS_LOCK = asyncio.Lock()
 COMPOSITE_BG_TASKS: Dict[str, asyncio.Task] = {}
+_COMPOSITE_OUTPUT_LOCKS: Dict[str, Any] = {}
+_COMPOSITE_OUTPUT_LOCKS_GUARD = Lock()
 
 # Composite map concurrency control (최대 2개 동시 실행)
 COMPOSITE_CONCURRENCY_LIMIT = 2
@@ -804,6 +806,26 @@ ROLE_DEFAULT = "ROLE_USER"
 ROLE_HIERARCHY = ["ROLE_USER", "ROLE_POWER", "ROLE_ADMIN", "ROLE_SUPER"]
 COMPOSITE_ROOT = ROOT_DIR / "composite_map"
 COMPOSITE_ROOT.mkdir(parents=True, exist_ok=True)
+
+
+def _composite_output_lock(output_dir: Path):
+    """Serialize writers and cleanup for one user's output; acquire only in workers."""
+    root = COMPOSITE_ROOT.resolve()
+    target = Path(output_dir).resolve()
+    try:
+        relative = target.relative_to(root)
+        if relative.parts:
+            target = root / relative.parts[0]
+    except ValueError:
+        pass
+    key = os.path.normcase(str(target))
+    with _COMPOSITE_OUTPUT_LOCKS_GUARD:
+        return _COMPOSITE_OUTPUT_LOCKS.setdefault(key, RLock())
+
+
+def _composite_user_output_dir(login_id: Optional[str]) -> Path:
+    from .composite_map import _sanitize_login_id
+    return COMPOSITE_ROOT / _sanitize_login_id(login_id)
 
 
 def _env_int(name: str, default: int, *, min_value: Optional[int] = None, max_value: Optional[int] = None) -> int:
@@ -1145,7 +1167,7 @@ def _current_login_id(req: Optional[Request]) -> Optional[str]:
         pass
     else:
         try:
-            session_user = session.get("session_user", {})
+            session_user = session.get("session_user") or session.get("username", {})
         except AttributeError:
             session_user = {}
         if isinstance(session_user, dict):
@@ -1153,6 +1175,10 @@ def _current_login_id(req: Optional[Request]) -> Optional[str]:
                 candidate = _normalize_login_id_candidate(session_user.get(key))
                 if candidate:
                     return candidate
+        elif isinstance(session_user, str):
+            candidate = _normalize_login_id_candidate(session_user)
+            if candidate:
+                return candidate
     
     # cookie fallback
     login_id = _normalize_login_id_candidate(req.cookies.get("session_user"))
@@ -3399,6 +3425,8 @@ async def recolor_composite_sum_maps_endpoint(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="JSON 본문을 파싱하지 못했습니다.")
 
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="JSON 객체가 필요합니다.")
     rel_output_dir = (payload or {}).get("output_dir")
     if not rel_output_dir:
         raise HTTPException(status_code=400, detail="output_dir 값이 필요합니다.")
@@ -3409,7 +3437,7 @@ async def recolor_composite_sum_maps_endpoint(request: Request):
     normalized_rel = str(rel_output_dir).strip().replace("\\", "/")
     target_path = (IMAGES_ROOT / normalized_rel).resolve()
     composite_root = COMPOSITE_ROOT.resolve()
-    if not str(target_path).startswith(str(composite_root)):
+    if not target_path.is_relative_to(composite_root):
         raise HTTPException(status_code=400, detail="유효한 Composite 출력 디렉터리가 아닙니다.")
     if not target_path.exists():
         raise HTTPException(status_code=404, detail="Composite 출력 디렉터리를 찾을 수 없습니다.")
@@ -3419,8 +3447,13 @@ async def recolor_composite_sum_maps_endpoint(request: Request):
         scheme = login_id or ANONYMOUS_LOGIN_ID
         from .composite_map import recolor_saved_sum_maps
 
-        _invalidate_composite_thumbnail_caches(output_dir=target_path, login_id=login_id or ANONYMOUS_LOGIN_ID)
-        entries = recolor_saved_sum_maps(target_path, override_colors=override_colors, scheme=scheme)
+        def _recolor_sync():
+            with _composite_output_lock(target_path):
+                _invalidate_composite_thumbnail_caches(output_dir=target_path, login_id=login_id or ANONYMOUS_LOGIN_ID)
+                return recolor_saved_sum_maps(target_path, override_colors=override_colors, scheme=scheme)
+
+        loop = asyncio.get_running_loop()
+        entries = await loop.run_in_executor(COMPOSITE_EXECUTOR, _recolor_sync)
         rel_path = target_path.relative_to(IMAGES_ROOT).as_posix()
         response_data = {"output_dir": rel_path, "sum_maps": entries}
         _log(f"[composite-recolor] {len(entries)}개 sum map 갱신")
@@ -3616,7 +3649,9 @@ async def _clone_my_lot_thumbnail_caches_async(
 async def get_my_lot_entries(request: Request):
     login_id = _resolve_my_lot_login(request)
     try:
-        return my_lot_list(login_id)
+        return await anyio.to_thread.run_sync(my_lot_list, login_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         logger.error(f"❌ [/api/my-lot] 조회 실패: {exc}")
         raise HTTPException(status_code=500, detail="MY LOT 데이터를 불러오지 못했습니다.")
@@ -3632,7 +3667,9 @@ async def get_my_lot_groups(request: Request):
     """
     login_id = _resolve_my_lot_login(request)
     try:
-        return my_lot_list_groups(login_id)
+        return await anyio.to_thread.run_sync(my_lot_list_groups, login_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         logger.error(f"❌ [/api/my-lot/groups] 조회 실패: {exc}")
         raise HTTPException(status_code=500, detail="MY LOT 그룹 목록을 불러오지 못했습니다.")
@@ -3656,6 +3693,8 @@ async def get_my_lot_group_entries(request: Request, mode: str, group: str):
         return Response(content=raw, media_type="application/json")
     except HTTPException:
         raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         logger.error(f"❌ [/api/my-lot/entries] 조회 실패: {exc}")
         raise HTTPException(status_code=500, detail="MY LOT 그룹 항목을 불러오지 못했습니다.")
@@ -3670,10 +3709,12 @@ async def create_my_lot_group(request: Request):
         group = payload.get("group")
         if not group:
             raise HTTPException(status_code=400, detail="group 이름이 필요합니다.")
-        info = my_lot_create_group(login_id, mode, group)
+        info = await anyio.to_thread.run_sync(my_lot_create_group, login_id, mode, group)
         return {"success": True, **info}
     except HTTPException:
         raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         logger.error(f"❌ [/api/my-lot/group] 생성 실패: {exc}")
         raise HTTPException(status_code=500, detail=f"그룹을 생성하지 못했습니다: {exc}")
@@ -3689,12 +3730,14 @@ async def rename_my_lot_group(request: Request):
         new_name = payload.get("new_name")
         if not old_name or not new_name:
             raise HTTPException(status_code=400, detail="old_name과 new_name이 필요합니다.")
-        renamed = my_lot_rename_group(login_id, mode, old_name, new_name)
+        renamed = await anyio.to_thread.run_sync(my_lot_rename_group, login_id, mode, old_name, new_name)
         if not renamed:
             raise HTTPException(status_code=404, detail="그룹을 찾을 수 없습니다.")
         return {"success": True}
     except HTTPException:
         raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         logger.error(f"❌ [/api/my-lot/group/rename] 이름 변경 실패: {exc}")
         raise HTTPException(status_code=500, detail=f"그룹 이름을 변경하지 못했습니다: {exc}")
@@ -3709,12 +3752,14 @@ async def delete_my_lot_group(request: Request):
         group = payload.get("group")
         if not group:
             raise HTTPException(status_code=400, detail="group 이름이 필요합니다.")
-        deleted = my_lot_delete_group(login_id, mode, group)
+        deleted = await anyio.to_thread.run_sync(my_lot_delete_group, login_id, mode, group)
         if not deleted:
             raise HTTPException(status_code=404, detail="그룹을 찾을 수 없습니다.")
         return {"success": True}
     except HTTPException:
         raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         logger.error(f"❌ [/api/my-lot/group] 삭제 실패: {exc}")
         raise HTTPException(status_code=500, detail=f"그룹을 삭제하지 못했습니다: {exc}")
@@ -3738,7 +3783,7 @@ async def add_my_lot_entry_endpoint(request: Request):
         if not abs_path.exists() or not abs_path.is_file():
             raise HTTPException(status_code=404, detail="이미지를 찾을 수 없습니다.")
 
-        result = my_lot_add_entry(login_id, mode, group, abs_path)
+        result = await anyio.to_thread.run_sync(my_lot_add_entry, login_id, mode, group, abs_path)
         return {"success": True, **result}
     except HTTPException:
         raise
@@ -3769,6 +3814,7 @@ async def add_my_lot_batch_endpoint(request: Request):
         # 🔥 실제 이미지가 있는 LOT/Wafer 조합을 추적 (placeholder 중복 방지)
         matched_keys = set()
         collected_paths = []
+        missing_paths = []
         
         # 🔥 1단계: 실제 이미지 경로 수집
         if paths:
@@ -3797,6 +3843,8 @@ async def add_my_lot_batch_endpoint(request: Request):
                         key = f"{root.lower()}_{wafer.lower()}"
                     if key:
                         matched_keys.add(key)
+                else:
+                    missing_paths.append({"path": path, "reason": "이미지 파일을 찾을 수 없습니다."})
 
         # 🔥 2단계: 실제 이미지가 없는 항목만 placeholder 생성
         placeholder_paths = []
@@ -3846,6 +3894,8 @@ async def add_my_lot_batch_endpoint(request: Request):
                 login_id, mode, group, collected_paths, path_lot_wafer,
             )
             result["placeholder_count"] = len(placeholder_paths)
+            result["errors"] = result.get("errors", []) + missing_paths
+            result["error_count"] = len(result["errors"])
             result["thumbnail_cache_cloned"] = await _clone_my_lot_thumbnail_caches_async(
                 login_id,
                 mode,
@@ -3854,6 +3904,16 @@ async def add_my_lot_batch_endpoint(request: Request):
                 path_lot_wafer,
             )
             return {"success": True, **result}
+
+        if missing_paths:
+            return {
+                "success": True,
+                "success_count": 0,
+                "duplicate_count": 0,
+                "placeholder_count": 0,
+                "error_count": len(missing_paths),
+                "errors": missing_paths,
+            }
 
         # collected_paths가 비어있지만 manual_values가 제공된 경우 (placeholder 생성 실패)
         if manual_values:
@@ -3929,10 +3989,12 @@ async def delete_my_lot_entry_endpoint(request: Request):
         filename = payload.get("value") or payload.get("filename")
         if not group or not filename:
             raise HTTPException(status_code=400, detail="group과 filename이 필요합니다.")
-        removed = my_lot_remove_entry(login_id, mode, group, filename)
+        removed = await anyio.to_thread.run_sync(my_lot_remove_entry, login_id, mode, group, filename)
         return {"success": removed}
     except HTTPException:
         raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         logger.error(f"❌ [/api/my-lot] 삭제 실패: {exc}")
         raise HTTPException(status_code=500, detail=f"MY LOT 항목을 삭제하지 못했습니다: {exc}")
@@ -3951,10 +4013,12 @@ async def delete_my_lot_batch_endpoint(request: Request):
             raise HTTPException(status_code=400, detail="group이 필요합니다.")
         if not filenames:
             raise HTTPException(status_code=400, detail="filenames가 필요합니다.")
-        result = my_lot_remove_entries_batch(login_id, mode, group, filenames)
+        result = await anyio.to_thread.run_sync(my_lot_remove_entries_batch, login_id, mode, group, filenames)
         return {"success": True, **result}
     except HTTPException:
         raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         logger.error(f"❌ [/api/my-lot/batch] 일괄 삭제 실패: {exc}")
         raise HTTPException(status_code=500, detail=f"MY LOT 항목 일괄 삭제에 실패했습니다: {exc}")
@@ -4697,7 +4761,8 @@ def _apply_ratio_overlay_memory(
         elif _source_image_path and canvas_w == width and canvas_h == height:
             # canvas가 없어서 thumbnail 크기로 fallback된 경우 → 원본 크기 사용
             try:
-                with Image.open(_source_image_path) as orig:
+                source_snapshot = _mutable_image_snapshot(Path(_source_image_path))
+                with Image.open(io.BytesIO(source_snapshot) if source_snapshot is not None else _source_image_path) as orig:
                     orig_w, orig_h = orig.size
                 if orig_w != width or orig_h != height:
                     logger.info(f"🔧 [RATIO OVERLAY] canvas 보정: {width}x{height} → {orig_w}x{orig_h} (원본 크기)")
@@ -5462,6 +5527,44 @@ def _webpsave_fast_buffer(vips_image, quality: int) -> bytes:
         smart_subsample=False,
     )
 
+_classification_image_locks: Dict[str, RLock] = {}
+_classification_image_locks_guard = Lock()
+
+
+@contextmanager
+def _mutable_image_guard(image_path: Path):
+    if not image_path.is_relative_to(ROOT_DIR):
+        yield
+        return
+    parts = image_path.relative_to(ROOT_DIR).parts
+    if parts and parts[0] == "my-lot":
+        lock = MY_LOT_STORAGE_LOCK
+    else:
+        class_index = next((i for i, part in enumerate(parts) if part in {"classification", "classification_chips"}), None)
+        if class_index is None or class_index + 1 >= len(parts):
+            yield
+            return
+        key = str(ROOT_DIR.joinpath(*parts[:class_index + 2]))
+        with _classification_image_locks_guard:
+            lock = _classification_image_locks.setdefault(key, RLock())
+    with lock:
+        yield
+
+
+def _mutable_image_snapshot(image_path: Path, max_bytes: Optional[int] = None) -> Optional[bytes]:
+    """Detach mutable derived images from filename-based native decoder handles."""
+    if not image_path.is_relative_to(ROOT_DIR):
+        return None
+    parts = image_path.relative_to(ROOT_DIR).parts
+    if not any(part in {"classification", "classification_chips", "my-lot"} for part in parts[:-1]):
+        return None
+    with _mutable_image_guard(image_path):
+        if max_bytes is not None:
+            with image_path.open('rb') as source:
+                return source.read(max_bytes)
+        return image_path.read_bytes()
+
+
 def _generate_thumbnail_sync(
     image_path: Path,
     thumbnail_path: Path,
@@ -5480,6 +5583,11 @@ def _generate_thumbnail_sync(
         if not image_path.exists():
             return  # 파일 없으면 즉시 반환 (크래시 방지)
 
+        try:
+            source_bytes = _mutable_image_snapshot(image_path)
+        except FileNotFoundError:
+            return  # The copy was deleted after the initial existence check.
+
         thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
 
         fmt = THUMBNAIL_FORMAT.upper()
@@ -5490,8 +5598,11 @@ def _generate_thumbnail_sync(
             _suffix = image_path.suffix.lower()
             _is_palette_png = False
             if _suffix == '.png':
-                with open(image_path, 'rb') as _f:
-                    _hdr = _f.read(30)
+                if source_bytes is not None:
+                    _hdr = source_bytes[:30]
+                else:
+                    with open(image_path, 'rb') as _f:
+                        _hdr = _f.read(30)
                 _is_palette_png = len(_hdr) > 25 and _hdr[25] == 3
 
             # pyvips 경로는 palette PNG에서 PLTE in-place 패치 + 고속 리사이즈가 필요할 때만
@@ -5526,7 +5637,7 @@ def _generate_thumbnail_sync(
                             plte_composite_gradient_patch_memory,
                             plte_gradient_filter_patch_memory,
                         )
-                        _raw = bytearray(image_path.read_bytes())
+                        _raw = bytearray(source_bytes if source_bytes is not None else image_path.read_bytes())
                         if personalized and scheme:
                             _raw = plte_inplace_patch_memory(_raw, scheme) or _raw
                         gradient_mode = _resolve_composite_map_gradient_mode(image_path)
@@ -5540,7 +5651,10 @@ def _generate_thumbnail_sync(
                         _vi = _pv.Image.thumbnail_buffer(bytes(_raw), size[0])
                     else:
                         # palette(개인색 없음) + non-palette(RGBA/RGB/JPEG 등) 모두 pyvips
-                        _vi = _pv.Image.thumbnail(str(image_path), size[0])
+                        if source_bytes is not None:
+                            _vi = _pv.Image.thumbnail_buffer(source_bytes, size[0])
+                        else:
+                            _vi = _pv.Image.thumbnail(str(image_path), size[0])
                     if fmt == "WEBP":
                         _webpsave_fast_to_file(_vi, thumbnail_path, THUMBNAIL_QUALITY)
                     elif fmt == "JPEG":
@@ -5552,7 +5666,7 @@ def _generate_thumbnail_sync(
                     logger.warning(f"[THUMB_PYVIPS_FALLBACK] pyvips 실패 → PIL 폴백: {_pv_err}")
                     pass  # pyvips 실패 시 PIL 폴백
 
-                with Image.open(image_path) as img:
+                with Image.open(io.BytesIO(source_bytes) if source_bytes is not None else image_path) as img:
                     # palette PNG + 개인색이면 palette 교체 (PIL 경로 — pyvips 폴백)
                     if img.mode == 'P' and personalized and scheme:
                         from .personal_colors import (
@@ -5669,8 +5783,7 @@ def _generate_thumbnail_sync(
 
             if should_patch_palette:
                 try:
-                    with open(image_path, 'rb') as f:
-                        png_data = bytearray(f.read())
+                    png_data = bytearray(source_bytes if source_bytes is not None else image_path.read_bytes())
 
                     # 🔥 RGB PNG (palette 없음, e.g. Measure Composite 결과)는 palette 패치 불필요
                     # PNG IHDR 13바이트 중 color type (offset 25) 확인: 2=RGB, 3=Indexed(palette)
@@ -5710,7 +5823,7 @@ def _generate_thumbnail_sync(
                         )
                 except Exception as e:
                     logger.warning(f"⚠️ [THUMBNAIL PATCH] 팔레트/필터 적용 실패: {e}", exc_info=True)
-                    vips_image = pyvips.Image.new_from_file(
+                    vips_image = pyvips.Image.new_from_buffer(source_bytes, "", access="sequential") if source_bytes is not None else pyvips.Image.new_from_file(
                         str(image_path),
                         access='sequential',
                         fail_on='none',
@@ -5718,7 +5831,7 @@ def _generate_thumbnail_sync(
                         unlimited=True
                     )
             else:
-                vips_image = pyvips.Image.new_from_file(
+                vips_image = pyvips.Image.new_from_buffer(source_bytes, "", access="sequential") if source_bytes is not None else pyvips.Image.new_from_file(
                     str(image_path),
                     access='sequential',
                     fail_on='none',
@@ -5835,8 +5948,7 @@ def _generate_thumbnail_sync(
         pil_image = None
         if image_path.suffix.lower() == '.png' and ((personalized and scheme) or grade_filter or bottom_filter or border_normalize):
             try:
-                with open(image_path, 'rb') as f:
-                    png_data = bytearray(f.read())
+                png_data = bytearray(source_bytes if source_bytes is not None else image_path.read_bytes())
                 # 🔥 RGB PNG (Measure Composite 등)는 palette 패치 불필요
                 _skip_pil_patch = False
                 if len(png_data) > 29 and png_data[25] != 3:
@@ -5858,7 +5970,7 @@ def _generate_thumbnail_sync(
                 pil_image = None
 
         if pil_image is None:
-            pil_image = Image.open(image_path)
+            pil_image = Image.open(io.BytesIO(source_bytes) if source_bytes is not None else image_path)
 
         with pil_image as img:
             if img.mode not in ('RGB', 'RGBA'):
@@ -6352,6 +6464,8 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
                 pass
             src.replace(dest)
 
+    source_bytes = _mutable_image_snapshot(image_path)
+
     with _pyramid_path_lock(pyramid_path):
         # 🔥 디렉토리 생성 안전성 강화
         try:
@@ -6366,7 +6480,7 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
             logger.error(f"❌ [PYRAMID] 디렉토리 생성 예외: {pyramid_path.parent}, 오류: {dir_err}")
             raise
         
-        temp_path = pyramid_path.with_name(pyramid_path.name + ".tmp")
+        temp_path = pyramid_path.with_name(pyramid_path.name + f".{uuid.uuid4().hex}.tmp")
         _safe_unlink(temp_path)
         expected_w: Optional[int] = None
         expected_h: Optional[int] = None
@@ -6397,8 +6511,11 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
                 # 🔥 palette PNG 판별
                 if image_path.suffix.lower() == '.png':
                     try:
-                        with open(image_path, 'rb') as _pyf:
-                            _pyh = _pyf.read(30)
+                        if source_bytes is not None:
+                            _pyh = source_bytes[:30]
+                        else:
+                            with open(image_path, 'rb') as _pyf:
+                                _pyh = _pyf.read(30)
                         _pyr_is_palette = len(_pyh) > 25 and _pyh[25] == 3
                     except Exception:
                         pass
@@ -6418,8 +6535,7 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
 
                 if _need_plte_read:
                     try:
-                        with open(image_path, 'rb') as f:
-                            png_data = bytearray(f.read())
+                        png_data = bytearray(source_bytes if source_bytes is not None else image_path.read_bytes())
 
                         png_data = _apply_png_filters_memory(
                             image_path=image_path,
@@ -6466,7 +6582,7 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
                         # - memory=True: libvips 내부 캐시 활성화로 반복 접근 속도 향상
                         # - unlimited=True: 하드웨어 가속 기능 활성화 (SIMD, 멀티코어)
                         # - 그리드 썸네일과 동일한 로딩 최적화 적용
-                        image = pyvips.Image.new_from_file(
+                        image = pyvips.Image.new_from_buffer(source_bytes, '', access='sequential', fail_on='none', memory=True, unlimited=True) if source_bytes is not None else pyvips.Image.new_from_file(
                             str(image_path),
                             access='sequential',
                             fail_on='none',
@@ -6527,23 +6643,21 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
                                 keep=pyvips.enums.ForeignKeep.NONE,
                             )
                         elif target_format == "WEBP":
+                            # effort=1 can fail on dense 4480px maps at Q=100.
                             work_image.webpsave(
                                 temp_target,
                                 Q=quality,
                                 lossless=False,
-                                effort=1,
+                                effort=4,
                                 strip=True,
                                 smart_subsample=False,
                             )
                         else:
-                            # JPEG 저장 (pyvips Q95 - 벤치마크 검증 완료)
-                            # 벤치마크 결과: pyvips Q95 > TurboJPEG (24% 빠름, 58% 작음)
-                            # - pyvips Q95: 321ms, 8.4MB
-                            # - TurboJPEG Q100: 420ms, 20.2MB
+                            # 요청/백그라운드 생성 모두 설정된 피라미드 품질을 사용한다.
                             try:
                                 work_image.jpegsave(
                                     temp_target,
-                                    Q=95,                      # Q=95 (그리드 썸네일과 동일, 벤치마크 최적화)
+                                    Q=quality,
                                     strip=True,                # 메타데이터 제거
                                     optimize_coding=False,     # 속도 우선
                                     subsample_mode=1,          # 4:2:0 (가장 빠름)
@@ -6558,7 +6672,7 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
                                         temp_path.parent.mkdir(parents=True, exist_ok=True)
                                         work_image.jpegsave(
                                             temp_target,
-                                            Q=95,
+                                            Q=quality,
                                             strip=True,
                                             optimize_coding=False,
                                             subsample_mode=1,
@@ -6580,11 +6694,10 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
             from PIL import Image
             import io as _io
 
-            pillow_source: Any = image_path
+            pillow_source: Any = _io.BytesIO(source_bytes) if source_bytes is not None else image_path
             if _need_plte_read:
                 try:
-                    with open(image_path, 'rb') as f:
-                        png_data = bytearray(f.read())
+                    png_data = bytearray(source_bytes if source_bytes is not None else image_path.read_bytes())
 
                     png_data = _apply_png_filters_memory(
                         image_path=image_path,
@@ -6645,7 +6758,7 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
                     pillow_kwargs["compress_level"] = png_compression
                 elif target_format == "WEBP":
                     pillow_kwargs["quality"] = quality
-                    pillow_kwargs["method"] = 1
+                    pillow_kwargs["method"] = 4
                     pillow_kwargs["lossless"] = False
                 else:
                     pillow_kwargs["quality"] = quality
@@ -6660,64 +6773,7 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
         except Exception as e:
             elapsed = time.time() - start_time
             logger.error(f"❌ [PYRAMID] 오류: {e} - {elapsed:.2f}초")
-
-            try:
-                if _need_plte_read:
-                    try:
-                        with open(image_path, 'rb') as f:
-                            png_data = bytearray(f.read())
-
-                        png_data = _apply_png_filters_memory(
-                            image_path=image_path,
-                            png_data=png_data,
-                            personalized=personalized,
-                            scheme=scheme,
-                            grade_filter=grade_filter,
-                            bottom_filter=bottom_filter,
-                            border_normalize=border_normalize,
-                            measure_overlay=measure_overlay,
-                        )
-
-                        _pyr_gradient_mode = _resolve_composite_map_gradient_mode(image_path)
-                        if _pyr_gradient_mode == "measure":
-                            from .personal_colors import plte_measure_gradient_patch_memory
-                            png_data = plte_measure_gradient_patch_memory(bytearray(png_data), scheme or ANONYMOUS_LOGIN_ID) or png_data
-                        elif _pyr_gradient_mode == "composite":
-                            from .personal_colors import plte_composite_gradient_patch_memory
-                            png_data = plte_composite_gradient_patch_memory(bytearray(png_data), scheme or ANONYMOUS_LOGIN_ID) or png_data
-
-                        if _pyr_avg_gf_set:
-                            from .personal_colors import plte_gradient_filter_patch_memory
-                            png_data = plte_gradient_filter_patch_memory(bytearray(png_data), _pyr_avg_gf_set)
-
-                        temp_path.write_bytes(bytes(png_data))
-                        _atomic_replace(temp_path, pyramid_path)
-                        logger.info(f"🚑 [SPEED FALLBACK] PLTE 패치 원본 저장: {pyramid_path}")
-                        try:
-                            from PIL import Image as _ImageForFallback
-                            with _ImageForFallback.open(pyramid_path) as orig_img:
-                                _log_completion(orig_img.width, orig_img.height)
-                        except Exception as size_err:
-                            logger.debug(f"⚠️ [PYRAMID] 패치 원본 크기 확인 실패: {size_err}")
-                        return
-                    except Exception as patched_copy_error:
-                        logger.warning(f"⚠️ [SPEED FALLBACK] PLTE 패치 원본 저장 실패, 원본 복사로 fallback: {patched_copy_error}", exc_info=True)
-
-                shutil.copy2(image_path, str(temp_path))
-                _atomic_replace(temp_path, pyramid_path)
-                logger.info(f"🚑 [SPEED FALLBACK] 원본 복사: {pyramid_path}")
-                try:
-                    from PIL import Image as _ImageForFallback
-                    with _ImageForFallback.open(image_path) as orig_img:
-                        _log_completion(orig_img.width, orig_img.height)
-                except Exception as size_err:
-                    logger.debug(f"⚠️ [PYRAMID] 원본 크기 확인 실패: {size_err}")
-                    elapsed = time.time() - start_time
-                    logger.info(f"✅ [PYRAMID] 완료(원본 복사): {pyramid_path} - {elapsed:.2f}초")
-                return
-            except Exception as copy_error:
-                logger.exception(f"🚑 [SPEED COPY FAILED] {copy_error}")
-                raise
+            raise
         finally:
             _safe_unlink(temp_path)
 
@@ -6772,7 +6828,7 @@ async def _generate_other_levels_background(image_path: Path, current_level: flo
         logger.info(f"✅ [BG PIPELINE] 완료: {success_count}/{total_count} 성공")
         
         for level, success, status in results:
-            if not success and status != "EXISTS":
+            if not success and status not in {"EXISTS", "SOURCE_DELETED"}:
                 logger.warning(f"⚠️ [BG PIPELINE] Level {level} 실패: {status}")
 
     except Exception as e:
@@ -6797,6 +6853,7 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
     그 변경된 이미지로 모든 레벨을 생성"""
     import pyvips
     import time
+    quality = max(1, min(100, int(config.PYRAMID_Q)))
 
     # 🔥 파이프라인 시작 시 Grade 필터 또는 개인색 설정 확인 및 로깅
     logger.info(f"🎯 [PIPELINE START] levels={levels}, personalized={personalized}, scheme={scheme}, grade_filter={grade_filter}, path={image_path.name}")
@@ -6807,14 +6864,18 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
         personalized = False  # scheme이 없으면 개인색 비활성화
 
     try:
+        source_bytes = _mutable_image_snapshot(image_path)
         # 🔥 Step 1: 원본 이미지를 먼저 필터링 (Grade/Bottom) 또는 개인색으로 변경 (메모리에서)
         original_image = None
         # 🔥 palette PNG 판별 (PLTE 패치 대상 결정)
         _pipe_is_palette = False
         if image_path.suffix.lower() == '.png':
             try:
-                with open(image_path, 'rb') as _pf:
-                    _phdr = _pf.read(30)
+                if source_bytes is not None:
+                    _phdr = source_bytes[:30]
+                else:
+                    with open(image_path, 'rb') as _pf:
+                        _phdr = _pf.read(30)
                 _pipe_is_palette = len(_phdr) > 25 and _phdr[25] == 3
             except Exception:
                 pass
@@ -6824,8 +6885,7 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
             try:
                 logger.info(f"🎯 [PIPELINE] 필터 적용 시작: grade_filter={grade_filter}, bottom_filter={bottom_filter}, border_normalize={border_normalize}, measure_overlay={measure_overlay}, levels={levels}, path={image_path.name}")
 
-                with open(image_path, 'rb') as f:
-                    png_data = bytearray(f.read())
+                png_data = bytearray(source_bytes if source_bytes is not None else image_path.read_bytes())
 
                 png_data = _apply_png_filters_memory(
                     image_path=image_path,
@@ -6856,8 +6916,7 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
                 logger.info(f"🎨 [PIPELINE] 개인색 적용 시작: scheme={scheme}, levels={levels}, path={image_path.name}")
 
                 # 원본 PNG 파일 읽기 및 PLTE 패치 (메모리에서)
-                with open(image_path, 'rb') as f:
-                    png_data = bytearray(f.read())
+                png_data = bytearray(source_bytes if source_bytes is not None else image_path.read_bytes())
 
                 png_data = _apply_png_filters_memory(
                     image_path=image_path,
@@ -6885,7 +6944,7 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
         if original_image is None:
             if personalized and scheme:
                 logger.warning(f"⚠️ [PIPELINE] 개인색 적용 실패로 원본 이미지 사용: scheme={scheme}, levels={levels}")
-            original_image = pyvips.Image.new_from_file(
+            original_image = pyvips.Image.new_from_buffer(source_bytes, '', access='sequential', fail_on='none', memory=True, unlimited=True) if source_bytes is not None else pyvips.Image.new_from_file(
                 str(image_path),
                 access='sequential',
                 fail_on='none',
@@ -6896,6 +6955,7 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
         results = []
         
         for level in levels:
+            temp_path = None
             try:
                 # 피라미드 경로 생성 (scheme/filter/rev 분리)
                 pyramid_dir = _resolve_pyramid_dir(
@@ -6988,7 +7048,7 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
                     work_image = work_image.resize(scale, kernel=kernel)
                 
                 # 저장
-                temp_path = pyramid_path.with_suffix('.tmp')
+                temp_path = pyramid_path.with_name(pyramid_path.name + f".{uuid.uuid4().hex}.tmp")
                 
                 # 포맷별 저장
                 if format_ext == "png":
@@ -7003,9 +7063,9 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
                 elif format_ext == "webp":
                     work_image.webpsave(
                         str(temp_path),
-                        Q=85,
+                        Q=quality,
                         lossless=False,
-                        effort=1,
+                        effort=4,
                         strip=True,
                         smart_subsample=False,
                     )
@@ -7014,7 +7074,7 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
                     try:
                         work_image.jpegsave(
                             str(temp_path),
-                            Q=85,
+                            Q=quality,
                             strip=True,
                             optimize_coding=False,     # 속도 우선
                             subsample_mode=1,          # 4:2:0 (가장 빠름)
@@ -7030,7 +7090,7 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
                                 temp_path.parent.mkdir(parents=True, exist_ok=True)
                                 work_image.jpegsave(
                                     str(temp_path),
-                                    Q=85,
+                                    Q=quality,
                                     strip=True,
                                     optimize_coding=False,
                                     subsample_mode=1,
@@ -7075,7 +7135,7 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
                 
             except Exception as e:
                 # temp 파일이 남아있으면 정리
-                if 'temp_path' in locals() and temp_path.exists():
+                if temp_path is not None and temp_path.exists():
                     try:
                         temp_path.unlink()
                     except:
@@ -7086,6 +7146,8 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
         return results
         
     except Exception as e:
+        if isinstance(e, FileNotFoundError) and e.filename and Path(e.filename) == image_path:
+            return [(level, False, "SOURCE_DELETED") for level in levels]
         logger.error(f"❌ [PIPELINE ERROR] 파이프라인 실패: {e}")
         return [(level, False, str(e)) for level in levels]
 
@@ -7126,6 +7188,8 @@ async def get_image_size(path: str):
                 "invalid": True,
             }
 
+        source_bytes = await anyio.to_thread.run_sync(_mutable_image_snapshot, image_path)
+
         # 1차: pyvips 메타데이터 조회
         try:
             import pyvips
@@ -7133,7 +7197,7 @@ async def get_image_size(path: str):
                 pyvips.set_log_handler(lambda domain, level, msg: None)
             except AttributeError:
                 pass
-            img = pyvips.Image.new_from_file(str(image_path), access='sequential')
+            img = pyvips.Image.new_from_buffer(source_bytes, '', access='sequential') if source_bytes is not None else pyvips.Image.new_from_file(str(image_path), access='sequential')
             return {
                 "width": img.width,
                 "height": img.height,
@@ -7144,7 +7208,7 @@ async def get_image_size(path: str):
 
         # 2차: PIL 폴백
         try:
-            with Image.open(image_path) as pil_img:
+            with Image.open(io.BytesIO(source_bytes) if source_bytes is not None else image_path) as pil_img:
                 return {
                     "width": pil_img.width,
                     "height": pil_img.height,
@@ -7161,6 +7225,8 @@ async def get_image_size(path: str):
     except HTTPException:
         raise
     except Exception as e:
+        if isinstance(e, FileNotFoundError) and e.filename and Path(e.filename) == image_path:
+            raise HTTPException(status_code=404, detail="Image not found")
         logger.error(f"이미지 크기 조회 실패: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get image size: {str(e)}")
 
@@ -7200,6 +7266,8 @@ async def get_image_crop(
         if not image_path.exists() or not image_path.is_file():
             raise HTTPException(status_code=404, detail="Image not found")
 
+        source_bytes = await anyio.to_thread.run_sync(_mutable_image_snapshot, image_path)
+
         # pyvips로 이미지 crop
         import pyvips
         try:
@@ -7214,8 +7282,7 @@ async def get_image_crop(
         if should_patch_palette:
             try:
                 # 원본 이미지 파일 읽기 및 PLTE 패치
-                with open(image_path, 'rb') as f:
-                    png_data = bytearray(f.read())
+                png_data = bytearray(source_bytes if source_bytes is not None else image_path.read_bytes())
 
                 png_data = _apply_png_filters_memory(
                     image_path=image_path,
@@ -7256,7 +7323,7 @@ async def get_image_crop(
                 # 폴백: 원본 이미지 사용
 
         # 일반 crop (개인색 설정 없음 또는 폴백)
-        img = pyvips.Image.new_from_file(str(image_path), access='sequential')
+        img = pyvips.Image.new_from_buffer(source_bytes, '', access='sequential') if source_bytes is not None else pyvips.Image.new_from_file(str(image_path), access='sequential')
 
         # Crop 영역 검증
         if x < 0 or y < 0 or x + width > img.width or y + height > img.height:
@@ -7278,6 +7345,8 @@ async def get_image_crop(
     except HTTPException:
         raise
     except Exception as e:
+        if isinstance(e, FileNotFoundError) and e.filename and Path(e.filename) == image_path:
+            raise HTTPException(status_code=404, detail="Image not found")
         logger.error(f"Chip crop 실패: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to crop image: {str(e)}")
 
@@ -7351,8 +7420,10 @@ async def get_image(
         _is_palette_png = False
         if image_path.suffix.lower() == '.png':
             try:
-                with open(image_path, 'rb') as _cf:
-                    _chdr = _cf.read(30)
+                _chdr = await anyio.to_thread.run_sync(_mutable_image_snapshot, image_path, 30)
+                if _chdr is None:
+                    with open(image_path, 'rb') as _cf:
+                        _chdr = _cf.read(30)
                 _is_palette_png = len(_chdr) > 25 and _chdr[25] == 3
             except Exception:
                 pass
@@ -7525,8 +7596,8 @@ async def get_image(
             if (grade_filter or bottom_filter or border_normalize) and _is_palette_png:
                 try:
                     # 1. 원본 이미지 파일 읽기
-                    with open(image_path, 'rb') as f:
-                        png_data = bytearray(f.read())
+                    snapshot = await anyio.to_thread.run_sync(_mutable_image_snapshot, image_path)
+                    png_data = bytearray(snapshot if snapshot is not None else image_path.read_bytes())
 
                     png_data = _apply_png_filters_memory(
                         image_path=image_path,
@@ -7568,8 +7639,8 @@ async def get_image(
             elif ((personalized and scheme) or border_normalize or _avg_gf_set) and _is_palette_png:
                 try:
                     # 원본 이미지 파일 읽기 및 PLTE 패치
-                    with open(image_path, 'rb') as f:
-                        png_data = bytearray(f.read())
+                    snapshot = await anyio.to_thread.run_sync(_mutable_image_snapshot, image_path)
+                    png_data = bytearray(snapshot if snapshot is not None else image_path.read_bytes())
 
                     png_data = _apply_png_filters_memory(
                         image_path=image_path,
@@ -7609,9 +7680,19 @@ async def get_image(
                 "Expires": "0",
                 "ETag": compute_etag(st)
             }
+            if is_head:
+                return FileResponse(image_path, headers=headers)
+            snapshot = await anyio.to_thread.run_sync(_mutable_image_snapshot, image_path)
+            if snapshot is not None:
+                import mimetypes
+                return Response(content=snapshot, headers=headers, media_type=mimetypes.guess_type(str(image_path))[0] or "application/octet-stream")
             return FileResponse(image_path, headers=headers)
 
+    except HTTPException:
+        raise
     except Exception as e:
+        if isinstance(e, FileNotFoundError) and e.filename and Path(e.filename) == image_path:
+            raise HTTPException(status_code=404, detail="Image not found")
         logger.exception(f"❌ [IMAGE API ERROR] {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -8723,6 +8804,30 @@ async def create_class(request: Request,
         logger.exception(f"클래스 생성 실패: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+def _delete_class_storage(class_dir: Path, force: bool) -> None:
+    with _mutable_image_guard(class_dir):
+        if not class_dir.is_dir():
+            raise HTTPException(status_code=404, detail="Class not found")
+        if force:
+            shutil.rmtree(class_dir)
+        else:
+            if any(class_dir.iterdir()):
+                raise HTTPException(status_code=409, detail="Class directory not empty")
+            class_dir.rmdir()
+        _delete_class_positions_dir(class_dir)
+
+
+def _rename_class_storage(old_class_dir: Path, new_class_dir: Path) -> int:
+    first, second = sorted((old_class_dir, new_class_dir), key=str)
+    with _mutable_image_guard(first), _mutable_image_guard(second):
+        if not old_class_dir.is_dir():
+            raise HTTPException(status_code=404, detail="Old class not found")
+        if new_class_dir.exists():
+            raise HTTPException(status_code=409, detail="New class name already exists")
+        old_class_dir.rename(new_class_dir)
+        return _rename_class_positions_dir(old_class_dir, new_class_dir)
+
+
 @app.delete("/api/classes/{class_name}")
 async def delete_class(request: Request,
                        class_name: str = PathParam(..., min_length=1, max_length=128),
@@ -8735,16 +8840,7 @@ async def delete_class(request: Request,
         if not _CLASS_NAME_RE.match(class_name): raise HTTPException(status_code=400, detail="Invalid class_name")
         classification_dir = _classification_dir(mode=mode)
         class_dir = classification_dir / class_name
-        if not class_dir.exists() or not class_dir.is_dir(): raise HTTPException(status_code=404, detail="Class not found")
-        if force:
-            shutil.rmtree(class_dir)
-            _delete_class_positions_dir(class_dir)
-            log_access_row(tag="INFO", note=f"클래스 삭제(force): {class_name}")
-        else:
-            if any(class_dir.iterdir()): raise HTTPException(status_code=409, detail="Class directory not empty")
-            class_dir.rmdir()
-            _delete_class_positions_dir(class_dir)
-            log_access_row(tag="INFO", note=f"클래스 삭제: {class_name}")
+        await anyio.to_thread.run_sync(_delete_class_storage, class_dir, force)
         try:
             class_rel = str(class_dir.relative_to(ROOT_DIR)).replace("\\", "/")
             index_service.delete_classification_prefix(class_rel)
@@ -8784,15 +8880,7 @@ async def rename_class(request: Request,
         old_class_dir = classification_dir / old_name
         new_class_dir = classification_dir / new_name
 
-        # 존재 확인
-        if not old_class_dir.exists() or not old_class_dir.is_dir():
-            raise HTTPException(status_code=404, detail="Old class not found")
-        if new_class_dir.exists():
-            raise HTTPException(status_code=409, detail="New class name already exists")
-
-        # 폴더 이름 변경 (폴더 구조가 source of truth이므로 이것만으로 충분)
-        old_class_dir.rename(new_class_dir)
-        positions_renamed = _rename_class_positions_dir(old_class_dir, new_class_dir)
+        positions_renamed = await anyio.to_thread.run_sync(_rename_class_storage, old_class_dir, new_class_dir)
 
         try:
             old_rel = str(old_class_dir.relative_to(ROOT_DIR)).replace("\\", "/")
@@ -8825,9 +8913,10 @@ class DeleteClassesReq(BaseModel):
     names: List[str] = Field(..., min_items=1)
 
 @app.post("/api/classes/delete")
-async def delete_classes(req: DeleteClassesReq,
+async def delete_classes(request: Request, req: DeleteClassesReq,
                          mode: str = Query("wafer", pattern="^(wafer|chip)$", description="wafer 또는 chip 모드")):
     try:
+        _check_folder_permission(request, "*", "CLASS_MANAGE")
         if not req.names: raise HTTPException(status_code=400, detail="클래스명 목록이 비어있습니다")
         classification_dir = _classification_dir(mode=mode)
         deleted, failed = [], []
@@ -8838,8 +8927,7 @@ async def delete_classes(req: DeleteClassesReq,
                 class_dir = classification_dir / class_name
                 logger.info(f"[DELETE_CLASS] class_dir: {class_dir}, exists: {class_dir.exists()}")
                 if not class_dir.exists() or not class_dir.is_dir(): raise FileNotFoundError("Class not found")
-                shutil.rmtree(class_dir)
-                _delete_class_positions_dir(class_dir)
+                await anyio.to_thread.run_sync(_delete_class_storage, class_dir, True)
                 try:
                     class_rel = str(class_dir.relative_to(ROOT_DIR)).replace("\\", "/")
                     index_service.delete_classification_prefix(class_rel)
@@ -8853,6 +8941,8 @@ async def delete_classes(req: DeleteClassesReq,
         log_access_row(tag="INFO", note="배치 클래스 삭제 완료 - Label Explorer 새로고침 필요")
         return {"success": True, "deleted": deleted, "failed": failed,
                 "refresh_required": True, "message": f"{len(deleted)}개 삭제, {len(failed)}개 실패"}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(f"클래스 일괄 삭제 실패: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -8900,7 +8990,7 @@ async def class_images(class_name: str = PathParam(..., min_length=1, max_length
 
 # ---------------- Labels ----------------
 @app.post("/api/labels")
-async def add_labels(req: LabelAddReq):
+async def add_labels(req: LabelAddReq, request: Request):
     try:
         rel = relkey_from_any_path(req.image_path)
         abs_path = ROOT_DIR / rel
@@ -8908,29 +8998,43 @@ async def add_labels(req: LabelAddReq):
         if not is_supported_image(abs_path): raise HTTPException(status_code=400, detail="Unsupported image format")
         new_labels = [str(x).strip() for x in req.labels if str(x).strip()]
         if not new_labels: raise HTTPException(status_code=400, detail="Empty labels")
-        # 폴더 구조가 source of truth — 라벨은 classification 폴더 스캔으로 조회
+        if any(not _CLASS_NAME_RE.fullmatch(name) for name in new_labels):
+            raise HTTPException(status_code=400, detail="Invalid class name")
+        for name in dict.fromkeys(new_labels):
+            await classify_images(request, ClassifyRequest(image_path=rel, class_name=name))
         _dircache_invalidate(_classification_dir())
         labels = _get_labels_for_image(rel)
         return {"success": True, "image": rel, "labels": labels}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(f"라벨 추가 실패: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/labels")
-async def delete_labels(req: LabelDelReq):
+async def delete_labels(req: LabelDelReq, request: Request):
     try:
-        rel = relkey_from_any_path(req.image_path)
-        # 폴더 구조가 source of truth — 라벨은 classification 폴더 스캔으로 조회
+        rel = _lookup_original_relpath_from_classification_path(req.image_path) or relkey_from_any_path(req.image_path)
+        _check_folder_permission(request, str(Path(rel).parent), "LABEL_WRITE")
+        existing = _get_labels_for_image(rel)
+        names = existing if req.labels is None else [str(name).strip() for name in req.labels]
+        if any(not _CLASS_NAME_RE.fullmatch(name) for name in names):
+            raise HTTPException(status_code=400, detail="Invalid class name")
+        for name in dict.fromkeys(names):
+            if name in existing:
+                await delete_classification(ClassifyDeleteRequest(image_path=rel, class_name=name), request)
         _dircache_invalidate(_classification_dir())
         labels = _get_labels_for_image(rel)
         return {"success": True, "image": rel, "labels": labels}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(f"라벨 제거 실패: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/labels/delete")
-async def delete_labels_post(req: LabelDelReq):
-    return await delete_labels(req)
+async def delete_labels_post(req: LabelDelReq, request: Request):
+    return await delete_labels(req, request)
 
 @app.get("/api/labels/{image_path:path}")
 async def get_labels(image_path: str):
@@ -9082,6 +9186,8 @@ async def classify_images(req: Request,
 
         return {"success": True, "image": rel_path, "class": class_name, "labels": _get_labels_for_image(rel_path)}
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(f"이미지 분류 실패: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -9144,7 +9250,8 @@ def _save_selection_crops_sync(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     saved: List[Dict[str, Any]] = []
-    with Image.open(source_path) as img:
+    source_snapshot = _mutable_image_snapshot(source_path)
+    with Image.open(io.BytesIO(source_snapshot) if source_snapshot is not None else source_path) as img:
         image_w, image_h = img.size
         for index, crop in enumerate(crops):
             x0 = max(0, min(int(crop.x), image_w))
@@ -9390,7 +9497,8 @@ async def classify_chips(request: ChipClassifyRequest,
         chips = positions_data.get('chips', [])
 
         # Wafer 이미지 로드
-        wafer_img = Image.open(wafer_path)
+        source_snapshot = await anyio.to_thread.run_sync(_mutable_image_snapshot, wafer_path)
+        wafer_img = Image.open(io.BytesIO(source_snapshot) if source_snapshot is not None else wafer_path)
 
         # 이미지 파일명 (확장자 제외)
         wafer_name = wafer_path.stem
@@ -9585,11 +9693,15 @@ async def delete_classification(request: ClassifyDeleteRequest,
             abs_path = ROOT_DIR / rel_path
             target_file = class_dir / abs_path.name
         elif request.image_name:
-            target_file = class_dir / request.image_name
-            rel_path = relkey_from_any_path(request.image_name)
+            target_file = class_dir / Path(request.image_name).name
+            classification_path = target_file.relative_to(ROOT_DIR).as_posix()
+            rel_path = _lookup_original_relpath_from_classification_path(classification_path) or relkey_from_any_path(request.image_name)
         else:
             raise HTTPException(status_code=400, detail="Either image_path or image_name required")
 
+        _check_folder_permission(req, str(Path(rel_path).parent), "LABEL_WRITE")
+        if target_file.resolve().parent != class_dir.resolve():
+            raise HTTPException(status_code=400, detail="Invalid classification path")
         if not target_file.exists():
             raise HTTPException(status_code=404, detail="Classification file not found")
 
@@ -9612,6 +9724,8 @@ async def delete_classification(request: ClassifyDeleteRequest,
 
         return {"success": True, "removed": str(target_file.relative_to(ROOT_DIR)), "class": class_name}
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(f"분류 제거 실패: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -9623,6 +9737,12 @@ async def classify_delete_batch(request: ClassifyDeleteBatchReq,
     try:
         mode = request.mode
         username = _current_username(req, default="system")
+        folders = {
+            str(Path(_lookup_original_relpath_from_classification_path(path) or relkey_from_any_path(path)).parent)
+            for path in request.images
+        }
+        for folder in folders:
+            _check_folder_permission(req, folder, "LABEL_WRITE")
 
         class_name = request.class_.strip()
         if not class_name or not _CLASS_NAME_RE.match(class_name):
@@ -9743,6 +9863,9 @@ def _get_js_entry(filename: str):
 
 @app.get("/js/{filename:path}")
 async def serve_js(filename: str, request: Request):
+    asset_path = (_JS_DIR / filename).resolve()
+    if not asset_path.is_relative_to(_JS_DIR.resolve()) or asset_path.suffix != ".js":
+        raise HTTPException(status_code=404, detail="Not found")
     """원본 JS + pre-gzip 서빙 + ETag 304. mtime 기반 lazy reload."""
     entry = _get_js_entry(filename)
     if entry is not None:
@@ -9819,6 +9942,9 @@ def _get_css_entry(filename: str):
 
 @app.get("/css/{filename:path}")
 async def serve_css(filename: str, request: Request):
+    asset_path = (_CSS_DIR / filename).resolve()
+    if not asset_path.is_relative_to(_CSS_DIR.resolve()) or asset_path.suffix != ".css":
+        raise HTTPException(status_code=404, detail="Not found")
     """CSS pre-gzip 서빙 + ETag 304. mtime 기반 lazy reload."""
     entry = _get_css_entry(filename)
     if entry is not None:
@@ -9890,10 +10016,6 @@ async def serve_color_legends(request: Request):
     if _COLOR_LEGENDS_PATH.exists():
         return FileResponse(_COLOR_LEGENDS_PATH, media_type="application/json")
     return JSONResponse({})
-
-app.mount("/logs", StaticFiles(directory="logs"), name="logs")
-app.mount("/static", StaticFiles(directory="."), name="static")
-# NOTE: /logs, /static 노출은 내부 환경 전제. 공개 서비스에서는 제거/인증 필요.
 
 @app.get("/")
 async def read_root(request: Request):
@@ -10644,7 +10766,8 @@ def _attach_chip_palette_indices(image_path: Path, positions_data: Dict[str, Any
     try:
         import numpy as np
 
-        with Image.open(image_path) as img:
+        source_snapshot = _mutable_image_snapshot(image_path)
+        with Image.open(io.BytesIO(source_snapshot) if source_snapshot is not None else image_path) as img:
             if img.mode != "P":
                 return
             arr = np.array(img, dtype=np.uint8)
@@ -10808,10 +10931,11 @@ async def get_palette_counts(path: str):
             raise HTTPException(status_code=404, detail="Image not found")
 
         def _count():
-            img = Image.open(img_path)
-            if img.mode != 'P':
-                img = img.convert('P')
-            data = np.array(img)
+            source_snapshot = _mutable_image_snapshot(img_path)
+            with Image.open(io.BytesIO(source_snapshot) if source_snapshot is not None else img_path) as img:
+                if img.mode != 'P':
+                    img = img.convert('P')
+                data = np.array(img)
             counts = np.bincount(data.ravel(), minlength=32).tolist()
             return counts[:32]  # index 0~31
 
@@ -10822,6 +10946,8 @@ async def get_palette_counts(path: str):
     except HTTPException:
         raise
     except Exception as e:
+        if isinstance(e, FileNotFoundError) and e.filename and Path(e.filename) == img_path:
+            raise HTTPException(status_code=404, detail="Image not found")
         logger.exception(f"Failed to get palette counts: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -11146,7 +11272,31 @@ class ChipImageExtractRequest(BaseModel):
     create_label: bool = True
 
 @app.post("/api/chip-images/extract")
-async def extract_chip_images(request: ChipImageExtractRequest):
+async def extract_chip_images(request: ChipImageExtractRequest, req: Request):
+    rel_path = _get_relative_path_from_image(request.image_path)
+    image_path = safe_resolve_path(rel_path)
+    if not _CLASS_NAME_RE.fullmatch(request.class_name):
+        raise HTTPException(status_code=400, detail="Invalid class name")
+    output_root = config.CHIP_IMAGES_ROOT.resolve()
+    if (output_root / request.class_name).resolve().parent != output_root:
+        raise HTTPException(status_code=400, detail="Invalid class path")
+    _check_folder_permission(req, str(Path(rel_path).parent), "LABEL_WRITE")
+    if not image_path.is_file():
+        raise HTTPException(status_code=404, detail="Image not found")
+    for chip in request.chips:
+        if any(not isinstance(chip.get(key), int) for key in ("x_abs", "y_abs")):
+            raise HTTPException(status_code=400, detail="Chip coordinates must be integers")
+        bbox = chip.get("bbox", {})
+        if not isinstance(bbox, dict):
+            raise HTTPException(status_code=400, detail="Invalid chip bounding box")
+        values = [bbox.get(key) for key in ("x0", "y0", "x1", "y1")]
+        if (any(not isinstance(value, (int, float)) or not math.isfinite(value) for value in values)
+                or values[2] <= values[0] or values[3] <= values[1]):
+            raise HTTPException(status_code=400, detail="Invalid chip bounding box")
+    return await anyio.to_thread.run_sync(_extract_chip_images_sync, request)
+
+
+def _extract_chip_images_sync(request: ChipImageExtractRequest):
     """마킹된 Chip 영역을 별도 이미지로 추출"""
     try:
         from PIL import Image
@@ -11159,7 +11309,8 @@ async def extract_chip_images(request: ChipImageExtractRequest):
             raise HTTPException(status_code=404, detail=f"Image not found: {img_path}")
 
         # 이미지 열기
-        img = Image.open(img_path)
+        source_snapshot = _mutable_image_snapshot(img_path)
+        img = Image.open(io.BytesIO(source_snapshot) if source_snapshot is not None else img_path)
 
         # Chip 이미지 저장 경로
         chip_images_dir = config.CHIP_IMAGES_ROOT / request.class_name
@@ -11218,9 +11369,14 @@ async def extract_chip_images(request: ChipImageExtractRequest):
             "chips": extracted_chips
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(f"Failed to extract chip images: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if "img" in locals():
+            img.close()
 
 @app.post("/api/composite-cleanup")
 async def composite_cleanup_endpoint(request: Request):
@@ -11229,23 +11385,14 @@ async def composite_cleanup_endpoint(request: Request):
 
     def _cleanup_sync():
         import shutil
-
-        def _sanitize_for_composite_path(value: Optional[str]) -> str:
-            candidate = (value or config.FALLBACK_LOGIN_ID or "notsaml").strip() or "notsaml"
-            safe_chars = [ch if (ch.isalnum() or ch in ("-", "_")) else "_" for ch in candidate]
-            return ("".join(safe_chars).strip("_") or "notsaml")[:64]
-
-        safe_login = _sanitize_for_composite_path(login_id)
-        user_dir = COMPOSITE_ROOT / safe_login
-        positions_dir = config.POSITIONS_ROOT / "composite_map" / safe_login
+        user_dir = _composite_user_output_dir(login_id)
+        positions_dir = config.POSITIONS_ROOT / "composite_map" / user_dir.name
         deleted = []
-        for d in [user_dir, positions_dir]:
-            if d.exists():
-                try:
+        with _composite_output_lock(user_dir):
+            for d in [user_dir, positions_dir]:
+                if d.exists():
                     shutil.rmtree(d)
                     deleted.append(str(d))
-                except Exception:
-                    pass
         return deleted
 
     loop = asyncio.get_running_loop()
@@ -11362,7 +11509,7 @@ async def create_composite_map_endpoint(
     # 🔥 positions 필터링 + 캐시 무효화도 여기서 실행 (이벤트 루프 블로킹 방지)
     _image_paths_snapshot = list(image_paths)  # closure용 스냅샷
 
-    def _run_sync():
+    def _run_sync_unlocked():
         nonlocal _image_paths_snapshot
         try:
             COMPOSITE_TASKS[task_id]["status"] = "processing"
@@ -11481,6 +11628,10 @@ async def create_composite_map_endpoint(
             COMPOSITE_TASKS[task_id]["status"] = "failed"
             COMPOSITE_TASKS[task_id]["error"] = str(e)
             COMPOSITE_TASKS[task_id]["failed_at"] = datetime.now().isoformat()
+
+    def _run_sync():
+        with _composite_output_lock(_composite_user_output_dir(login_id)):
+            _run_sync_unlocked()
 
     COMPOSITE_EXECUTOR.submit(_run_sync)
 
@@ -11789,13 +11940,14 @@ async def create_subset_map_endpoint(payload: SubsetMapRequest, req: Request):
         def _create_subset_sync():
             from .composite_map import create_subset_map
 
-            _invalidate_composite_thumbnail_caches(output_dir=output_dir, login_id=login_id or ANONYMOUS_LOGIN_ID)
-            return create_subset_map(
-                output_dir=output_dir,
-                selected_grades=payload.selected_grades,
-                scheme=resolved_scheme,
-                override_colors=payload.override_colors,
-            )
+            with _composite_output_lock(output_dir):
+                _invalidate_composite_thumbnail_caches(output_dir=output_dir, login_id=login_id or ANONYMOUS_LOGIN_ID)
+                return create_subset_map(
+                    output_dir=output_dir,
+                    selected_grades=payload.selected_grades,
+                    scheme=resolved_scheme,
+                    override_colors=payload.override_colors,
+                )
 
         # Subset 생성은 NPZ load/render/write를 포함하므로 event loop에서 직접 실행하지 않는다.
         loop = asyncio.get_running_loop()
@@ -11839,33 +11991,8 @@ class GrantRemoveRequest(BaseModel):
 
 
 def get_current_user(request: Request) -> Optional[str]:
-    """현재 로그인한 사용자 이름 반환"""
-    # 🔥 세션 미들웨어가 없어도 안전하게 처리
-    try:
-        session = request.session  # type: ignore[attr-defined]
-        username = session.get("session_user") or session.get("username")
-        if username:
-            return str(username)
-    except Exception:
-        # 세션 미들웨어가 없거나 세션에 접근할 수 없는 경우
-        pass
-    
-    # cookie fallback
-    login_id = request.cookies.get("session_user")
-    if login_id:
-        return str(login_id)
-    
-    # SAML 세션 확인 (메모리 기반)
-    try:
-        # SAML_USER_SESSIONS에서 현재 요청의 쿠키나 헤더로 사용자 찾기
-        # 간단하게 쿠키에서 LoginId 확인
-        saml_login_id = request.cookies.get("saml_login_id")
-        if saml_login_id and saml_login_id in SAML_USER_SESSIONS:
-            return saml_login_id
-    except Exception:
-        pass
-    
-    return None
+    """Use the same URL handoff identity as class, label and MY LOT APIs."""
+    return _current_login_id(request)
 
 
 @app.get("/api/users")
@@ -11887,6 +12014,95 @@ async def get_users(request: Request):
         raise
     except Exception as e:
         logger.exception(f"사용자 목록 조회 실패: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/users/search")
+async def search_users_from_stats(
+    request: Request,
+    query: str = Query(..., min_length=1, description="Username 또는 LoginId 검색어"),
+    limit: int = Query(10, ge=1, le=50, description="최대 검색 결과 수")
+):
+    """
+    stats.json에서 사용자 검색 (Username 또는 LoginId)
+
+    Args:
+        query: 검색어 (Username 또는 LoginId에서 검색)
+        limit: 최대 결과 수 (기본: 10)
+
+    Returns:
+        {
+            "success": True,
+            "users": [
+                {
+                    "username": "홍길동",
+                    "login_id": "12345",
+                    "dept_name": "개발부",
+                    "ip": "192.168.1.100",
+                    "last_seen": "2025-10-17 21:26:16"
+                },
+                ...
+            ],
+            "count": 5
+        }
+    """
+    try:
+        current_user = get_current_user(request)
+        checker = get_permission_checker()
+
+        # 권한 검사: ADMIN 이상만 사용자 검색 가능
+        if not checker.has_permission(current_user, Permission.GRANT_MANAGE):
+            raise HTTPException(status_code=403, detail="권한이 없습니다.")
+
+        # stats.json 파일 경로
+        stats_file = Path(__file__).parent.parent / "logs" / "stats.json"
+
+        if not stats_file.exists():
+            return {"success": True, "users": [], "count": 0}
+
+        # stats.json 로드
+        with open(stats_file, 'r', encoding='utf-8') as f:
+            stats_data = json.load(f)
+
+        query_lower = query.lower()
+        matched_users = []
+
+        # 모든 사용자 순회하며 검색
+        for ip_key, user_data in stats_data.get("users", {}).items():
+            profile = user_data.get("profile", {})
+            username = profile.get("Username", "")
+            login_id = profile.get("LoginId", "")
+
+            # Username 또는 LoginId에 검색어가 포함되어 있는지 확인
+            if query_lower in username.lower() or query_lower in login_id.lower():
+                matched_users.append({
+                    "username": username,
+                    "login_id": login_id,
+                    "dept_name": profile.get("DeptName", ""),
+                    "grade_name": profile.get("GrdName", ""),
+                    "sabun": profile.get("Sabun", ""),
+                    "ip": ip_key,
+                    "last_seen": user_data.get("last_access_time", ""),
+                    "total_requests": user_data.get("total_requests", 0)
+                })
+
+                # limit 도달 시 중단
+                if len(matched_users) >= limit:
+                    break
+
+        # 최근 접속 순으로 정렬
+        matched_users.sort(key=lambda x: x.get("last_seen", ""), reverse=True)
+
+        return {
+            "success": True,
+            "users": matched_users[:limit],
+            "count": len(matched_users)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"사용자 검색 실패: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -11957,7 +12173,8 @@ async def create_my_lot_manual_entry(req: CreateManualEntryReq, request: Request
     """이미지 없이 수동으로 항목 생성"""
     try:
         current_user = _resolve_my_lot_login(request)
-        result = my_lot_create_manual_entry(
+        result = await anyio.to_thread.run_sync(
+            my_lot_create_manual_entry,
             current_user,
             req.mode,
             req.group,
@@ -12110,93 +12327,6 @@ async def get_audit_logs(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/users/search")
-async def search_users_from_stats(
-    request: Request,
-    query: str = Query(..., min_length=1, description="Username 또는 LoginId 검색어"),
-    limit: int = Query(10, ge=1, le=50, description="최대 검색 결과 수")
-):
-    """
-    stats.json에서 사용자 검색 (Username 또는 LoginId)
-
-    Args:
-        query: 검색어 (Username 또는 LoginId에서 검색)
-        limit: 최대 결과 수 (기본: 10)
-
-    Returns:
-        {
-            "success": True,
-            "users": [
-                {
-                    "username": "홍길동",
-                    "login_id": "12345",
-                    "dept_name": "개발부",
-                    "ip": "192.168.1.100",
-                    "last_seen": "2025-10-17 21:26:16"
-                },
-                ...
-            ],
-            "count": 5
-        }
-    """
-    try:
-        current_user = get_current_user(request)
-        checker = get_permission_checker()
-
-        # 권한 검사: ADMIN 이상만 사용자 검색 가능
-        if not checker.has_permission(current_user, Permission.GRANT_MANAGE):
-            raise HTTPException(status_code=403, detail="권한이 없습니다.")
-
-        # stats.json 파일 경로
-        stats_file = Path(__file__).parent.parent / "logs" / "stats.json"
-
-        if not stats_file.exists():
-            return {"success": True, "users": [], "count": 0}
-
-        # stats.json 로드
-        with open(stats_file, 'r', encoding='utf-8') as f:
-            stats_data = json.load(f)
-
-        query_lower = query.lower()
-        matched_users = []
-
-        # 모든 사용자 순회하며 검색
-        for ip_key, user_data in stats_data.get("users", {}).items():
-            profile = user_data.get("profile", {})
-            username = profile.get("Username", "")
-            login_id = profile.get("LoginId", "")
-
-            # Username 또는 LoginId에 검색어가 포함되어 있는지 확인
-            if query_lower in username.lower() or query_lower in login_id.lower():
-                matched_users.append({
-                    "username": username,
-                    "login_id": login_id,
-                    "dept_name": profile.get("DeptName", ""),
-                    "grade_name": profile.get("GrdName", ""),
-                    "sabun": profile.get("Sabun", ""),
-                    "ip": ip_key,
-                    "last_seen": user_data.get("last_access_time", ""),
-                    "total_requests": user_data.get("total_requests", 0)
-                })
-
-                # limit 도달 시 중단
-                if len(matched_users) >= limit:
-                    break
-
-        # 최근 접속 순으로 정렬
-        matched_users.sort(key=lambda x: x.get("last_seen", ""), reverse=True)
-
-        return {
-            "success": True,
-            "users": matched_users[:limit],
-            "count": len(matched_users)
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception(f"사용자 검색 실패: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ======================== User Preferences API ========================

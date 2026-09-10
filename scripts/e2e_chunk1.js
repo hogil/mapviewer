@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { createRunner } = require('./e2e_playwright_session');
+const auditRegressions = require('./e2e_audit_regressions');
 
 (async () => {
   const {
@@ -1793,6 +1794,10 @@ const { createRunner } = require('./e2e_playwright_session');
       `filter badges should be pre-rendered to avoid panel shift: ${JSON.stringify(data.filterBadges)}`
     );
     return data;
+  });
+
+  await record('audit-regressions', '정적 접근 / 오류 상태 / MY LOT rename positions', async () => {
+    return auditRegressions({ page, expect });
   });
 
   await record('2,5,31', 'unknown 그리드/범례', async () => {

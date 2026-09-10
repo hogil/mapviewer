@@ -1536,6 +1536,10 @@ export class ChipAnnotator {
      * Load chip positions from backend
      */
     async loadPositions(imagePath, options = {}) {
+        if (options.signal?.aborted) return false;
+        const requestVersion = this._positionsLoadVersion = (this._positionsLoadVersion || 0) + 1;
+        const isStale = () => requestVersion !== this._positionsLoadVersion ||
+            this.currentImagePath !== imagePath || options.signal?.aborted;
         try {
             const loadExistingAnnotations = options?.loadAnnotations !== false;
             this.currentImagePath = imagePath;
@@ -1550,10 +1554,16 @@ export class ChipAnnotator {
             this.sys = null;
             // 캐시 히트 확인
             const cacheKey = imagePath;
-            if (_positionsCache.has(cacheKey)) {
+            // Composite generation replaces files at the same path; positions must follow the new bitmap.
+            const mutableComposite = /(^|\/)composite_map\//.test(String(imagePath).replace(/\\/g, '/'));
+            if (!mutableComposite && _positionsCache.has(cacheKey)) {
                 this.positionsData = _positionsCache.get(cacheKey);
             } else {
-                const response = await fetch(`/api/chip-positions?path=${encodeURIComponent(imagePath)}&include_fq=0&include_grade=1`);
+                const response = await fetch(`/api/chip-positions?path=${encodeURIComponent(imagePath)}&include_fq=0&include_grade=1`, {
+                    signal: options.signal,
+                    ...(mutableComposite ? { cache: 'no-store' } : {}),
+                });
+                if (isStale()) return false;
                 if (!response.ok) {
                     console.log('No positions found for:', imagePath);
                     this.positionsData = null;
@@ -1565,13 +1575,17 @@ export class ChipAnnotator {
                     this._notifyLegendUpdate([]);
                     return false;
                 }
-                this.positionsData = await response.json();
+                const positionsData = await response.json();
+                if (isStale()) return false;
+                this.positionsData = positionsData;
                 // LRU 캐시: 최대 50개
-                if (_positionsCache.size >= _POSITIONS_CACHE_MAX) {
-                    const oldest = _positionsCache.keys().next().value;
-                    _positionsCache.delete(oldest);
+                if (!mutableComposite) {
+                    if (_positionsCache.size >= _POSITIONS_CACHE_MAX) {
+                        const oldest = _positionsCache.keys().next().value;
+                        _positionsCache.delete(oldest);
+                    }
+                    _positionsCache.set(cacheKey, this.positionsData);
                 }
-                _positionsCache.set(cacheKey, this.positionsData);
             }
             this.chips = this._dedupeChipsByGrid(this.positionsData.chips || []);
             if (this.positionsData) this.positionsData.chips = this.chips;
@@ -1602,8 +1616,9 @@ export class ChipAnnotator {
             this._updateMetadataDisplay();
 
             if (loadExistingAnnotations) {
-                await this.loadAnnotations(imagePath);
+                await this.loadAnnotations(imagePath, options);
             }
+            if (isStale()) return false;
 
             // 🎨 positions 로드 후 즉시 렌더링 (hover, grid 등 표시)
             // 오버레이 모드 재적용은 main.js의 _reapplyOverlayAfterPositionsLoad()에서 처리
@@ -1611,6 +1626,7 @@ export class ChipAnnotator {
 
             return true;
         } catch (error) {
+            if (isStale()) return false;
             console.error('Error loading chip positions:', error);
             this.positionsData = null;
             this.chips = [];
@@ -1670,8 +1686,15 @@ export class ChipAnnotator {
     /**
      * Load existing chip annotations from backend
      */
-    async loadAnnotations(imagePath = null) {
+    async loadAnnotations(imagePath = null, options = {}) {
+        if (options.signal?.aborted) return;
         const targetPath = imagePath || this.currentImagePath;
+        const requestVersion = this._annotationsLoadVersion = (this._annotationsLoadVersion || 0) + 1;
+        const positionsVersion = this._positionsLoadVersion;
+        const folderPrefix = this.viewer?.currentFolderPrefix ?? '';
+        const isStale = () => requestVersion !== this._annotationsLoadVersion ||
+            positionsVersion !== this._positionsLoadVersion || this.currentImagePath !== targetPath ||
+            folderPrefix !== (this.viewer?.currentFolderPrefix ?? '') || options.signal?.aborted;
         if (!targetPath) {
             this.markedChips = [];
             this._refreshClassColors();
@@ -1682,12 +1705,13 @@ export class ChipAnnotator {
         try {
             const params = new URLSearchParams();
             params.set('path', targetPath);
-            const folderPrefix = this.viewer?.currentFolderPrefix ?? '';
             params.set('folder', folderPrefix);
-            const response = await fetch(`/api/chip-annotations?${params.toString()}`);
+            const response = await fetch(`/api/chip-annotations?${params.toString()}`, { signal: options.signal });
+            if (isStale()) return;
 
             if (response.ok) {
                 const data = await response.json();
+                if (isStale()) return;
                 this.markedChips = Array.isArray(data.marked_chips) ? data.marked_chips : [];
             } else if (response.status === 404) {
                 this.markedChips = [];
@@ -1700,6 +1724,7 @@ export class ChipAnnotator {
             this._notifyLegendUpdate();
             this.render();
         } catch (error) {
+            if (isStale()) return;
             console.error('Error loading chip labels:', error);
             this.markedChips = [];
             this._refreshClassColors();

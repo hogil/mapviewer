@@ -1627,6 +1627,7 @@ export class MyLotModal {
 
     async open(pendingPaths = null, options = {}) {
         if (!this.windowEl) return;
+        const openVersion = this._openVersion = (this._openVersion || 0) + 1;
         try {
             // 대기 중인 경로 설정
             if (pendingPaths && pendingPaths.length > 0) {
@@ -1646,23 +1647,19 @@ export class MyLotModal {
             document.addEventListener('keydown', this.boundKeyHandler);
 
             // 캐시된 데이터로 즉시 렌더 (초기에는 빈 상태라도 모달이 바로 뜸)
-            const render = () => {
-                this.setMode(this.activeMode || "lot");
+            const render = async () => {
+                await this.setMode(this.activeMode || "lot");
                 this.updateCurrentValues();
                 this.updatePendingButtonVisibility();
                 this.updateCopyButtonVisibility(); // Tab에 따라 복사 버튼 표시/숨김
             };
-            render();
+            await render();
 
             // 백그라운드로 최신 데이터 갱신
-            this.refreshData()
-                .then(() => {
-                    render();
-                })
-                .catch((error) => {
-                    console.error('[MyLotModal] open refresh failed:', error);
-                    this.viewer?.showToast?.('MY LOT 데이터를 불러오지 못했습니다.', 2200);
-                });
+            await this.refreshData();
+            if (openVersion !== this._openVersion || !this.windowEl.classList.contains('is-open')) return;
+            this.renderGroups();
+            await this.loadActiveGroupEntriesAndRender();
         } catch (error) {
             console.error('[MyLotModal] open failed:', error);
             this.viewer?.showToast?.('MY LOT 데이터를 불러오지 못했습니다.', 2200);
@@ -1671,6 +1668,8 @@ export class MyLotModal {
 
     close() {
         if (!this.windowEl) return;
+        this._openVersion = (this._openVersion || 0) + 1;
+        this._entriesLoadVersion = (this._entriesLoadVersion || 0) + 1;
         
         // 임시 그룹 삭제 (백그라운드에서 실행)
         this.deleteTempGroupIfExists().catch(err => {
@@ -1714,6 +1713,11 @@ export class MyLotModal {
      * - 실제 파일 스캔은 선택된 그룹에 대해서만 /api/my-lot/entries 로 수행
      */
     async loadActiveGroupEntriesAndRender() {
+        const requestVersion = this._entriesLoadVersion = (this._entriesLoadVersion || 0) + 1;
+        const mode = this.activeMode;
+        const group = this.activeGroup;
+        const isStale = () => requestVersion !== this._entriesLoadVersion ||
+            mode !== this.activeMode || group !== this.activeGroup;
         if (!this.activeGroup) {
             this.renderEntries();
             return;
@@ -1725,19 +1729,20 @@ export class MyLotModal {
         }
 
         try {
-            const url = this._withLogin(`/api/my-lot/entries?mode=${encodeURIComponent(this.activeMode)}&group=${encodeURIComponent(this.activeGroup)}`);
+            const url = this._withLogin(`/api/my-lot/entries?mode=${encodeURIComponent(mode)}&group=${encodeURIComponent(group)}`);
             const res = await fetch(url, { cache: 'no-store' });
             if (!res.ok) {
                 throw new Error(await res.text());
             }
             const entries = await res.json();
+            if (isStale()) return;
 
             // this.data 구조 내 해당 그룹의 entries를 갱신
             if (this.data) {
-                const modeKey = this.activeMode === 'wafer' ? 'wafer' : 'lot';
+                const modeKey = mode === 'wafer' ? 'wafer' : 'lot';
                 const modeData = this.data[modeKey];
                 if (modeData && Array.isArray(modeData.groups)) {
-                    const groupObj = modeData.groups.find(g => g.name === this.activeGroup);
+                    const groupObj = modeData.groups.find(g => g.name === group);
                     if (groupObj) {
                         groupObj.entries = entries || [];
                     }
@@ -1747,6 +1752,7 @@ export class MyLotModal {
             // 기존 테이블 렌더링 로직 재사용
             this.renderEntries();
         } catch (error) {
+            if (isStale()) return;
             console.error('[MyLotModal] loadActiveGroupEntriesAndRender failed:', error);
             if (this.entriesContainer) {
                 this.entriesContainer.innerHTML = '<div class="empty-msg" style="color:red;padding:16px;text-align:center;">데이터를 불러오지 못했습니다.</div>';
@@ -1755,6 +1761,7 @@ export class MyLotModal {
     }
 
     async setMode(mode) {
+        this._entriesLoadVersion = (this._entriesLoadVersion || 0) + 1;
         if (!MODES.includes(mode)) {
             mode = "lot";
         }
@@ -2730,6 +2737,8 @@ export class MyLotModal {
             this.viewer?.showToast?.('먼저 그룹을 선택해주세요.', 2000);
             return;
         }
+        const mode = this.activeMode;
+        const group = this.activeGroup;
 
         // 🔥 1번 요구사항: 선택된 모든 이미지 수집
         let paths = [];
@@ -2763,17 +2772,21 @@ export class MyLotModal {
         }
 
         // 🔥 3번 요구사항: WAFER 모드 (검색 없이 선택된 이미지 수백/수천개라도 그대로 즉시 등록)
-        if (this.activeMode === 'wafer') {
+        if (mode === 'wafer') {
             try {
                 this.viewer?.showToast?.(`WAFER 모드: 이미지 ${paths.length}개 저장 중...`, 1500);
                 const res = await fetch(this._withLogin('/api/my-lot/batch'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ mode: this.activeMode, group: this.activeGroup, paths: paths })
+                    body: JSON.stringify({ mode, group, paths: paths })
                 });
                 if (!res.ok) throw new Error(await this.parseErrorResponse(res));
 
-                this.viewer?.showToast?.(`Wafer 이미지 ${paths.length}개 저장 완료!`, 2000);
+                const result = await res.json();
+                const msgs = [`${result.success_count || 0}개 저장`];
+                if (result.duplicate_count > 0) msgs.push(`${result.duplicate_count}개 중복`);
+                if (result.error_count > 0) msgs.push(`${result.error_count}개 실패`);
+                this.viewer?.showToast?.(`Wafer 이미지: ${msgs.join(', ')}`, 2000);
                 this.refreshData().then(() => this.loadActiveGroupEntriesAndRender()).catch(() => {});
             } catch (error) {
                 console.error('[MyLotModal] wafer save failed:', error);
@@ -2828,16 +2841,16 @@ export class MyLotModal {
             const res = await fetch(this._withLogin('/api/my-lot/batch'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ mode: this.activeMode, group: this.activeGroup, paths: uniqueResults })
+                body: JSON.stringify({ mode, group, paths: uniqueResults })
             });
 
             if (!res.ok) throw new Error(await this.parseErrorResponse(res));
             const result = await res.json();
 
-            const msgs = [];
-            if (result.success_count > 0) msgs.push(`${result.success_count}개 저장`);
+            const msgs = [`${result.success_count || 0}개 저장`];
             if (result.duplicate_count > 0) msgs.push(`${result.duplicate_count}개 중복`);
-            this.viewer?.showToast?.(`LOT 저장 완료: ${msgs.join(', ')}`, 2500);
+            if (result.error_count > 0) msgs.push(`${result.error_count}개 실패`);
+            this.viewer?.showToast?.(`LOT 저장: ${msgs.join(', ')}`, 2500);
             this.refreshData().then(() => this.loadActiveGroupEntriesAndRender()).catch(() => {});
 
         } catch (error) {
@@ -3367,7 +3380,7 @@ export class MyLotModal {
         // 일반 폴더 선택과 동일하게 처리 (Measure/Composite/컬럼조절 등 모든 기능 사용 가능)
         if (this.viewer?.showGrid) {
             // currentFolderPath를 my-lot 그룹 경로로 설정
-            const groupPath = `my-lot/notsaml/${this.activeMode}/${this.activeGroup}`;
+            const groupPath = `my-lot/${this.data?.login_id || this.viewer.getCurrentLoginId()}/${this.activeMode}/${this.activeGroup}`;
             this.viewer.currentFolderPath = groupPath;
             this.viewer.selectedImages = [];
             this.viewer._lastGridScrollTop = null;

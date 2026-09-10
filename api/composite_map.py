@@ -13,6 +13,7 @@ import threading
 import zlib
 import zipfile
 import copy
+import uuid
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 from datetime import datetime
 from functools import lru_cache
@@ -132,6 +133,7 @@ COMPOSITE_ROOT.mkdir(parents=True, exist_ok=True)
 (COMPOSITE_ROOT / ANONYMOUS_LOGIN_ID).mkdir(parents=True, exist_ok=True)
 COMPOSITE_SESSION_DIRNAME = "current"
 SQUARE_MAP_CACHE_FILENAME = "square_maps_data.npz"
+_NPZ_REPLACE_LOCK = threading.Lock()
 _GRADE_RANGE = np.arange(8, dtype=np.uint8)
 _SUBSET_NAME_RE = re.compile(r"^square_(weighted_)?average_([0-7]+)\.(png|jpg|jpeg|webp)$", re.IGNORECASE)
 _SELECTED_REGION_PADDING_PX = 4
@@ -375,7 +377,8 @@ def _copy_positions_without_bin(
             # filtered file is atomically replaced.
             _positions_json_cache.pop(composite_rel_path.as_posix(), None)
     except Exception:
-        pass
+        logger.exception("[COMPOSITE POSITIONS] copy failed: %s", output_dir)
+        raise
 
 
 def _coord_key_from_chip(chip: Any) -> Optional[Tuple[int, int]]:
@@ -2443,7 +2446,7 @@ def _persist_square_map_data(
     save_payload["quantile_clamp_min_to_zero"] = np.array(bool(clamp_min_to_zero), dtype=np.bool_)
 
     def _save_npz():
-        tmp = cache_path.with_name(cache_path.stem + "_tmp.npz")
+        tmp = cache_path.with_name(cache_path.stem + f"_{uuid.uuid4().hex}_tmp.npz")
         try:
             # np.savez는 .npz로 끝나지 않으면 자동 추가 → _tmp.npz 사용 (추가 방지)
             _save_npz_payload(
@@ -2452,17 +2455,11 @@ def _persist_square_map_data(
                 compress=_CACHE_COMPRESS,
                 compress_level=_CACHE_COMPRESS_LEVEL,
             )
-            try:
+            with _NPZ_REPLACE_LOCK:
                 tmp.replace(cache_path)
-            except Exception:
-                try:
-                    if cache_path.exists():
-                        cache_path.unlink()
-                    tmp.rename(cache_path)
-                except Exception as rename_err:
-                    logger.warning("[NPZ] rename failed (%s → %s): %s", tmp.name, cache_path.name, rename_err)
         except Exception as save_err:
             logger.warning("[NPZ] save failed (%s): %s", tmp.name, save_err)
+            raise
         finally:
             # 항상 tmp 파일 정리 시도
             try:
@@ -2648,6 +2645,7 @@ def recolor_saved_sum_maps(
         )
     except Exception as exc:
         print(f"[recolor_saved_sum_maps] Failed to persist updated NPZ: {exc}")
+        raise
 
     # Subset PNG들도 같은 색상 설정으로 재렌더링 (grade_counts가 있을 때만 가능)
     if grade_counts_arr is not None:
@@ -2764,13 +2762,7 @@ def _write_gradient_stats_payload(output_dir: Path, stats: Dict[str, Any]) -> No
     import json as _json
     json_path = output_dir / "gradient_stats.json"
 
-    def _write():
-        try:
-            json_path.write_text(_json.dumps(stats, ensure_ascii=False), encoding="utf-8")
-        except Exception:
-            pass
-
-    threading.Thread(target=_write, daemon=True).start()
+    json_path.write_text(_json.dumps(stats, ensure_ascii=False), encoding="utf-8")
 
 
 def _save_gradient_stats(
@@ -2958,7 +2950,7 @@ def _save_sum_map_variants(
                 "filename": actual_path.name,
             })
 
-    # 🔥 NPZ persist — 백그라운드 스레드 (render/save 후 GIL 경쟁 없음)
+    # 완료 응답 직후 subset/recolor가 읽을 수 있도록 저장까지 기다린다.
     if persist_cache:
         _npz_args = dict(
             output_dir=output_dir,
@@ -2977,7 +2969,7 @@ def _save_sum_map_variants(
             colors=resolved_colors,
             clamp_min_to_zero=clamp_min_to_zero,
         )
-        threading.Thread(target=_persist_square_map_data, kwargs=_npz_args, daemon=True).start()
+        _persist_square_map_data(**_npz_args)
 
     # 🔥 Gradient 범례용 pixel 분포 JSON 저장 (단일뷰에서 사용)
     _save_gradient_stats(output_dir, variants, _precomputed_ranges)
@@ -3631,27 +3623,21 @@ def create_composite_heatmaps(
         _write_selected_shot_display_metadata(output_dir)
 
     if create_sum and sum_map_entries:
-        def _delayed_persist_square_cache():
-            try:
-                delay_ms = int(os.getenv("COMPOSITE_CACHE_PERSIST_DELAY_MS", "1500"))
-            except ValueError:
-                delay_ms = 1500
-            if delay_ms > 0:
-                time.sleep(delay_ms / 1000.0)
-            _persist_square_map_data(
-                output_dir=output_dir,
-                palette_list=palette_bytes,
-                base_indices=base_indices,
-                grade_counts=grade_counts,
-                invalid_mask=invalid_mask,
-                idx_8_mask=idx_8_13_only,
-                only_low_mask=sum_map_low_mask,
-                image_count=composite_sample_count,
-                color_scheme=scheme or ANONYMOUS_LOGIN_ID,
-                clamp_min_to_zero=quantile_clamp_min_to_zero,
-            )
-
-        threading.Thread(target=_delayed_persist_square_cache, daemon=True).start()
+        # COMPOSITE_EXECUTOR에서 실행되며 완료 후 cleanup이 안전하게 삭제할 수 있어야 한다.
+        t = time.perf_counter()
+        _persist_square_map_data(
+            output_dir=output_dir,
+            palette_list=palette_bytes,
+            base_indices=base_indices,
+            grade_counts=grade_counts,
+            invalid_mask=invalid_mask,
+            idx_8_mask=idx_8_13_only,
+            only_low_mask=sum_map_low_mask,
+            image_count=composite_sample_count,
+            color_scheme=scheme or ANONYMOUS_LOGIN_ID,
+            clamp_min_to_zero=quantile_clamp_min_to_zero,
+        )
+        _mark("persist_square_cache", t)
 
     # 첫 번째 이미지의 positions.json을 composite 결과에 맞게 복사
     composite_image_filenames = []
@@ -3664,21 +3650,16 @@ def create_composite_heatmaps(
 
     if composite_image_filenames and positions_source_path:
         t = time.perf_counter()
-        # 백그라운드 스레드로 positions 복사 (결과에 영향 없으므로 대기 불필요)
-        threading.Thread(
-            target=_copy_positions_without_bin,
-            args=(positions_source_path, output_dir, composite_image_filenames),
-            kwargs={
-                "keep_chip_bin": show_normal_border,
-                "selected_chip_coords": selected_coord_set,
-                "selection_crop": selection_crop,
-                "position_rect_overrides": position_rect_overrides,
-                "position_canvas_size": position_canvas_size,
-                "position_grid_edges": position_grid_edges,
-            },
-            daemon=True,
-        ).start()
-        _mark("copy_positions_async", t)
+        _copy_positions_without_bin(
+            positions_source_path, output_dir, composite_image_filenames,
+            keep_chip_bin=show_normal_border,
+            selected_chip_coords=selected_coord_set,
+            selection_crop=selection_crop,
+            position_rect_overrides=position_rect_overrides,
+            position_canvas_size=position_canvas_size,
+            position_grid_edges=position_grid_edges,
+        )
+        _mark("copy_positions", t)
 
     total_time = time.perf_counter() - start_time
     timings["total"] = total_time

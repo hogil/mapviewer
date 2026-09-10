@@ -315,3 +315,11 @@ argument-hint: [증상-설명]
 - 원인 후보: startup composite/measure warm이 너무 빨리 시작되어 `api.measure_composite` import의 `ProcessPoolExecutor` worker spawn 또는 Numba warm이 grid thumbnail과 CPU/IO를 경쟁한다. Bootstrap이 직접 `api.full_app.get_thumbnail()`을 호출하는 경로는 full-app HTTP middleware를 지나지 않으므로, thumbnail 요청이 background pause로 반영되지 않을 수 있다.
 - 수정 패턴: `api/full_app.py::_lifespan_background_init()`에서 composite warm은 `STARTUP_COMPOSITE_WARM_DELAY_SECONDS` 이후에 실행하고, 실행 직전 `BACKGROUND_TASKS_PAUSED` 및 최근 user thumbnail 요청 idle window를 확인한다. `get_thumbnail()`은 internal startup warm이 아닌 user thumbnail request time을 기록한다. 운영/개발 start script에는 delay/idle env를 명시한다.
 - 확인 신호: cold server 별도 포트를 띄운 뒤 `unknown` 5000장 grid probe를 즉시와 warm 충돌 타이밍에 반복한다. 정상 신호는 `thumbnailNetwork.p90`이 한 자리~수십 ms 범위이고 `visibleLoadedMs`가 1초 안팎 이하인 것이다. 느린 원인을 숨기려고 E2E timeout을 늘리지 않는다.
+
+## 2026-09-11 응답 경합 및 피라미드 회귀
+- loadPositions/loadAnnotations는 응답 적용 직전 요청 세대/이미지/folder/AbortSignal 확인. 호출자에서 뒤늦게 검사하는 것만으로 내부 chips mutation을 막을 수 없다.
+- MY LOT 조회는 요청 그룹에만 반영하고 저장 대상은 시작 시 고정한다. HTTP200을 전부 저장 성공으로 표시하지 말고 success_count/duplicate_count/error_count를 사용한다.
+- Next/Prev fallback은 자기 재귀가 아니라 유효 인덱스를 직접 사용한다. delayed page scroll은 activePageId를 확인한다.
+- dense wafer의 WebP Q100 effort1 실패는 실제 인코더로 재현됐다. pyramid는 effort4 및 설정 Q를 사용하고 source PNG를 작은 .webp로 위장 발행하지 않는다. 고유 temp 및 실제 출력 포맷/크기 검사를 유지한다.
+- scripts/check-audit-frontend.mjs, scripts/check_pyramid_regressions.py와 정식 chunk1 audit-regressions/chunk2 P0/P1로 검증한다.
+- Composite 완료 직후 NPZ/positions 누락은 daemon 저장 수명주기를 확인한다. create_composite_heatmaps의 1500ms 지연 NPZ writer가 다음 cleanup 이후 파일을 쓰던 경합을 없앴다. 필요한 NPZ/positions/gradient 저장은 기존 executor 안에서 완료 전에 끝내며 NPZ unique temp+atomic replace 실패는 전파한다. Chunk2 완료 직후 재시도 없는 Subset/positions 검사와 server-log-guards의 NPZ 오류 패턴을 유지한다.

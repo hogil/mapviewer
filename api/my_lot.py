@@ -35,7 +35,27 @@ def _safe_login(login_id: Optional[str]) -> str:
     """LoginId를 안전한 파일명으로 변환. 없으면 기본 fallback 반환."""
     raw = (login_id or ANONYMOUS_LOGIN_ID).strip() or ANONYMOUS_LOGIN_ID
     safe = _SAFE_SEGMENT.sub("_", raw)
-    return safe[:80] or ANONYMOUS_LOGIN_ID
+    return _safe_segment(safe[:80], ANONYMOUS_LOGIN_ID)
+
+
+def _safe_segment(value: str, default: str = "default") -> str:
+    safe = _SAFE_SEGMENT.sub("_", (value or "").strip()) or default
+    if safe in {".", ".."} or safe.endswith("."):
+        raise ValueError("예약된 이름은 사용할 수 없습니다.")
+    return safe
+
+
+def _checked_child(parent: Path, name: str) -> Path:
+    """삭제/이동 대상은 지정한 디렉터리의 실제 직계 자식이어야 한다."""
+    if (not name or name in {".", ".."} or "/" in name or "\\" in name
+            or name.endswith(".")):
+        raise ValueError("MY LOT 경로가 저장 범위를 벗어납니다.")
+    parent_resolved = parent.resolve()
+    child = parent / name
+    child_resolved = child.resolve()
+    if child_resolved != parent_resolved / name or child_resolved.parent != parent_resolved:
+        raise ValueError("MY LOT 경로가 저장 범위를 벗어납니다.")
+    return child
 
 
 def create_placeholder_image(mode: str, lot_value: str, wafer_value: str = "") -> Optional[Path]:
@@ -57,7 +77,7 @@ def create_placeholder_image(mode: str, lot_value: str, wafer_value: str = "") -
 def _user_dir(login_id: str) -> Path:
     """LoginId별 디렉토리 경로 반환: my-lot/{LoginId}/"""
     safe = _safe_login(login_id)
-    return MY_LOT_ROOT / safe
+    return _checked_child(MY_LOT_ROOT, safe)
 
 
 def _normalize_mode(mode: str) -> str:
@@ -72,8 +92,14 @@ def _group_dir(login_id: str, mode: str, group: str) -> Path:
     """Group 디렉토리 경로 반환: my-lot/{LoginId}/{mode}/{group}/"""
     user_dir = _user_dir(login_id)
     normalized_mode = _normalize_mode(mode)
-    safe_group = _SAFE_SEGMENT.sub("_", (group or "").strip()) or "default"
-    return user_dir / normalized_mode / safe_group
+    safe_group = _safe_segment(group)
+    return _checked_child(_checked_child(user_dir, normalized_mode), safe_group)
+
+
+def _positions_group_dir(login_id: str, mode: str, group: str) -> Path:
+    root = _checked_child(POSITIONS_ROOT, "my-lot")
+    user_dir = _checked_child(root, _safe_login(login_id))
+    return _checked_child(_checked_child(user_dir, _normalize_mode(mode)), _safe_segment(group))
 
 
 def _find_position_file(image_rel_path: str) -> Optional[Path]:
@@ -211,9 +237,11 @@ def _lot_folder_candidates(value: str) -> List[str]:
 
     normalized = raw.replace("\\", "/")
     basename = Path(normalized).name
+    if basename in {".", ".."} or raw in {".", ".."}:
+        raise ValueError("예약된 LOT 이름은 사용할 수 없습니다.")
     stem = Path(basename).stem
 
-    candidates = [raw, basename, stem]
+    candidates = [basename, stem]
     # 파일명 규칙: LOT_STEP_WAFER_... 에서 LOT는 첫 토큰
     if stem:
         candidates.append(stem.split("_", 1)[0])
@@ -222,7 +250,7 @@ def _lot_folder_candidates(value: str) -> List[str]:
     seen = set()
     for c in candidates:
         token = (c or "").strip()
-        if not token or token in seen:
+        if not token or token in seen or token in {".", ".."}:
             continue
         seen.add(token)
         result.append(token)
@@ -539,7 +567,7 @@ def create_group(login_id: str, mode: str, group: str) -> Dict[str, object]:
         raise ValueError("group 이름이 필요합니다.")
     login_segment = _safe_login(login_id)
     mode = _normalize_mode(mode)
-    safe_group = _SAFE_SEGMENT.sub("_", group.strip()) or "default"
+    safe_group = _safe_segment(group)
     with _LOCK:
         group_dir = _group_dir(login_segment, mode, safe_group)
         group_dir.mkdir(parents=True, exist_ok=True)
@@ -558,7 +586,7 @@ def add_entry(login_id: str, mode: str, group: str, src_path: Path) -> Dict[str,
 
     login_segment = _safe_login(login_id)
     mode = _normalize_mode(mode)
-    safe_group = _SAFE_SEGMENT.sub("_", (group or "").strip()) or "default"
+    safe_group = _safe_segment(group)
     parsed = _parse_filename(src_path.name)
 
     try:
@@ -574,7 +602,7 @@ def add_entry(login_id: str, mode: str, group: str, src_path: Path) -> Dict[str,
         if mode == "wafer":
             dst_file = group_dir / src_path.name
         else:
-            lot_folder = group_dir / parsed["root"]
+            lot_folder = _checked_child(group_dir, parsed["root"])
             lot_folder.mkdir(parents=True, exist_ok=True)
             dst_file = lot_folder / src_path.name
         if dst_file.exists():
@@ -604,7 +632,7 @@ def remove_entry(login_id: str, mode: str, group: str, filename: str) -> bool:
     """디스크에서 항목 제거. LOT 모드는 해당 LOT의 모든 이미지 제거. _manual.json도 정리."""
     login_segment = _safe_login(login_id)
     mode = _normalize_mode(mode)
-    safe_group = _SAFE_SEGMENT.sub("_", (group or "").strip()) or "default"
+    safe_group = _safe_segment(group)
     removed = False
     with _LOCK:
         group_dir = _group_dir(login_segment, mode, safe_group)
@@ -614,7 +642,7 @@ def remove_entry(login_id: str, mode: str, group: str, filename: str) -> bool:
         # 디스크 파일 직접 삭제
         if mode == "lot":
             for lot_name in _lot_folder_candidates(filename):
-                lot_folder = group_dir / lot_name
+                lot_folder = _checked_child(group_dir, lot_name)
                 if lot_folder.exists() and lot_folder.is_dir():
                     try:
                         shutil.rmtree(str(lot_folder))
@@ -627,7 +655,7 @@ def remove_entry(login_id: str, mode: str, group: str, filename: str) -> bool:
             if not removed:
                 removed = True  # manual entry만 있었어도 삭제 성공
         else:
-            target_file = group_dir / filename
+            target_file = _checked_child(group_dir, filename)
             if target_file.exists() and target_file.is_file():
                 try:
                     target_file.unlink()
@@ -662,7 +690,7 @@ def remove_entries_batch(login_id: str, mode: str, group: str, filenames: List[s
 
     login_segment = _safe_login(login_id)
     mode = _normalize_mode(mode)
-    safe_group = _SAFE_SEGMENT.sub("_", (group or "").strip()) or "default"
+    safe_group = _safe_segment(group)
 
     success_count = 0
     error_count = 0
@@ -679,7 +707,7 @@ def remove_entries_batch(login_id: str, mode: str, group: str, filenames: List[s
                     if mode == "lot":
                         if group_dir.exists():
                             for lot_name in _lot_folder_candidates(filename):
-                                lot_folder = group_dir / lot_name
+                                lot_folder = _checked_child(group_dir, lot_name)
                                 if lot_folder.exists() and lot_folder.is_dir():
                                     shutil.rmtree(str(lot_folder))
                                     success_count += 1
@@ -691,7 +719,7 @@ def remove_entries_batch(login_id: str, mode: str, group: str, filenames: List[s
                             found = True  # manual entry만 있었어도 성공
                             success_count += 1
                     else:
-                        target_file = group_dir / filename
+                        target_file = _checked_child(group_dir, filename)
                         if target_file.exists() and target_file.is_file():
                             target_file.unlink()
                             success_count += 1
@@ -730,10 +758,10 @@ def create_manual_entry(login_id: str, mode: str, group: str, lot: str, wafer: s
         
     login_segment = _safe_login(login_id)
     mode = _normalize_mode(mode)
-    safe_group = _SAFE_SEGMENT.sub("_", (group or "").strip()) or "default"
+    safe_group = _safe_segment(group)
     
     # LOT 이름 안전하게 변환
-    safe_lot = _SAFE_SEGMENT.sub("_", lot.strip())
+    safe_lot = _safe_segment(lot)
     
     with _LOCK:
         group_dir = _group_dir(login_segment, mode, safe_group)
@@ -742,7 +770,7 @@ def create_manual_entry(login_id: str, mode: str, group: str, lot: str, wafer: s
         now_iso = __import__('datetime').datetime.utcnow().isoformat() + "Z"
 
         # 이��지 없이 LOT 폴더만 생성
-        lot_folder = group_dir / safe_lot
+        lot_folder = _checked_child(group_dir, safe_lot)
         lot_folder.mkdir(parents=True, exist_ok=True)
 
         if mode == "lot":
@@ -788,55 +816,64 @@ def delete_group(login_id: str, mode: str, group: str) -> bool:
     """그룹 디렉토리 삭제 (내부 파일 포함)."""
     login_segment = _safe_login(login_id)
     mode = _normalize_mode(mode)
-    safe_group = _SAFE_SEGMENT.sub("_", (group or "").strip()) or "default"
+    safe_group = _safe_segment(group)
     deleted = False
     with _LOCK:
         group_dirs = [
             _group_dir(login_segment, mode, safe_group),
-            POSITIONS_ROOT / "my-lot" / login_segment / mode / safe_group,
+            _positions_group_dir(login_segment, mode, safe_group),
         ]
         for group_dir in group_dirs:
             if not group_dir.exists() or not group_dir.is_dir():
                 continue
-            try:
-                shutil.rmtree(str(group_dir))
-                deleted = True
-            except Exception:
-                pass
+            shutil.rmtree(str(group_dir))
+            deleted = True
     return deleted
 
 
 def rename_group(login_id: str, mode: str, old_name: str, new_name: str) -> bool:
-    """그룹 디렉토리 이름 변경."""
+    """이미지와 positions 그룹을 함께 이동하고 실패 시 이미지를 복원한다."""
     login_segment = _safe_login(login_id)
     mode = _normalize_mode(mode)
-    safe_old = _SAFE_SEGMENT.sub("_", (old_name or "").strip()) or "default"
-    safe_new = _SAFE_SEGMENT.sub("_", (new_name or "").strip()) or "default"
+    safe_old = _safe_segment(old_name)
+    safe_new = _safe_segment(new_name)
     
-    if safe_old == safe_new:
-        return True
-    
-    renamed = False
     with _LOCK:
         old_dir = _group_dir(login_segment, mode, safe_old)
         new_dir = _group_dir(login_segment, mode, safe_new)
+        old_positions = _positions_group_dir(login_segment, mode, safe_old)
+        new_positions = _positions_group_dir(login_segment, mode, safe_new)
         
         if not old_dir.exists() or not old_dir.is_dir():
             return False
         
-        if new_dir.exists():
-            return False  # 새 이름이 이미 존재
-        
+        if safe_old == safe_new:
+            return True
+        if new_dir.exists() or new_positions.exists():
+            raise ValueError("새 그룹 이름의 이미지 또는 positions 폴더가 이미 존재합니다.")
+
+        old_dir.rename(new_dir)
         try:
-            old_dir.rename(new_dir)
-            renamed = True
-        except Exception:
-            pass
-    
-    return renamed
+            if old_positions.exists():
+                old_positions.rename(new_positions)
+        except OSError:
+            try:
+                new_dir.rename(old_dir)
+            except OSError as rollback_error:
+                raise RuntimeError("positions 이름 변경과 이미지 폴더 복원이 모두 실패했습니다.") from rollback_error
+            raise
+
+    return True
 
 
 def add_lot_batch(login_id: str, mode: str, group: str, image_paths: List[Path], path_lot_wafer: dict = None) -> Dict[str, object]:
+    # Workers copy files directly without taking _LOCK; rename/delete must wait
+    # until every image and its positions file have reached the same group.
+    with _LOCK:
+        return _add_lot_batch_locked(login_id, mode, group, image_paths, path_lot_wafer)
+
+
+def _add_lot_batch_locked(login_id: str, mode: str, group: str, image_paths: List[Path], path_lot_wafer: dict = None) -> Dict[str, object]:
     """
     여러 이미지를 그룹에 일괄 복사.
 
@@ -858,7 +895,7 @@ def add_lot_batch(login_id: str, mode: str, group: str, image_paths: List[Path],
 
     login_segment = _safe_login(login_id)
     mode = _normalize_mode(mode)
-    safe_group = _SAFE_SEGMENT.sub("_", (group or "").strip()) or "default"
+    safe_group = _safe_segment(group)
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -866,7 +903,7 @@ def add_lot_batch(login_id: str, mode: str, group: str, image_paths: List[Path],
     group_dir.mkdir(parents=True, exist_ok=True)
     images_root_str = str(IMAGES_ROOT.resolve())
 
-    # 1. 복사 작업 리스트 생성 (경량, 락 불필요)
+    # 1. 복사 작업 리스트 생성
     copy_tasks = []  # [(src_path, dst_image), ...]
     duplicate_count = 0
 
@@ -896,7 +933,7 @@ def add_lot_batch(login_id: str, mode: str, group: str, image_paths: List[Path],
         if mode == "wafer":
             dst_image = group_dir / src_path.name
         else:
-            lot_folder = group_dir / lot_val
+            lot_folder = _checked_child(group_dir, lot_val)
             if lot_val not in lot_dirs_created:
                 lot_folder.mkdir(parents=True, exist_ok=True)
                 lot_dirs_created.add(lot_val)
