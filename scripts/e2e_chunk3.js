@@ -1157,7 +1157,10 @@ const { createRunner } = require('./e2e_playwright_session');
     const addDialogs = await withAutoDialogs(async () => {
       await page.locator('#add-class-btn').click({ timeout: 10000 });
     });
-    await page.waitForFunction(
+    const deadline = Date.now() + 20000;
+    let ready = false;
+    do {
+      ready = await page.evaluate(
       async ({ expectedMode, names }) => {
         if (window.viewer?.classMode !== expectedMode) return false;
         const classButtons = Array.from(document.querySelectorAll('#class-list button'))
@@ -1174,9 +1177,12 @@ const { createRunner } = require('./e2e_playwright_session');
           labelFolders.includes(name)
         );
       },
-      { expectedMode: mode, names: classNames },
-      { timeout: 20000 }
-    );
+        { expectedMode: mode, names: classNames }
+      );
+      if (ready) break;
+      await sleep(100);
+    } while (Date.now() < deadline);
+    expect(ready, `Class creation did not settle: ${JSON.stringify({ mode, classNames })}`);
     await refreshClassificationUi(mode, classNames);
     return {
       ...(await getClassificationUiState(classNames)),
@@ -1434,20 +1440,15 @@ const { createRunner } = require('./e2e_playwright_session');
   }
 
   async function waitForClassFileCount(mode, className, expectedCount, comparator = 'eq') {
-    await page.waitForFunction(
-      async ({ expectedMode, targetClass, count, op }) => {
-        const labelPath = `${expectedMode === 'chip' ? 'classification_chips' : 'classification'}/${targetClass}`;
-        const response = await fetch(`/api/files?path=${encodeURIComponent(labelPath)}`, { cache: 'no-store' });
-        if (!response.ok) return false;
-        const body = await response.json();
-        const fileCount = (body.items || []).filter((item) => item.type === 'file').length;
-        if (op === 'gte') return fileCount >= count;
-        return fileCount === count;
-      },
-      { expectedMode: mode, targetClass: className, count: expectedCount, op: comparator },
-      { timeout: 30000 }
-    );
-    return await getClassFiles(mode, className);
+    const deadline = Date.now() + 30000;
+    let result;
+    do {
+      result = await getClassFiles(mode, className);
+      if (result.ok && (comparator === 'gte'
+        ? result.count >= expectedCount : result.count === expectedCount)) return result;
+      await sleep(100);
+    } while (Date.now() < deadline);
+    throw new Error(`Class file count did not reach ${comparator} ${expectedCount}: ${JSON.stringify(result)}`);
   }
 
   async function getLabelFolderLocator(className) {

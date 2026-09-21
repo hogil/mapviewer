@@ -1234,7 +1234,7 @@ function Invoke-E2EServerLogGuards {
                     pattern = "stats.json.tmp"
                 }
             }
-            foreach ($pattern in @("[PYRAMID] 오류:", "[PYRAMID] 파일 생성 실패", "encoding error 6", "unable to call webpsave", "[IMAGE API ERROR]", "[NPZ] save failed", "[NPZ] rename failed", "[COMPOSITE POSITIONS] copy failed")) {
+            foreach ($pattern in @("[PYRAMID] 오류:", "[PYRAMID] 파일 생성 실패", "encoding error 6", "unable to call webpsave", "unable to call jpegsave", "[THUMBNAIL_GENERATION_ERROR]", "썸네일 생성 중 오류:", "[IMAGE API ERROR]", "[NPZ] save failed", "[NPZ] rename failed", "[COMPOSITE POSITIONS] copy failed")) {
                 if ($text.Contains($pattern)) {
                     $matches += [pscustomobject]@{ file = $logPath; pattern = $pattern }
                 }

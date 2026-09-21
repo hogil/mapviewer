@@ -4260,6 +4260,14 @@ export class ChipAnnotator {
 
         // Ctrl+A: Select all visible chips (excluding bottom-filtered chips)
         if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
+            const target = e.target;
+            const isEditableTarget = target && (
+                target.matches?.('input, textarea, select, [contenteditable="true"], [contenteditable=""]') ||
+                target.isContentEditable === true ||
+                target.closest?.('input, textarea, select, [contenteditable="true"], [contenteditable=""]')
+            );
+            if (isEditableTarget) return;
+
             // Only handle in single image mode (not in grid mode)
             if (this.viewer && !this.viewer.gridMode && this.chips.length > 0) {
                 e.preventDefault();

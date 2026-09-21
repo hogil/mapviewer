@@ -3403,9 +3403,39 @@ async def get_gradient_stats(request: Request):
     path = request.query_params.get("path", "")
     if not path:
         raise HTTPException(status_code=400, detail="path 파라미터가 필요합니다.")
-    # path에서 composite 결과 디렉토리 추출
-    image_path = IMAGES_ROOT / path
+
+    # Keep the same path contract as image/thumbnail APIs: a path may resolve
+    # under ROOT_DIR or the user-selected current_folder, but never elsewhere.
+    raw_path = Path(str(path).strip())
+    try:
+        image_path = safe_resolve_path(path)
+        if not image_path.exists() and not raw_path.is_absolute():
+            current_candidate = (current_folder / raw_path).resolve()
+            current_candidate.relative_to(current_folder.resolve())
+            if current_candidate.exists():
+                image_path = current_candidate
+    except (HTTPException, ValueError):
+        if raw_path.is_absolute():
+            current_candidate = raw_path.resolve()
+        else:
+            current_candidate = (current_folder / raw_path).resolve()
+        try:
+            current_candidate.relative_to(current_folder.resolve())
+        except ValueError:
+            raise HTTPException(status_code=403, detail="Access denied")
+        image_path = current_candidate
+
     stats_path = image_path.parent / "gradient_stats.json"
+    try:
+        resolved_stats_path = stats_path.resolve()
+        allowed_roots = (ROOT_DIR.resolve(), current_folder.resolve())
+        if not any(resolved_stats_path.is_relative_to(root) for root in allowed_roots):
+            raise HTTPException(status_code=403, detail="Access denied")
+        stats_path = resolved_stats_path
+    except HTTPException:
+        raise
+    except OSError:
+        raise HTTPException(status_code=403, detail="Access denied")
     if not stats_path.exists():
         return {"stats": None}
     try:
@@ -5565,7 +5595,73 @@ def _mutable_image_snapshot(image_path: Path, max_bytes: Optional[int] = None) -
         return image_path.read_bytes()
 
 
+_thumbnail_publish_lock = Lock()
+
+
+def _read_thumbnail_bytes(path: Path) -> bytes:
+    # Windows cannot replace a file while an unshared reader holds it open.
+    with _thumbnail_publish_lock:
+        return path.read_bytes()
+
+
 def _generate_thumbnail_sync(
+    image_path: Path,
+    thumbnail_path: Path,
+    size: Tuple[int, int],
+    personalized: bool = False,
+    scheme: Optional[str] = None,
+    force_jpeg_encoder: Optional[str] = None,
+    grade_filter: Optional[str] = None,
+    bottom_filter: Optional[str] = None,
+    border_normalize: bool = False,
+    measure_overlay: Optional[str] = None,
+    bin_overlay: bool = False,
+    gradient_filter: Optional[str] = None,
+):
+    # Publish only complete images; every encoder and deferred overlay uses this path.
+    for attempt in range(2):
+        temporary = thumbnail_path.with_name(f".thumb-{uuid.uuid4().hex}{thumbnail_path.suffix}")
+        try:
+            _render_thumbnail_sync(
+                image_path, temporary, size, personalized, scheme, force_jpeg_encoder,
+                grade_filter, bottom_filter, border_normalize, measure_overlay,
+                bin_overlay, gradient_filter,
+            )
+            if not temporary.exists():
+                if not image_path.exists():
+                    return
+                raise FileNotFoundError(f"Thumbnail output disappeared: {temporary}")
+            if temporary.stat().st_size == 0:
+                raise RuntimeError("Thumbnail encoder produced an empty file")
+            with _thumbnail_publish_lock:
+                os.replace(temporary, thumbnail_path)
+            return
+        except Exception as exc:
+            # libvips wraps ENOENT in its own Error; only retry a vanished output
+            # directory or a missing temporary file at publication, not encoder errors.
+            if attempt == 0 and image_path.exists() and (
+                not thumbnail_path.parent.exists()
+                or (not temporary.exists() and (
+                    isinstance(exc, FileNotFoundError)
+                    or 'No such file or directory' in str(exc)
+                ))
+            ):
+                continue
+            logger.error(f"[THUMBNAIL_GENERATION_ERROR] 썸네일 생성 중 오류: {image_path} -> {thumbnail_path}, 오류: {exc}")
+            raise
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+def _thumbnail_cache_stat(path: Path):
+    try:
+        result = path.stat()
+        return result if result.st_size > 0 else None
+    except FileNotFoundError:
+        return None
+
+
+def _render_thumbnail_sync(
     image_path: Path,
     thumbnail_path: Path,
     size: Tuple[int, int],
@@ -5623,6 +5719,17 @@ def _generate_thumbnail_sync(
                         _avg_gradient_filter_set = set(int(x) for x in gradient_filter.split(",") if x.strip().isdigit())
                     except Exception:
                         pass
+
+            def _apply_pil_gradient_filter(img):
+                if img.mode == 'P' and _avg_gradient_filter_set:
+                    from .personal_colors import plte_gradient_filter_patch_memory
+                    with io.BytesIO() as buffer:
+                        img.save(buffer, format='PNG')
+                        filtered = plte_gradient_filter_patch_memory(
+                            bytearray(buffer.getvalue()), _avg_gradient_filter_set,
+                        )
+                    with Image.open(io.BytesIO(filtered)) as patched:
+                        img.putpalette(patched.getpalette())
 
             if not _need_pyvips:
                 # 🔥 pyvips fast path: 모든 이미지 타입에 pyvips.thumbnail 사용 (PIL 대비 1.4~2x 빠름)
@@ -5707,6 +5814,7 @@ def _generate_thumbnail_sync(
                                     pal[off+2] = int(b0 + (b1 - b0) * t)
                                 img.putpalette(pal[:768])
                         img = _force_selected_shot_empty_slot_image(image_path, img)
+                    _apply_pil_gradient_filter(img)
                     if img.mode not in ('RGB', 'RGBA'):
                         img = img.convert('RGB')
                     target_w, target_h = size
@@ -5748,8 +5856,7 @@ def _generate_thumbnail_sync(
                 base_thumb = get_thumbnail_path(image_path, size, scheme=scheme, variant=None)
                 if base_thumb.exists() and base_thumb.stat().st_size > 0:
                     try:
-                        with open(base_thumb, 'rb') as tf:
-                            thumb_data = bytearray(tf.read())
+                        thumb_data = bytearray(_read_thumbnail_bytes(base_thumb))
                         parts = _deferred_measure_overlay.split(":", 1)
                         if len(parts) == 2:
                             m_field, m_key = parts
@@ -5938,6 +6045,8 @@ def _generate_thumbnail_sync(
                                         pass  # PNG 그대로 저장
                                 with open(thumbnail_path, 'wb') as tf:
                                     tf.write(overlay)
+                except OSError:
+                    raise  # Do not publish truncated output after an overlay write failure.
                 except Exception as e:
                     logger.warning(f"⚠️ [DEFERRED RATIO] 썸네일 오버레이 실패: {e}")
 
@@ -5973,6 +6082,7 @@ def _generate_thumbnail_sync(
             pil_image = Image.open(io.BytesIO(source_bytes) if source_bytes is not None else image_path)
 
         with pil_image as img:
+            _apply_pil_gradient_filter(img)
             if img.mode not in ('RGB', 'RGBA'):
                 img = img.convert('RGB')
 
@@ -5994,8 +6104,7 @@ def _generate_thumbnail_sync(
                 save_kwargs["method"] = 1
 
             resized.save(thumbnail_path, fmt, **save_kwargs)
-    except Exception as e:
-        logger.error(f"썸네일 생성 중 오류: {image_path} -> {thumbnail_path}, 오류: {e}")
+    except Exception:
         raise
 
 async def generate_thumbnail(
@@ -6043,7 +6152,7 @@ async def generate_thumbnail(
                 image_mtime = image_path.stat().st_mtime
             except Exception:
                 return None, 'stat_error'
-            if thumb.exists() and thumb.stat().st_size > 0:
+            if _thumbnail_cache_stat(thumb) is not None:
                 try:
                     if thumb.stat().st_mtime >= image_mtime:
                         return image_mtime, 'cached'
@@ -6067,20 +6176,13 @@ async def generate_thumbnail(
 
         async with THUMBNAIL_SEM:
             # 다시 한번 확인 (레이스 컨디션 방지)
-            if thumb.exists() and thumb.stat().st_size > 0:
+            if _thumbnail_cache_stat(thumb) is not None:
                 try:
                     if thumb.stat().st_mtime >= image_mtime:
                         THUMB_STAT_CACHE.set(key, True)
                         return thumb
                 except Exception:
                     pass
-            
-            # 기존 썸네일 삭제 (구버전인 경우)
-            if thumb.exists():
-                try:
-                    thumb.unlink()
-                except Exception as e:
-                    logger.warning(f"기존 썸네일 삭제 실패: {thumb}, 오류: {e}")
             
             # 새 썸네일 생성
             gen_start = time.time()
@@ -6104,7 +6206,7 @@ async def generate_thumbnail(
                 gen_elapsed = time.time() - gen_start
                 
                 # 생성된 썸네일 확인
-                if thumb.exists() and thumb.stat().st_size > 0:
+                if _thumbnail_cache_stat(thumb) is not None:
                     THUMB_STAT_CACHE.set(key, True)
                     return thumb
                 else:
@@ -8003,6 +8105,8 @@ async def get_measure_thumb(
     color_source: Optional[str] = Query(None),
 ):
     """Measure 경량 썸네일 — positions JSON만 읽어 gradient heatmap 생성 (이미지 로드 없음, ~3ms)."""
+    if size <= 0:
+        raise HTTPException(status_code=400, detail="size는 1 이상의 정수여야 합니다.")
     if not scheme:
         scheme = get_user_color_scheme(_current_login_id(request))
     image_path = Path(path) if Path(path).is_absolute() else ROOT_DIR / path
@@ -8185,9 +8289,18 @@ async def get_measure_thumb_batch(request: Request, body: dict = Body(...)):
     Body: {"path":"...", "items":[{"field":"f","key":"1000"},...],"size":512}
     Returns: {"f:1000":"base64...","q:500":"base64...",...}"""
     import base64
+    raw_size = body.get("size", 256)
+    if isinstance(raw_size, bool) or not isinstance(raw_size, (int, str)):
+        raise HTTPException(status_code=400, detail="size는 정수여야 합니다.")
+    try:
+        size = int(raw_size)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="size는 정수여야 합니다.")
+    if size <= 0:
+        raise HTTPException(status_code=400, detail="size는 1 이상의 정수여야 합니다.")
+
     path = body.get("path", "")
     items = body.get("items", [])
-    size = body.get("size", 256)
     scheme = body.get("scheme")
     gradient_filter = body.get("gradient_filter")
     color_source = body.get("color_source")
@@ -8253,6 +8366,9 @@ async def get_thumbnail(
     gradient_filter: Optional[str] = None,
 ):
     try:
+        if size <= 0:
+            raise HTTPException(status_code=400, detail="size는 1 이상의 정수여야 합니다.")
+
         global LAST_THUMBNAIL_REQUEST_AT
         if not _is_internal_startup_warm_request(request):
             LAST_THUMBNAIL_REQUEST_AT = time.monotonic()
@@ -8339,7 +8455,7 @@ async def get_thumbnail(
                                             scheme=scheme if personalized else None,
                                             variant=variant,
                                             cached_stat=_path_stat)
-            if thumb_path.exists() and thumb_path.stat().st_size > 0:
+            if _thumbnail_cache_stat(thumb_path) is not None:
                 try:
                     if thumb_path.stat().st_mtime >= _path_stat.st_mtime:
                         return image_path, 'cached', thumb_path
@@ -8355,7 +8471,7 @@ async def get_thumbnail(
                 border_normalize=border_normalize, measure_overlay=measure_overlay,
                 bin_overlay=bin_overlay, gradient_filter=gradient_filter,
             )
-            if thumb_path.exists() and thumb_path.stat().st_size > 0:
+            if _thumbnail_cache_stat(thumb_path) is not None:
                 return image_path, 'generated', thumb_path
             return image_path, 'failed', None
 
@@ -8372,7 +8488,7 @@ async def get_thumbnail(
         elif status == 'failed' or not thumb:
             return await get_image(request, path, personalized=personalized, scheme=scheme,
                                    grade_filter=grade_filter, bottom_filter=bottom_filter,
-                                   border_normalize=border_normalize)
+                                   border_normalize=border_normalize, gradient_filter=gradient_filter)
 
         try:
             if thumb and thumb.exists():
@@ -8403,7 +8519,7 @@ async def get_thumbnail(
                 # 🔥 메모리 기반 응답 — FileResponse는 stat()→read() 사이 파일 변경 시
                 # "Response content longer than Content-Length" 에러 발생 (색 변경 시 캐시 무효화 경합)
                 try:
-                    content = thumb.read_bytes()
+                    content = _read_thumbnail_bytes(thumb)
                     return Response(content=content, media_type=content_type, headers=headers)
                 except Exception as read_error:
                     logger.warning(f"썸네일 읽기 실패, 원본 제공 폴백: {read_error}")
@@ -8415,6 +8531,7 @@ async def get_thumbnail(
                         grade_filter=grade_filter,
                         bottom_filter=bottom_filter,
                         border_normalize=border_normalize,
+                        gradient_filter=gradient_filter,
                     )
             else:
                 # 썸네일 생성 실패 시 원본 이미지 제공
@@ -8427,6 +8544,7 @@ async def get_thumbnail(
                     grade_filter=grade_filter,
                     bottom_filter=bottom_filter,
                     border_normalize=border_normalize,
+                    gradient_filter=gradient_filter,
                 )
         except Exception as thumb_error:
             logger.warning(f"썸네일 생성 실패, 원본 이미지 제공: {thumb_error}")
@@ -8438,6 +8556,7 @@ async def get_thumbnail(
                 grade_filter=grade_filter,
                 bottom_filter=bottom_filter,
                 border_normalize=border_normalize,
+                gradient_filter=gradient_filter,
             )
     except HTTPException:
         raise
@@ -10189,6 +10308,8 @@ async def change_folder(request: Request):
             "current_folder": str(current_folder),
             "current_folder_prefix": current_folder_prefix
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"폴더 변경 실패: {e}")
         raise HTTPException(status_code=500, detail=f"폴더 변경 실패: {str(e)}")

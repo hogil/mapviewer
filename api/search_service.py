@@ -63,6 +63,7 @@ class SearchService:
             "unknown_normal_pre",
             "unknown_384",
             "unknown_448",
+            "object_id_map_compare",
         }
         self.supported_exts = supported_exts or set()
         self.fallback_max_files = fallback_max_files
@@ -338,6 +339,13 @@ class SearchService:
         before_index_filter = len(bucket)
         bucket = [rel for rel in bucket if Path(rel).name not in index_file_names]
         timings["index_files_filtered"] = before_index_filter - len(bucket)
+
+        # Cached indices also contain metadata/array files; match live-scan rules
+        # before pagination so counts and page contents describe renderable images.
+        before_extension_filter = len(bucket)
+        if self.supported_exts:
+            bucket = [rel for rel in bucket if Path(rel).suffix.lower() in self.supported_exts]
+        timings["unsupported_files_filtered"] = before_extension_filter - len(bucket)
 
         results = bucket[offset : offset + limit]
         timings["logical_eval_ms"] = elapsed_ms

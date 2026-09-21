@@ -470,3 +470,46 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
 - 삭제 중 이미지 조회: `get_image`에서 현재 source와 filename이 같은 FileNotFoundError는404로 반환한다. 다른 내부 파일 오류까지404로 숨기지 않는다. `check_extended_batch.py`는 source lookup 후 삭제404와 다른 내부 파일 실패500을 구분한다. `api/my_lot.py::delete_group`는 images rmtree 실패를 전파하여 positions만 지우고 성공을 반환하지 않는다.
 - 추가 탐색 원인: `scheduleShowGrid`의 예약된 열 수 렌더링이 단일뷰 진입 뒤 실행되어 grid 출처를 지웠다. 예약 당시 page id와 실행 시 grid 모드를 검사한다. seed17의 열 변경→단일뷰→Grade→Next→복귀32장 신호 및 `check-audit-frontend.mjs`의 예약 렌더 취소 검사를 유지한다.
 - Windows 복사본 읽기/삭제: thumbnail뿐 아니라 pyramid/background, 원본 응답, 칩 grade와 palette numpy decode도 PNG 핸들을 유지했다. `api/full_app.py::_mutable_image_guard/_mutable_image_snapshot`은 classification/classification_chips/my-lot의 짧은 source read만 같은 그룹 mutation과 직렬화하고, decode/응답은 bytes를 사용한다. class delete/rename/batch-delete는 worker에서 대기하며 MY LOT은 기존 storage lock을 공유한다. 원본 immutable decoder와 HEAD 헤더 응답은 유지한다. `check_mutable_thumbnail.py`, `check_mutable_image_races.py` 및 `storage-active-class-delete/storage-save-rename-delete`가 열린16MB reader·다른그룹 진행·실제삭제·이미지/positions 보존을 검증한다. 정확히 삭제된 현재 source의 pipeline 작업은 취소/404이며 내부 캐시 오류를 함께 숨기지 않는다.
+
+- Thumbnail publication/cache deletion regression (2026-09-22):
+  - Root cause: `api/full_app.py::_generate_thumbnail_sync()` wrote directly to public cache files after a one-time mkdir; cleanup could remove the output parent, concurrent requests could read partial files, and exists/stat checks could race with deletion. Concurrent atomic replaces also collided on Windows in the isolated stress test.
+  - Fix: render all encoders/overlays to unique sibling temporary files, publish under a short process-local lock with `os.replace`, retry once only for a vanished output, preserve the previous complete cache on encoder failure, and treat missing cache stat as a miss. `get_thumbnail()` original-image fallbacks now forward `gradient_filter`, which previously disappeared in all four fallback branches.
+  - Focused guard: `scripts/check_thumbnail_publication.py` exercises native JPEG/WebP/PNG parent deletion, 40 concurrent writers, failed partial output, missing stat, and gradient-filter fallback calls; `scripts/check_mutable_thumbnail.py` retains source rename/delete coverage.
+  - E2E signal: extended `edge-thumbnail-publication` checks 96 concurrent filtered thumbnails for HTTP success, actual image decoding and dimensions. Output-parent deletion and original-image fallback filter forwarding are exercised by focused tests; they are not browser cache-cleanup coverage. Continuous external deletion and cross-process writers are not guaranteed by a process-local publication lock.
+
+- Average-map gradient fallback regression (2026-09-22):
+  - Root cause: `api/full_app.py::_render_thumbnail_sync()` applied average/weighted/mean gradient selection only in the native branch. Native decode/import failure entered PIL fallback and exposed unselected palette ranges.
+  - Fix: both PIL paths apply the existing `plte_gradient_filter_patch_memory` palette contract before RGB conversion.
+  - Focused guard: `scripts/check_thumbnail_gradient_fallback.py` compares selected green/unselected white pixels across three map names and native success/decode failure/import failure (nine combinations).
+  - E2E signal: after selecting a gradient range, thumbnail and original fallback must retain the same selected ranges; extended `edge-thumbnail-publication` also decodes 96 concurrent filtered HTTP thumbnails and verifies requested dimensions and unchanged visible grid. Server-log guards reject JPEG encoder and thumbnail-generation error logs.
+
+- Indexed search non-image results (2026-09-22):
+  - Observed: full E2E phase 3v returned `.npy` paths from real derived-map folders in both 100-LOT and LOT/wafer results, despite passing count checks. Those paths cannot render as supported images.
+  - Root cause: `api/search_service.py::SearchService.search()` trusted all indexed filenames while live filesystem fallback already checked `supported_exts`.
+  - Fix: filter indexed candidates with the same supported extensions before pagination and total calculation; retain valid matching images in derived folders and retain the underlying file index.
+  - Guards: `scripts/check_search_image_results.py` tests exact/logical/LOT/LOT-wafer modes, root/folder scopes and two pages (16 combinations). `scripts/e2e_chunk1.js` phase 3v now rejects non-image paths in 100-LOT and LOT/wafer UI results.
+
+- Editable keyboard and MY LOT commit interactions (2026-09-22):
+  - Root cause: `js/chip-annotator.js::_handleKeyDown()` intercepted Ctrl+A in editable controls during single-image view. MY LOT manual editors committed on keydown and again on bubbling blur, starting duplicate image searches.
+  - Fix: leave editable-target Ctrl+A to the browser; keep noneditable chip selection. Both manual editor completion callbacks in `js/my-lot.js` are idempotent.
+  - Guards: `scripts/check_chip_keyboard.mjs` exercises editable controls in grid/single states and normal chip selection; extended navigation uses real input selection and visible grid/single transitions. MY LOT edit keydown plus blur must issue one completion search per edit; live input preview searches are measured separately.
+
+- API invalid-input and gradient-stat boundary regressions (2026-09-22):
+  - Root causes: thumbnail bootstrap bypassed FastAPI parameter validation; nonpositive thumbnail/Measure dimensions reached encoders. `change_folder()` swallowed its own HTTPException into 500. `get_gradient_stats()` joined untrusted paths without resolved containment, including the stats file itself.
+  - Fix: reject missing thumbnail paths, malformed/nonpositive sizes and noninteger batch sizes before rendering; retain intended folder errors; constrain resolved gradient-stat paths to ROOT_DIR/current_folder, including symlink targets. External folder selection remains supported by the existing application contract.
+  - Guards: `scripts/check_api_boundaries.py` uses isolated valid/outside/current-folder fixtures, error mapping, invalid sizes and default/custom forwarding. Extended `edge-invalid-inputs` checks those HTTP rejections while preserving the visible grid.
+
+- Thumbnail Windows reader/publication regression found by extended E2E (2026-09-22):
+  - Extended session 074428 returned one HTTP 500/WinError 5 during simultaneous filtered thumbnails: atomic writers were serialized, but `get_thumbnail()` still held a read handle while another writer replaced the file.
+  - Fix: `_read_thumbnail_bytes()` shares the short publication lock with `os.replace`; both HTTP thumbnail reads and deferred-overlay base-cache reads use it. Encoding stays outside the lock. Empty render output never replaces an existing valid cache; overlay disk-write failures propagate.
+  - Guards: focused test holds a real cache file open during publication and requires the writer to wait. Extended `edge-thumbnail-publication` now checks 96 requests (three filter variants, four sizes, eight requests per cache key). ASCII `[THUMBNAIL_GENERATION_ERROR]` makes the log guard independent of PowerShell source encoding.
+
+- MY LOT comparison-map source regression (2026-09-22):
+  - Final full session 075014 failed the 30-wafer positions check for AAB185 and AEL848: source chips833, saved copy chips0. Live search confirmed `object_id_map_compare_260914` images appeared before the real wafer images; MY LOT filename deduplication selected those comparison images, which have no positions. This was not a positions-copy race.
+  - Fix: add `object_id_map_compare` to SearchService's existing global-only derivative exclusions. Explicit folder searches remain available; no broad unknown/training-folder exclusion or filename-based positions fallback is added.
+  - Guards: `check_search_image_results.py` verifies exact/logical/LOT global exclusion and explicit comparison-folder access. Full E2E `mylot-wafer30-lot10-perf` requires every saved wafer's positions count to equal its source and remain positive.
+
+- Class-file E2E polling regression (2026-09-22):
+  - Chunk3 rerun 080313 reported chip-copy label count0 even though classify/chips returned2 saved. `waitForClassFileCount()` passed an async fetch predicate into `page.waitForFunction`; installed Playwright checks the returned Promise for truthiness before its boolean value, so the first false result ended the wait.
+  - Fix: explicitly await `getClassFiles()` inside bounded polling with the existing30s limit, and return the same response that satisfied the expected count. Apply the same awaited polling to `addClassesViaUi()` with its existing20s deadline. Do not change application behavior or relax assertions/timeouts for this harness failure.
+  - Guard: `label-wafer-crud` must finish the real class-button save before accepting the resulting file count, including the wafer-copy to chip-label path.

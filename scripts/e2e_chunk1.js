@@ -2473,6 +2473,8 @@ const auditRegressions = require('./e2e_audit_regressions');
         expect(data.success === true, `${name} failed run=${i + 1} data=${JSON.stringify(data).slice(0, 700)}`);
         expect(data.parsedCount === expectedLots.length, `${name} parsedCount=${data.parsedCount} expected=${expectedLots.length}`);
         expect(data.images.length >= expectedLots.length, `${name} count=${data.images.length} expected>=${expectedLots.length}`);
+        const unsupported = data.images.filter(value => !/\.(?:png|jpe?g|bmp|tiff?|webp|gif)$/i.test(value));
+        expect(unsupported.length === 0, `${name} non-image results=${JSON.stringify(unsupported.slice(0, 5))}`);
         validateExpectedLots(`${name} run=${i + 1}`, data.images, expectedLots, { allowOutsideUnknown });
         runs.push({
           elapsedMs: data.elapsedMs,

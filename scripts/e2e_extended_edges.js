@@ -119,6 +119,17 @@ const { createExtendedRunner } = require('./e2e_extended_common');
       expect(allowed.includes(result.status), `${name}: expected ${allowed}, actual ${result.status} ${JSON.stringify(result.data)}`);
     };
     await check('missing-image', '/api/image?path=unknown/e2e_ext_missing.png', {}, [404]);
+    await check('thumbnail-missing-path', '/api/thumbnail?size=256', {}, [400]);
+    for (const size of ['0', '-1', 'bad']) {
+      await check(`thumbnail-size-${size}`, `/api/thumbnail?path=${encodeURIComponent(paths[0])}&size=${size}`, {}, [400]);
+    }
+    for (const size of [0, -1, 'bad', 1.5, true, null]) {
+      await check(`measure-batch-size-${size}`, '/api/measure-thumb-batch', {
+        method: 'POST', body: { path: paths[0], items: [{ field: 'f', key: '1' }], size },
+      }, [400]);
+    }
+    await check('measure-negative-size', `/api/measure-thumb?path=${encodeURIComponent(paths[0])}&field=f&key=1&size=-1`, {}, [400]);
+    await check('gradient-path-traversal', '/api/gradient-stats?path=../e2e-outside/average.png', {}, [403]);
     for (const group of ['.', '..']) {
       await check(`invalid-group-${group}`, `/api/my-lot/entries?mode=wafer&group=${encodeURIComponent(group)}`, {}, [400]);
     }
@@ -167,6 +178,36 @@ const { createExtendedRunner } = require('./e2e_extended_common');
     await page.locator('#grid-deselect-all').click();
     expect(await page.evaluate(() => window.viewer.gridSelectedIdxs.length === 0), 'Deselect failed');
     return { responses, columns, selected };
+  });
+  await r.record('edge-thumbnail-publication', 'Concurrent filtered thumbnails decode and preserve the active grid', async () => {
+    const paths = await prepare();
+    const before = await gridState();
+    const responses = await page.evaluate(async ({ paths, loginId }) => {
+      const variants = [
+        { size: '257' },
+        { size: '263', personalized: 'true', grade_filter: '0,1', border_normalize: 'true' },
+        { size: '269', personalized: 'true', bottom_filter: 'Normal', gradient_filter: '2,5' },
+      ].flatMap(variant => [0, 1, 2, 3].map(round => ({ ...variant, size: String(Number(variant.size) + round * 16) })));
+      return Promise.all(variants.flatMap((variant, index) => Array.from({ length: 8 }, async (_, duplicate) => {
+        const url = new URL('/api/thumbnail', location.origin);
+        for (const [key, value] of Object.entries({ ...variant, path: paths[index % 3], LoginId: loginId })) url.searchParams.set(key, value);
+        // Distinct URLs still target the same disk cache to exercise concurrent publication.
+        url.searchParams.set('_audit', String(duplicate));
+        const started = performance.now();
+        const response = await fetch(url, { cache: 'no-store' });
+        const blob = await response.blob();
+        const bitmap = await createImageBitmap(blob);
+        const result = { variant: index, status: response.status, type: blob.type, bytes: blob.size,
+          width: bitmap.width, height: bitmap.height, limit: Number(variant.size), ms: Math.round(performance.now() - started) };
+        bitmap.close();
+        return result;
+      })));
+    }, { paths, loginId: r.loginId });
+    expect(responses.length === 96 && responses.every(item => item.status === 200 && item.bytes > 0
+      && item.width > 0 && item.height > 0 && item.width <= item.limit && item.height <= item.limit),
+    `Invalid or original-sized thumbnail: ${JSON.stringify(responses)}`);
+    expect(JSON.stringify((await gridState()).paths) === JSON.stringify(before.paths), 'Thumbnail work replaced active grid');
+    return { responses, visible: await r.visibleGrid() };
   });
   await r.finish();
 })().catch(error => { console.error(error); process.exitCode = 1; });

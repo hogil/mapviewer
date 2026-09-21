@@ -1354,6 +1354,17 @@ async def get_files_recursive(request: Request):
 
 
 async def get_thumbnail(request: Request):
+    qp = request.query_params
+    if not qp.get("path"):
+        return JSONResponse({"detail": "path 파라미터가 필요합니다."}, status_code=400)
+    raw_size = qp.get("size")
+    try:
+        size = int(raw_size) if raw_size is not None else config.THUMBNAIL_SIZE_DEFAULT
+    except (TypeError, ValueError):
+        return JSONResponse({"detail": "size는 정수여야 합니다."}, status_code=400)
+    if size <= 0:
+        return JSONResponse({"detail": "size는 1 이상의 정수여야 합니다."}, status_code=400)
+
     module = _FULL_APP.get_loaded_module()
     if module is None:
         await _FULL_APP.wait_until_ready(timeout=15.0)
@@ -1362,11 +1373,10 @@ async def get_thumbnail(request: Request):
         return JSONResponse({"detail": "thumbnail service warming up"}, status_code=503)
 
     _FULL_APP.sync_runtime_state()
-    qp = request.query_params
     return await module.get_thumbnail(
         request,
         path=qp.get("path"),
-        size=_parse_int(qp.get("size"), config.THUMBNAIL_SIZE_DEFAULT),
+        size=size,
         personalized=_parse_bool(qp.get("personalized"), False),
         scheme=qp.get("scheme"),
         grade_filter=qp.get("grade_filter"),

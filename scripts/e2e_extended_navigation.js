@@ -12,6 +12,10 @@ const { createExtendedRunner } = require('./e2e_extended_common');
     await page.evaluate(async target => window.viewer.enterSingleViewMode(target), imagePath);
     return visibleSingle(page, imagePath);
   };
+  const returnGrid = async () => {
+    await page.evaluate(async () => window.viewer.exitSingleImageViewMode());
+    return visibleGrid(page);
+  };
   const canvasPixels = () => page.evaluate(() => {
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = 64;
@@ -44,6 +48,114 @@ const { createExtendedRunner } = require('./e2e_extended_common');
       .map(wrap => Number(wrap.dataset.index)).sort((a, b) => a - b));
     assert.deepEqual(actual, [...indices].sort((a, b) => a - b));
   };
+
+  await record('extended-chip-keyboard-input-guard', 'Ctrl+A in editable controls preserves chip selection in grid and single-image states', async () => {
+    await boot(); await loadUnknown({ limit: 16 });
+    const imagePath = (await paths())[0];
+    await openSingle(imagePath);
+    await page.waitForFunction(() => window.viewer.chipAnnotator?.chips?.length > 0);
+
+    const search = page.locator('#new-class-input');
+    const beforeSingle = await page.evaluate(() => [...window.viewer.chipAnnotator.selectedChips].sort((a, b) => a - b));
+    await search.fill('CTRL_A_SINGLE');
+    await search.press('Control+A');
+    const single = await page.evaluate(() => {
+      const input = document.getElementById('new-class-input');
+      return {
+        selected: [...window.viewer.chipAnnotator.selectedChips].sort((a, b) => a - b),
+        selection: [input.selectionStart, input.selectionEnd],
+        valueLength: input.value.length,
+      };
+    });
+    assert.deepEqual(single.selected, beforeSingle);
+    assert.deepEqual(single.selection, [0, single.valueLength]);
+
+    const nonEditable = await page.evaluate(() => {
+      const viewer = window.viewer;
+      viewer.chipAnnotator.selectedChips.clear();
+      const target = viewer.dom.overlayCanvas;
+      target.tabIndex = 0;
+      target.focus();
+      const expected = viewer.chipAnnotator.chips
+        .map((chip, index) => viewer.chipAnnotator.isChipSelectable(chip) ? index : null)
+        .filter(index => index !== null)
+        .sort((a, b) => a - b);
+      return { expected, before: [...viewer.chipAnnotator.selectedChips] };
+    });
+    await page.keyboard.press('Control+A');
+    const selectedByCanvas = await page.evaluate(() => ({
+      selected: [...window.viewer.chipAnnotator.selectedChips].sort((a, b) => a - b),
+      activeTag: document.activeElement?.id || document.activeElement?.tagName,
+    }));
+    assert.equal(selectedByCanvas.activeTag, 'overlay-canvas');
+    assert.deepEqual(selectedByCanvas.selected, nonEditable.expected);
+
+    const gridProof = await returnGrid();
+    const beforeGrid = await page.evaluate(() => [...window.viewer.chipAnnotator.selectedChips].sort((a, b) => a - b));
+    await search.fill('CTRL_A_GRID');
+    await search.press('Control+A');
+    const grid = await page.evaluate(() => ({
+      selected: [...window.viewer.chipAnnotator.selectedChips].sort((a, b) => a - b),
+      valueLength: document.getElementById('new-class-input').value.length,
+      selection: [document.getElementById('new-class-input').selectionStart, document.getElementById('new-class-input').selectionEnd],
+    }));
+    assert.deepEqual(grid.selected, beforeGrid);
+    assert.deepEqual(grid.selection, [0, grid.valueLength]);
+    return { imagePath, single, selectedByCanvas, gridProof, grid, beforeSingle, beforeGrid, nonEditable };
+  });
+
+  await record('extended-mylot-edit-commit', 'Manual MY LOT Enter and Tab commit each edited row once', async () => {
+    await boot();
+    const group = `keyboard_${Date.now()}`;
+    const created = await api('/api/my-lot/group', { method: 'POST', body: { mode: 'lot', group } });
+    assert.equal(created.status, 200);
+    try {
+      await page.locator('#my-lot-btn-top').click();
+      await page.locator('#my-lot-window').waitFor({ state: 'visible' });
+      await page.locator('[data-my-lot-mode="lot"]').click();
+      await page.locator('#my-lot-group-select').selectOption(group);
+      await page.waitForFunction(target => {
+        const modal = window.viewer.myLotModal;
+        return modal?.activeGroup === target && modal.entriesContainer?.querySelectorAll('.my-lot-entry-row').length === 0;
+      }, group);
+      await page.evaluate(() => {
+        const modal = window.viewer.myLotModal;
+        modal.__editCommitCalls = 0;
+        const original = modal.searchAndUpdateManualRowImage.bind(modal);
+        modal.searchAndUpdateManualRowImage = (...args) => {
+          modal.__editCommitCalls += 1;
+          return original(...args);
+        };
+      });
+
+      await page.locator('#my-lot-manual-add-row').click();
+      const firstCell = page.locator('#my-lot-window .my-lot-input-row td[data-cell-type="lot"]').first();
+      await firstCell.dblclick();
+      await firstCell.locator('input').fill('EDIT_ENTER');
+      await page.waitForFunction(() => window.viewer.myLotModal.manualSearchTimers.size === 0);
+      const beforeEnter = await page.evaluate(() => window.viewer.myLotModal.__editCommitCalls);
+      await firstCell.locator('input').press('Enter');
+      await firstCell.locator('input').waitFor({ state: 'hidden' });
+      const afterEnter = await page.evaluate(() => window.viewer.myLotModal.__editCommitCalls);
+      assert.equal(afterEnter - beforeEnter, 1, 'Enter must commit once, separately from live input preview');
+
+      await page.locator('#my-lot-manual-add-row').click();
+      const secondCell = page.locator('#my-lot-window .my-lot-input-row td[data-cell-type="lot"]').nth(1);
+      await secondCell.dblclick();
+      await secondCell.locator('input').fill('EDIT_TAB');
+      await page.waitForFunction(() => window.viewer.myLotModal.manualSearchTimers.size === 0);
+      const beforeTab = await page.evaluate(() => window.viewer.myLotModal.__editCommitCalls);
+      await secondCell.locator('input').press('Tab');
+      await secondCell.locator('input').waitFor({ state: 'hidden' });
+      const afterTab = await page.evaluate(() => window.viewer.myLotModal.__editCommitCalls);
+      assert.equal(afterTab - beforeTab, 1, 'Tab must commit once, separately from live input preview');
+      return { beforeEnter, afterEnter, beforeTab, afterTab };
+    } finally {
+      await page.evaluate(async () => window.viewer.myLotModal?.close());
+      const deleted = await api('/api/my-lot/group', { method: 'DELETE', body: { mode: 'lot', group } });
+      assert.equal(deleted.status, 200);
+    }
+  });
 
   await record('extended-search-matrix', 'Case/logical/multiline search equivalence, sorting and LOT roundtrip', async () => {
     await boot(); await loadUnknown({ limit: 48 });

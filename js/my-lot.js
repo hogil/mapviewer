@@ -847,7 +847,10 @@ export class MyLotModal {
         targetCell.appendChild(input);
         input.focus();
 
+        let editFinished = false;
         const finishEdit = async () => {
+            if (editFinished) return;
+            editFinished = true;
             this.manualRows[index][cellType] = input.value;
             if (input.value) {
                 // 입력 시 현재 시간으로 saved_at 설정
@@ -2095,8 +2098,11 @@ export class MyLotModal {
             input.focus();
             input.select();
             
+            let editFinished = false;
             const finishEdit = async () => {
+                if (editFinished) return;
                 this.manualRows[index].lot = input.value;
+                editFinished = true;
                 if (input.value) {
                     // 입력 시 현재 시간으로 saved_at 설정
                     const now = new Date();

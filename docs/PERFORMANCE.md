@@ -298,3 +298,36 @@ grid는 count/wraps5000, visibleImages/loadedVisible4, broken0이다. 준비된 
 정식 서버 로그는 stdout2785행/stderr0bytes다. ERROR/Traceback28쌍은 존재하지 않는 테스트 Class 정리(chip12/wafer16), 경고4건은 의도한 없는 이미지1개와 삭제된 Class조회3개다. 예상 밖5xx·저장 실패·WinError32는 없었으며, 확장 세션의 thumbnail fallback은 정식 세션에서는 재발하지 않았다. 로그 전체가 ERROR/Traceback0이라는 뜻은 아니다.
 
 원본 및 해석: `D:/project/mapviewer/output/extended-audit-20260911/report.md`, `D:/project/mapviewer/output/extended-audit-20260911/extended-log-audit.md`, `D:/project/mapviewer/output/extended-audit-20260911/standard-log-audit.md`, `D:/project/mapviewer/.codex-tmp/e2e-sessions/20260911-063401-2fdbfd7f/e2e-summary.json`, `D:/project/mapviewer/.codex-tmp/e2e-sessions/20260911-063055-8abec91d/e2e-summary.json`.
+
+
+### 썸네일·검색·입력 연동 수정 최종 검증: 20260922-081027-f419ff83
+
+최종 `-Chunk all -Headless -NoCleanBeforeRun`은 **39/39 PASS, exitCode=0, PROCESS_CLEANUP=PASS**다. 확장 세션 `20260922-074759-65a1aedb`은 **35/35 PASS**, 집중 회귀 16개 모음도 모두 exit0이다. 확장 범위는 3개 viewport, seed17/53/101 혼합 동작, 사용자/그룹 격리, Composite 동시 작업, 잘못된 입력28개, 썸네일96개 동시 요청의 HTTP200·실제 bitmap decode·요청 크기 검증이다. 마지막 검색 제외 규칙 변경은 별도 집중 검사와 최종 전체 검사로 검증했다.
+
+중간 실패를 구분한다. 확장074120의 2건은 숨겨진 입력 선택/실시간 preview 검색을 commit으로 세던 새 테스트 구성 오류였다. 확장074428은 실제 Windows 썸네일 reader와 atomic replace 경합(WinError5/HTTP500)을 재현했다. 전체075014는41/42로 MY LOT에서 비교용 파생 이미지가 실제 wafer보다 먼저 선택되어 복사본2개의 positions가0개였다. `object_id_map_compare`를 기존 global-only 제외 목록에 추가했고 명시적 폴더 검색은 유지했다. 재검사080313에서 MY LOT30장은 통과했으나 async `waitForFunction` Promise를 참으로 취급하는 테스트 대기 오류가 드러났다. 실제 chip 저장2개 성공보다 먼저 목록0개를 판정한 것이므로, 기존20초/30초 제한을 유지한 명시적 awaited polling으로 수정했다. 라벨 전용080859는3/3, 이후 최종 전체는39/39다.
+
+| 측정 항목 | 최종0922 | 직전0911-063401 |
+|---|---:|---:|
+| DOMContentLoaded | 93 ms | 78 ms |
+| Viewer / Explorer ready | 328 / 344 ms | 297 / 312 ms |
+| unknown5000장 grid loadMs | 1621 ms | 1680 ms |
+| visible image integrityCheckMs | 8 ms | 8 ms |
+| grouped cache/FQ-missing fqLoadMs | 1554 ms | 1549 ms |
+| Exact LOT API 평균(3회) | 18.0 ms | 18.1 ms |
+| Logical OR API 평균(3회) | 36.6 ms | 36.5 ms |
+| 100 LOT / LOT-wafer API 평균(각3회) | 3.8 / 5.2 ms | 3.3 / 4.8 ms |
+| Composite10장 browser wall time | 6558.9 ms | 6616.1 ms |
+| Composite10장 server processing | 6.10 s | 5.93 s |
+| MY LOT10 LOT 저장 | 109.7 ms | 91.3 ms |
+| MY LOT30 wafer 저장 | 281.5 ms | 220.7 ms |
+| MY LOT 성능 record 전체 | 2989 ms | 2755 ms |
+
+Exact LOT 표준편차0.0ms/spread0.1ms, OR0.6/1.4ms,100LOT0.2/0.6ms, LOT-wafer0.1/0.2ms다(소수1자리 반올림). MY LOT30장 저장은 직전보다60.8ms 증가했고 전체 record는234ms 증가했다. 단일 실행으로 지속적 회귀라고 결론내리지 않으며 반복 측정과 단계별 저장 계측이 후속 과제다.
+
+Grid count/wraps5000, visible/loaded4, broken0이다. **1621ms는 그리드 로드 wall time이며 인덱스 구축 시간이 아니다.** 준비된 인덱스 상태는851684파일/858디렉터리다. `fqLoadMs=1554`도 unknown grouped-grid/cache/FQ-missing 검사의 폴더 로드 시간이며 단일 F/Q 생성 시간이 아니다. `strictCold=false`, JPEG/Q100/cubic이며4백만 파일 cold-index 재구축이나p95/p99는 측정하지 않았다.100LOT와100LOT-wafer는 각각104개의 지원 이미지 결과를 검증했다. MY LOT30장 positions를 모두 원본과 대조했고 별도 검증146ms는 저장 시간과 구분한다.
+
+최종 서버 stdout2668행/stderr0bytes를 검토했다. ERROR28건은 없는 테스트 Class 정리, WARNING4건은 의도한 없는 이미지1개와 삭제된 Class조회3개다. `server-log-guards.matches=[]`; 예상 밖5xx, 새 썸네일 오류 marker, NPZ/positions 저장 실패는 없었다. 확장 최종 서버 stdout1751행은 ERROR0, 예상된404경고6개, stderr0bytes다.
+
+SAML smoke는 앞선075014 실행에서 시작 격리 검사와10회 restart 검사를 통과했지만, 로컬SAML 설정이 없어 로그인은 즉시 설정오류500을 반환했다. **실제 IdP 인증 성공 검증이 아니다.** 집중 API검사의 symlink fixture는 Windows 권한 부족으로 건너뛰었고 일반 경로 이탈/현재 폴더 경계 검사는 실행했다. 썸네일 게시 잠금은 설정된 single-worker 프로세스 범위다.
+
+전체 record별 상태·수치 및 실패 이력: `D:/project/mapviewer/output/thumbnail-audit-20260922/report.md`. 최종 원본: `D:/project/mapviewer/.codex-tmp/e2e-sessions/20260922-081027-f419ff83/e2e-summary.json`, `D:/project/mapviewer/.codex-tmp/e2e-sessions/20260922-074759-65a1aedb/e2e-summary.json`.

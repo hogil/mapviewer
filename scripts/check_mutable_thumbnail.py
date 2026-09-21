@@ -1,5 +1,6 @@
 """Real native thumbnail decode after isolated source rename/delete; no app import."""
 import io
+import os
 from pathlib import Path
 import tempfile
 import threading
@@ -17,9 +18,11 @@ from check_audit_api import FULL, load_functions as _load_functions
 
 
 def load_functions(source, names, **bindings):
-    namespace = dict(contextmanager=contextmanager, RLock=threading.RLock,
+    namespace = dict(os=os, uuid=uuid, _thumbnail_publish_lock=threading.Lock(), contextmanager=contextmanager, RLock=threading.RLock,
                      MY_LOT_STORAGE_LOCK=threading.RLock(),
                      _classification_image_locks={}, _classification_image_locks_guard=threading.Lock())
+    if "_generate_thumbnail_sync" in names:
+        names = [*names, "_render_thumbnail_sync", "_read_thumbnail_bytes"]
     namespace.update(bindings)
     namespace = _load_functions(source, ["_mutable_image_guard", "_mutable_image_snapshot", *names], **namespace)
     namespace['_mutable_image_guard'] = contextmanager(namespace['_mutable_image_guard'])
