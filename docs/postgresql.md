@@ -40,6 +40,19 @@ With the default configuration, the database is `l3tracker` and the schema is `f
 | fbm.notice_state | LoginId + notice ID, list-seen flag, detail-read flag |
 | fbm.access_events | SAML access timestamp, LoginId and original record fields |
 
+If upgrading an earlier deployment that already contains data in schema `l3tracker`,
+stop the app and connect as the DB administrator to database `l3tracker`. Before
+bootstrapping the new configuration, rename the existing schema (only if `fbm` does
+not already exist):
+
+```sql
+ALTER SCHEMA l3tracker RENAME TO fbm;
+```
+
+This preserves the existing rows and permissions. Do not create a separate empty
+schema to replace an existing populated schema. The prepared local database has
+already been renamed.
+
 ## Linux with PostgreSQL 16
 
 On Ubuntu 24.04 with the PostgreSQL 16 packages available:
