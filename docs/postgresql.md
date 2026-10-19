@@ -22,7 +22,7 @@ Use literal KEY=value entries, without shell commands or variable interpolation.
 | DB_PASSWORD | supplied locally | Runtime password |
 | DB_ADMIN_USER | l3tracker_app | Bootstrap administrator |
 | DB_ADMIN_PASSWORD | supplied locally | Administrator password |
-| DB_SCHEMA | l3tracker | SQL schema, distinct from colour schemes |
+| DB_SCHEMA | fbm | SQL schema, distinct from colour schemes |
 | DB_TABLE_SETTINGS | user_settings | JSONB settings, colours, catalogue and aggregates |
 | DB_TABLE_NOTICE_STATE | notice_state | Per-user seen/read flags |
 | DB_TABLE_ACCESS_EVENTS | access_events | Timestamped login records |
@@ -32,13 +32,13 @@ storage location: bootstrap and migrate before switching an existing deployment.
 The runtime role has SELECT/INSERT/UPDATE/DELETE, without superuser/schema-creation
 rights. Only the bootstrap command uses administrator credentials.
 
-With the default configuration, the database and schema are both `l3tracker`:
+With the default configuration, the database is `l3tracker` and the schema is `fbm`:
 
 | Fully qualified table | Stored data |
 |---|---|
-| l3tracker.user_settings | Colours, preferences, announcement catalogue, statistics (separate namespace/key rows) |
-| l3tracker.notice_state | LoginId + notice ID, list-seen flag, detail-read flag |
-| l3tracker.access_events | SAML access timestamp, LoginId and original record fields |
+| fbm.user_settings | Colours, preferences, announcement catalogue, statistics (separate namespace/key rows) |
+| fbm.notice_state | LoginId + notice ID, list-seen flag, detail-read flag |
+| fbm.access_events | SAML access timestamp, LoginId and original record fields |
 
 ## Linux with PostgreSQL 16
 

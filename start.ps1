@@ -26,7 +26,7 @@ if (Test-Path -LiteralPath $dbEnvironmentPath) {
 }
 $dbDefaults = @{
     APP_STORAGE='postgres'; DB_HOST='127.0.0.1'; DB_PORT='5432'; DB_NAME='l3tracker';
-    DB_USER='fbm'; DB_SCHEMA='l3tracker'; DB_ADMIN_USER='l3tracker_app';
+    DB_USER='fbm'; DB_SCHEMA='fbm'; DB_ADMIN_USER='l3tracker_app';
     DB_TABLE_SETTINGS='user_settings'; DB_TABLE_NOTICE_STATE='notice_state'; DB_TABLE_ACCESS_EVENTS='access_events'
 }
 foreach ($settingName in $dbDefaults.Keys) {

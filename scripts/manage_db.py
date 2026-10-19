@@ -40,7 +40,7 @@ def bootstrap():
     with psycopg.connect(**dict(admin,dbname=config['dbname'])) as conn:
         db.initialize(conn)
         conn.execute(sql.SQL('GRANT CONNECT ON DATABASE {} TO {}').format(sql.Identifier(config['dbname']),sql.Identifier(config['user'])))
-        conn.execute(sql.SQL('GRANT USAGE ON SCHEMA {} TO {}').format(sql.Identifier(db.identifier('DB_SCHEMA','l3tracker')),sql.Identifier(config['user'])))
+        conn.execute(sql.SQL('GRANT USAGE ON SCHEMA {} TO {}').format(sql.Identifier(db.identifier('DB_SCHEMA','fbm')),sql.Identifier(config['user'])))
         for name in ('settings','notice_state','access_events'):
             conn.execute(sql.SQL('GRANT SELECT,INSERT,UPDATE,DELETE ON {} TO {}').format(db.table(name),sql.Identifier(config['user'])))
     print('Database, schema and tables ready; application role has data access only.')
@@ -110,7 +110,7 @@ def check():
         for kind in ('settings','notice_state','access_events'):
             conn.execute(sql.SQL('SELECT 1 FROM {} LIMIT 1').format(db.table(kind)))
         info=conn.execute("SELECT current_database(),current_user,inet_server_port(),current_setting('server_version')").fetchone()
-    print(json.dumps({'database':info[0],'user':info[1],'port':info[2],'schema':db.identifier('DB_SCHEMA','l3tracker'),'version':info[3],'status':'OK'}))
+    print(json.dumps({'database':info[0],'user':info[1],'port':info[2],'schema':db.identifier('DB_SCHEMA','fbm'),'version':info[3],'status':'OK'}))
 
 
 def main():

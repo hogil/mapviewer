@@ -50,7 +50,7 @@ def table(kind):
     names = {'settings': ('DB_TABLE_SETTINGS', 'user_settings'),
              'notice_state': ('DB_TABLE_NOTICE_STATE', 'notice_state'),
              'access_events': ('DB_TABLE_ACCESS_EVENTS', 'access_events')}
-    return sql.Identifier(identifier('DB_SCHEMA', 'l3tracker'), identifier(*names[kind]))
+    return sql.Identifier(identifier('DB_SCHEMA', 'fbm'), identifier(*names[kind]))
 
 _pool = None
 _pool_lock = threading.Lock()
@@ -68,7 +68,7 @@ def pool():
 
 def initialize(connection):
     from psycopg import sql
-    schema = sql.Identifier(identifier('DB_SCHEMA', 'l3tracker'))
+    schema = sql.Identifier(identifier('DB_SCHEMA', 'fbm'))
     connection.execute(sql.SQL('CREATE SCHEMA IF NOT EXISTS {}').format(schema))
     connection.execute(sql.SQL('CREATE TABLE IF NOT EXISTS {} (namespace TEXT NOT NULL, key TEXT NOT NULL, payload JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(), PRIMARY KEY(namespace,key))').format(table('settings')))
     connection.execute(sql.SQL('CREATE TABLE IF NOT EXISTS {} (login_id TEXT NOT NULL, notice_id TEXT NOT NULL, seen BOOLEAN NOT NULL DEFAULT FALSE, is_read BOOLEAN NOT NULL DEFAULT FALSE, PRIMARY KEY(login_id,notice_id))').format(table('notice_state')))
@@ -114,7 +114,7 @@ def edit_namespace(namespace):
     """Serialize legacy aggregate updates; publish only changed rows, atomically."""
     from psycopg import sql
     with pool().connection() as conn:
-        conn.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', ('l3tracker:'+identifier('DB_SCHEMA','l3tracker')+':'+namespace,))
+        conn.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', ('l3tracker:'+identifier('DB_SCHEMA','fbm')+':'+namespace,))
         original = get_namespace(namespace,conn)
         current = json.loads(json.dumps(original))
         yield current
