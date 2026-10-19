@@ -7734,7 +7734,9 @@ class WaferMapViewer {
                         console.error('[INIT] Color legends 초기화 실패:', error);
                         return null;
                     }),
-                    this.loadUserInfo().catch((error) => {
+                    this.loadUserInfo().then(() => import('./announcements.js')).then(module => {
+                        module.initializeAnnouncements(this);
+                    }).catch((error) => {
                         console.error('[INIT] User info 초기화 실패:', error);
                         return null;
                     })
@@ -7960,6 +7962,7 @@ class WaferMapViewer {
             
             // SAML/DEV로 표시됐으면 여기서 종료
             if (displayed) {
+                this.announcementLoginId = initialLoginIdFromUrl;
                 this.currentUser = this.normalizeLoginId(this.currentUser);
                 this.renderColorLegends(); // init에서도 호출됨
                 // 🔥 로그인 후 사용자 설정 로드 (gridCols 등)
@@ -7982,6 +7985,7 @@ class WaferMapViewer {
                 data = await response.json();
             }
             
+            this.announcementLoginId = data.LoginId || initialLoginIdFromUrl || this.getCurrentLoginId();
             // colorScheme이 있으면 사용
             if (data.colorScheme) {
                 this.currentUser = data.colorScheme;
@@ -37047,8 +37051,20 @@ class WaferMapViewer {
             }
         }
 
-        // Chip 1개 선택 시: Chip 보기
-        if (selectedChips.length === 1) {
+        // 선택을 바꾸지 않고 우클릭한 위치의 Chip을 우선 표시한다.
+        const annotator = this.chipAnnotator;
+        const chipCanvas = annotator?.canvas;
+        const chipCanvasRect = chipCanvas?.getBoundingClientRect();
+        let contextChip = null;
+        if (chipCanvasRect?.width > 0 && chipCanvasRect.height > 0 &&
+            event.clientX >= chipCanvasRect.left && event.clientX < chipCanvasRect.right &&
+            event.clientY >= chipCanvasRect.top && event.clientY < chipCanvasRect.bottom) {
+            const canvasX = (event.clientX - chipCanvasRect.left) * chipCanvas.width / chipCanvasRect.width;
+            const canvasY = (event.clientY - chipCanvasRect.top) * chipCanvas.height / chipCanvasRect.height;
+            contextChip = annotator.findChipAtPixel(canvasX, canvasY);
+        }
+        const viewChip = contextChip || (selectedChips.length === 1 ? selectedChips[0] : null);
+        if (viewChip) {
             const viewItem = document.createElement('div');
             viewItem.className = 'context-menu-item';
             viewItem.style.cssText = `
@@ -37059,7 +37075,7 @@ class WaferMapViewer {
             `;
             viewItem.textContent = 'Chip 보기';
             viewItem.onclick = () => {
-                this.showChipViewModal(selectedChips[0]);
+                this.showChipViewModal(viewChip);
                 menu.remove();
             };
             // Hover 효과

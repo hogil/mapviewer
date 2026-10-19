@@ -33,6 +33,7 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 
 from . import config
+from .announcements import announcement_routes
 from .access_logger import logger_instance
 from .index_service import IndexService
 from .search_service import SearchService
@@ -1797,6 +1798,7 @@ app.add_route("/api/internal/composite-numba-warmup", api_internal_composite_num
 app.add_route("/api/search-ready", api_search_ready, methods=["GET"])
 app.add_route("/api/search", api_search, methods=["GET"])
 app.add_route("/api/auth/user", api_auth_user, methods=["GET"])
+app.routes.extend(announcement_routes(_bootstrap_current_login_id))
 app.add_route("/api/browse-folders", browse_folders, methods=["GET"])
 app.add_route("/api/files", get_files, methods=["GET"])
 app.add_route("/api/files/recursive", get_files_recursive, methods=["GET"])

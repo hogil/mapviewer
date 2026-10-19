@@ -6931,6 +6931,43 @@ const { createRunner } = require('./e2e_playwright_session');
       { timeout: 30000 }
     );
 
+    // Hover-only Chip 보기 must target the right-clicked chip without changing selection.
+    const hoverPoints = await page.evaluate(() => {
+      const v = window.viewer;
+      const a = v.chipAnnotator;
+      a.setSelectionMode('chip');
+      a.clearSelection();
+      const canvas = a.canvas;
+      const box = canvas.getBoundingClientRect();
+      return a.chips.map((chip, index) => {
+        const x = box.left + (((chip.rect.x0 + chip.rect.x1) / 2) * v.transform.scale + v.transform.dx) / canvas.width * box.width;
+        const y = box.top + (((chip.rect.y0 + chip.rect.y1) / 2) * v.transform.scale + v.transform.dy + (a.Y_OFFSET || 0)) / canvas.height * box.height;
+        return { x, y, index, coords: a.formatGridPair(chip.x_abs, chip.y_abs) };
+      }).filter(p => p.x > box.left + 20 && p.x < box.right - 20 && p.y > box.top + 20 && p.y < box.bottom - 20).slice(0, 2);
+    });
+    expect(hoverPoints.length === 2, 'hover Chip view points missing');
+    for (const withSelection of [false, true]) {
+      if (withSelection) {
+        await page.keyboard.down('Control');
+        try { await page.mouse.click(hoverPoints[0].x, hoverPoints[0].y); }
+        finally { await page.keyboard.up('Control'); }
+      }
+      const beforeHoverSelection = await page.evaluate(() => [...window.viewer.chipAnnotator.selectedChips]);
+      expect(beforeHoverSelection.length === (withSelection ? 1 : 0), 'hover setup selection mismatch');
+      await page.mouse.move(hoverPoints[1].x, hoverPoints[1].y);
+      await page.mouse.click(hoverPoints[1].x, hoverPoints[1].y, { button: 'right' });
+      await page.locator('#chip-context-menu .context-menu-item').filter({ hasText: /^Chip 보기$/ }).click();
+      await page.locator('#chip-view-modal').waitFor({ state: 'visible', timeout: 10000 });
+      const hoverResult = await page.evaluate(() => ({
+        coords: document.getElementById('chip-view-rel-coords')?.textContent,
+        selection: [...window.viewer.chipAnnotator.selectedChips],
+      }));
+      expect(hoverResult.coords === hoverPoints[1].coords, `hover target mismatch=${JSON.stringify(hoverResult)}`);
+      expect(JSON.stringify(hoverResult.selection) === JSON.stringify(beforeHoverSelection), 'hover Chip view changed selection');
+      await page.locator('#chip-view-close').click();
+    }
+    await page.evaluate(() => window.viewer.chipAnnotator.clearSelection());
+
     const shotPoint = await page.evaluate(() => {
       const v = window.viewer;
       const annotator = v?.chipAnnotator;

@@ -513,3 +513,10 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
   - Chunk3 rerun 080313 reported chip-copy label count0 even though classify/chips returned2 saved. `waitForClassFileCount()` passed an async fetch predicate into `page.waitForFunction`; installed Playwright checks the returned Promise for truthiness before its boolean value, so the first false result ended the wait.
   - Fix: explicitly await `getClassFiles()` inside bounded polling with the existing30s limit, and return the same response that satisfied the expected count. Apply the same awaited polling to `addClassesViaUi()` with its existing20s deadline. Do not change application behavior or relax assertions/timeouts for this harness failure.
   - Guard: `label-wafer-crud` must finish the real class-button save before accepting the resulting file count, including the wafer-copy to chip-label path.
+
+
+### 2026-10-19 Single-image hover Chip view
+- Root cause: `js/main.js::showChipContextMenu()` offered Chip 보기 only when exactly one chip was selected.
+- Fix: resolve the chip at the right-click canvas coordinates with CSS scaling and the existing hit-test; use it for Chip 보기 without changing selection. Preserve the single-selected-chip fallback and all selection actions.
+- Regression signal: right-click an unselected chip, including with a different chip selected, then Chip 보기 must open the clicked chip and leave selection unchanged. Blank canvas must not reuse a stale hover chip.
+- Focused check: `node scripts/check_chip_context_view.mjs`. Browser E2E: `scripts/e2e_chunk2.js` phase `selected-region-export` opens the actual Chip view modal by hover/right-click with no selection and with another chip selected, and checks displayed coordinates and unchanged selection. Browser E2E requires an explicit request.

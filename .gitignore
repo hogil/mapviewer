@@ -80,3 +80,6 @@ mcp.json.example
 /blob-report/
 /playwright/.cache/
 /playwright/.auth/
+
+# Per-user announcement read state
+logs/announcements.sqlite3*

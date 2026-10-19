@@ -323,3 +323,10 @@ argument-hint: [증상-설명]
 - dense wafer의 WebP Q100 effort1 실패는 실제 인코더로 재현됐다. pyramid는 effort4 및 설정 Q를 사용하고 source PNG를 작은 .webp로 위장 발행하지 않는다. 고유 temp 및 실제 출력 포맷/크기 검사를 유지한다.
 - scripts/check-audit-frontend.mjs, scripts/check_pyramid_regressions.py와 정식 chunk1 audit-regressions/chunk2 P0/P1로 검증한다.
 - Composite 완료 직후 NPZ/positions 누락은 daemon 저장 수명주기를 확인한다. create_composite_heatmaps의 1500ms 지연 NPZ writer가 다음 cleanup 이후 파일을 쓰던 경합을 없앴다. 필요한 NPZ/positions/gradient 저장은 기존 executor 안에서 완료 전에 끝내며 NPZ unique temp+atomic replace 실패는 전파한다. Chunk2 완료 직후 재시도 없는 Subset/positions 검사와 server-log-guards의 NPZ 오류 패턴을 유지한다.
+
+
+### 2026-10-19 Single-image hover Chip view
+- Root cause: `js/main.js::showChipContextMenu()` offered Chip 보기 only when exactly one chip was selected.
+- Fix: resolve the chip at the right-click canvas coordinates with CSS scaling and the existing hit-test; use it for Chip 보기 without changing selection. Preserve the single-selected-chip fallback and all selection actions.
+- Regression signal: right-click an unselected chip, including with a different chip selected, then Chip 보기 must open the clicked chip and leave selection unchanged. Blank canvas must not reuse a stale hover chip.
+- Focused check: `node scripts/check_chip_context_view.mjs`. Browser E2E: `scripts/e2e_chunk2.js` phase `selected-region-export` opens the actual Chip view modal by hover/right-click with no selection and with another chip selected, and checks displayed coordinates and unchanged selection. Browser E2E requires an explicit request.
