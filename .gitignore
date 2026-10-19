@@ -83,3 +83,8 @@ mcp.json.example
 
 # Per-user announcement read state
 logs/announcements.sqlite3*
+
+# Local PostgreSQL instance and credentials
+.local/
+.env.postgres
+!.env.postgres.example

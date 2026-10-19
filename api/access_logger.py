@@ -7,6 +7,7 @@ import sys
 import time
 import os
 import threading
+from . import database as metadata_db
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -132,6 +133,8 @@ class AccessLogger:
     
     def _load_stats(self) -> Dict[str, Any]:
         """통계 데이터 로드 - 🔥 이전 기록을 누적하기 위해서만 읽음 (접속 제어 안 함)"""
+        if metadata_db.enabled():
+            return self._normalize_stats_shape(metadata_db.load_stats())
         if STATS_LOG_FILE.exists():
             try:
                 with open(STATS_LOG_FILE, 'r', encoding='utf-8') as f:
@@ -145,6 +148,16 @@ class AccessLogger:
     
     def _save_stats(self, force: bool = False):
         """통계 데이터 저장 - 배치 처리로 성능 최적화 + 멀티워커 병합"""
+        if metadata_db.enabled():
+            if not getattr(self, '_in_db_stats', False):
+                with _STATS_SAVE_LOCK, metadata_db.edit_stats() as stored:
+                    # This path repairs derived department data; request counters are
+                    # changed only inside the serialized _update_stats transaction.
+                    stored['department_stats'] = self.stats_data.get('department_stats', {})
+                    self.stats_data = stored
+            self._stats_dirty = False
+            self._last_save_time = time.time()
+            return
         current_time = time.time()
 
         # force가 아니고, 변경사항이 없거나 아직 저장 간격이 안 되었으면 스킵
@@ -324,6 +337,17 @@ class AccessLogger:
         dept_stats[dept_name]["total_requests"] += 1
     
     def remove_ip_login_record(self, client_ip: str, LoginId: str = None):
+        if not metadata_db.enabled():
+            return self._remove_ip_login_record_legacy(client_ip, LoginId)
+        with _STATS_SAVE_LOCK, metadata_db.edit_stats() as stored:
+            self.stats_data = stored
+            self._in_db_stats = True
+            try:
+                return self._remove_ip_login_record_legacy(client_ip, LoginId)
+            finally:
+                self._in_db_stats = False
+
+    def _remove_ip_login_record_legacy(self, client_ip: str, LoginId: str = None):
         """SAML 로그인 성공 시 IP로 로그인한 기록을 삭제 (LoginId 기준)"""
         try:
             # LoginId가 제공되면 해당 사용자의 IP 기록을 정리
@@ -638,6 +662,17 @@ class AccessLogger:
         return False
     
     def _update_stats(self, ip: str, endpoint: str, method: str, user_id_override: Optional[str] = None, meta: Optional[Dict[str, Any]] = None, is_page_visit: bool = False):
+        if not metadata_db.enabled():
+            return self._update_stats_legacy(ip, endpoint, method, user_id_override, meta, is_page_visit)
+        with _STATS_SAVE_LOCK, metadata_db.edit_stats() as stored:
+            self.stats_data = stored
+            self._in_db_stats = True
+            try:
+                return self._update_stats_legacy(ip, endpoint, method, user_id_override, meta, is_page_visit)
+            finally:
+                self._in_db_stats = False
+
+    def _update_stats_legacy(self, ip: str, endpoint: str, method: str, user_id_override: Optional[str] = None, meta: Optional[Dict[str, Any]] = None, is_page_visit: bool = False):
         """통계 업데이트 - 세션 관리 포함 (LoginId 기준, SAML 인증된 경우만 기록)"""
         # localhost IP는 환경변수로 허용 제어 (기본: 허용)
         if ip in ['127.0.0.1', '::1', 'localhost'] and not ALLOW_LOCAL_STATS:

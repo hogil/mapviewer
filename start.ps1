@@ -12,6 +12,43 @@ $env:UVICORN_LIFESPAN = "on"   # FastAPI lifespan 강제 (인덱스 초기화/�
 $env:UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN = "15" # restart 시 종료 대기 상한(초)
 chcp 65001 | Out-Null
 
+# PostgreSQL 16: local credentials live outside Git; inherited env takes priority.
+$dbEnvironmentPath = if ($env:DB_ENV_FILE) { $env:DB_ENV_FILE } else { Join-Path $PSScriptRoot '.env.postgres' }
+if (Test-Path -LiteralPath $dbEnvironmentPath) {
+    foreach ($line in Get-Content -LiteralPath $dbEnvironmentPath -Encoding UTF8) {
+        if ($line -match '^(APP_STORAGE|DB_[A-Z_]+)=(.*)$') {
+            $settingName, $settingValue = $Matches[1], $Matches[2].Trim().Trim('"').Trim("'")
+            if ($null -eq [Environment]::GetEnvironmentVariable($settingName)) {
+                [Environment]::SetEnvironmentVariable($settingName, $settingValue)
+            }
+        }
+    }
+}
+$dbDefaults = @{
+    APP_STORAGE='postgres'; DB_HOST='127.0.0.1'; DB_PORT='5432'; DB_NAME='l3tracker';
+    DB_USER='fbm'; DB_SCHEMA='l3tracker'; DB_ADMIN_USER='l3tracker_app';
+    DB_TABLE_SETTINGS='user_settings'; DB_TABLE_NOTICE_STATE='notice_state'; DB_TABLE_ACCESS_EVENTS='access_events'
+}
+foreach ($settingName in $dbDefaults.Keys) {
+    if (-not [Environment]::GetEnvironmentVariable($settingName)) {
+        [Environment]::SetEnvironmentVariable($settingName, $dbDefaults[$settingName])
+    }
+}
+if ($env:APP_STORAGE -eq 'postgres') {
+    if (-not $env:DB_PASSWORD) { throw 'Set DB_PASSWORD in .env.postgres or the environment.' }
+    $localPgBin = Join-Path $PSScriptRoot '.local/postgresql16-win/pgsql/bin'
+    $localPgData = Join-Path $PSScriptRoot '.local/postgresql16-win/data'
+    if ($env:DB_HOST -eq '127.0.0.1' -and (Test-Path -LiteralPath "$localPgBin/pg_isready.exe")) {
+        & "$localPgBin/pg_isready.exe" -h $env:DB_HOST -p $env:DB_PORT -q
+        if ($LASTEXITCODE -ne 0) {
+            & "$localPgBin/pg_ctl.exe" -D $localPgData -l (Join-Path $PSScriptRoot '.local/postgresql16-win/server.log') -o "-h 127.0.0.1 -p $env:DB_PORT" start -w
+            if ($LASTEXITCODE -ne 0) { throw 'Local PostgreSQL startup failed.' }
+        }
+    }
+    & python (Join-Path $PSScriptRoot 'scripts/manage_db.py') check
+    if ($LASTEXITCODE -ne 0) { throw 'Run scripts/manage_db.py bootstrap and migrate before starting the app.' }
+}
+
 # 환경변수 설정
 $env:AUTO_LOGIN="0"      # 0=수동 로그인 (/saml/login 직접 호출)
                          # 1=자동 로그인 (domain 접속 시 자동 리다이렉트) - Ubuntu 사내 서버용

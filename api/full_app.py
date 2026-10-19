@@ -62,6 +62,7 @@ import urllib.parse
 # ================= pyvips 로그 억제 =================
 logging.getLogger('pyvips').setLevel(logging.WARNING)
 
+from . import database as metadata_db
 from .access_logger import logger_instance, access_logger as access_file_logger, ACCESS_LOG_FILE
 from .detail_access_logger import detail_access_logger
 from . import config
@@ -9198,6 +9199,9 @@ async def get_department_stats():
 @app.get("/api/stats/export-csv")
 async def export_detail_access_csv():
     """detail_access.csv 파일 다운로드"""
+    if metadata_db.enabled():
+        content = await asyncio.to_thread(metadata_db.access_csv)
+        return Response(content, media_type="text/csv", headers={"Content-Disposition": "attachment; filename=detail_access.csv"})
     csv_path = Path("logs/detail_access.csv")
     if not csv_path.exists():
         raise HTTPException(status_code=404, detail="CSV file not found")
@@ -10125,6 +10129,8 @@ save_color_legends = _save_color_legends_with_cache_update
 @app.get("/logs/color-legends.json")
 async def serve_color_legends(request: Request):
     """color-legends.json 전용 — 메모리 캐시 + ETag 304."""
+    if metadata_db.enabled():
+        return JSONResponse(await asyncio.to_thread(load_color_legends), headers={"Cache-Control": "no-store"})
     if _COLOR_LEGENDS_CACHE:
         content, etag = _COLOR_LEGENDS_CACHE
         if_none = request.headers.get("if-none-match", "").strip('"')
@@ -12175,15 +12181,18 @@ async def search_users_from_stats(
         if not checker.has_permission(current_user, Permission.GRANT_MANAGE):
             raise HTTPException(status_code=403, detail="권한이 없습니다.")
 
-        # stats.json 파일 경로
-        stats_file = Path(__file__).parent.parent / "logs" / "stats.json"
+        if metadata_db.enabled():
+            stats_data = await asyncio.to_thread(metadata_db.load_stats)
+        else:
+            # stats.json 파일 경로
+            stats_file = Path(__file__).parent.parent / "logs" / "stats.json"
 
-        if not stats_file.exists():
-            return {"success": True, "users": [], "count": 0}
+            if not stats_file.exists():
+                return {"success": True, "users": [], "count": 0}
 
-        # stats.json 로드
-        with open(stats_file, 'r', encoding='utf-8') as f:
-            stats_data = json.load(f)
+            # stats.json 로드
+            with open(stats_file, 'r', encoding='utf-8') as f:
+                stats_data = json.load(f)
 
         query_lower = query.lower()
         matched_users = []
@@ -12484,6 +12493,9 @@ def _save_all_prefs(data: dict) -> None:
 async def get_user_prefs(request: Request):
     """현재 로그인 사용자의 개인 설정 조회"""
     login_id = _effective_login_id(request)
+    if metadata_db.enabled():
+        prefs = await asyncio.to_thread(metadata_db.get_document, 'prefs', login_id, {})
+        return {"success": True, "login_id": login_id, "prefs": prefs}
     all_prefs = _load_all_prefs()
     return {"success": True, "login_id": login_id, "prefs": all_prefs.get(login_id, {})}
 
@@ -12500,6 +12512,11 @@ async def set_user_prefs(request: Request):
     if "__preview_" in login_id:
         return {"success": False, "login_id": login_id, "prefs": {}, "error": "preview scheme ignored"}
 
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Preferences must be an object")
+    if metadata_db.enabled():
+        prefs = await asyncio.to_thread(metadata_db.patch_document, 'prefs', login_id, body)
+        return {"success": True, "login_id": login_id, "prefs": prefs}
     with _ui_prefs_lock:
         all_prefs = _load_all_prefs()
         user_prefs = all_prefs.get(login_id, {})

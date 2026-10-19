@@ -15,6 +15,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+# This guard exercises the legacy file publication path, never the live database.
+os.environ['APP_STORAGE'] = 'files'
 from api import access_logger
 
 

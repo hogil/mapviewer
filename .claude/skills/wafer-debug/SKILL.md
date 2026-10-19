@@ -330,3 +330,10 @@ argument-hint: [증상-설명]
 - Fix: resolve the chip at the right-click canvas coordinates with CSS scaling and the existing hit-test; use it for Chip 보기 without changing selection. Preserve the single-selected-chip fallback and all selection actions.
 - Regression signal: right-click an unselected chip, including with a different chip selected, then Chip 보기 must open the clicked chip and leave selection unchanged. Blank canvas must not reuse a stale hover chip.
 - Focused check: `node scripts/check_chip_context_view.mjs`. Browser E2E: `scripts/e2e_chunk2.js` phase `selected-region-export` opens the actual Chip view modal by hover/right-click with no selection and with another chip selected, and checks displayed coordinates and unchanged selection. Browser E2E requires an explicit request.
+
+
+### 2026-10-19 PostgreSQL 16 metadata storage
+- Colours, preferences, notice state, aggregate statistics and SAML details can use PostgreSQL through APP_STORAGE and DB_* variables; original files are migration sources and explicit rollback only.
+- Regression guard: scripts/check_postgres_storage.py checks colour deletion persistence, atomic partial preference updates, transaction rollback, 4-process exact statistics counts, migration preservation and non-superuser runtime access. scripts/check_postgres_api.py checks running API writes and DB-backed CSV export.
+- File-only announcement and stats-publication guards explicitly select APP_STORAGE=files to avoid touching the active DB. Linux startup preflight uses python3, matching its app command.
+- Browser E2E remains subject to explicit execution consent; PostgreSQL focused checks are API/storage tests.

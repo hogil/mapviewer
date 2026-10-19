@@ -2,6 +2,7 @@
 import json
 import sqlite3
 from contextlib import closing
+from . import database as metadata_db
 from pathlib import Path
 
 from starlette.concurrency import run_in_threadpool
@@ -14,24 +15,30 @@ DATABASE = ROOT / 'logs' / 'announcements.sqlite3'
 
 
 def load_announcements():
-    return sorted(json.loads(CATALOGUE.read_text(encoding='utf-8')), key=lambda item: (item['date'], item['id']), reverse=True)
+    items = list(metadata_db.get_namespace('announcements').values()) if metadata_db.enabled() else json.loads(CATALOGUE.read_text(encoding='utf-8'))
+    return sorted(items, key=lambda item: (item['date'], item['id']), reverse=True)
 
 
 def announcement_state(login_id, action=None, ids=(), database=DATABASE):
     notices = load_announcements()
     valid_ids = {item['id'] for item in notices}
-    database.parent.mkdir(parents=True, exist_ok=True)
-    with closing(sqlite3.connect(database, timeout=15)) as connection, connection:
-        connection.execute('CREATE TABLE IF NOT EXISTS notice_state (login_id TEXT NOT NULL, notice_id TEXT NOT NULL, seen INTEGER NOT NULL DEFAULT 0, is_read INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (login_id, notice_id))')
-        for notice_id in ids:
-            if notice_id not in valid_ids:
-                raise ValueError('Unknown announcement')
-            connection.execute('INSERT OR IGNORE INTO notice_state(login_id, notice_id) VALUES (?, ?)', (login_id, notice_id))
-            if action == 'seen':
-                connection.execute('UPDATE notice_state SET seen=1 WHERE login_id=? AND notice_id=?', (login_id, notice_id))
-            elif action == 'read':
-                connection.execute('UPDATE notice_state SET seen=1, is_read=1 WHERE login_id=? AND notice_id=?', (login_id, notice_id))
-        rows = {row[0]: row[1:] for row in connection.execute('SELECT notice_id, seen, is_read FROM notice_state WHERE login_id=?', (login_id,))}
+    if metadata_db.enabled():
+        if any(notice_id not in valid_ids for notice_id in ids):
+            raise ValueError('Unknown announcement')
+        rows = metadata_db.notice_rows(login_id, action, ids)
+    else:
+        database.parent.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(database, timeout=15)) as connection, connection:
+            connection.execute('CREATE TABLE IF NOT EXISTS notice_state (login_id TEXT NOT NULL, notice_id TEXT NOT NULL, seen INTEGER NOT NULL DEFAULT 0, is_read INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (login_id, notice_id))')
+            for notice_id in ids:
+                if notice_id not in valid_ids:
+                    raise ValueError('Unknown announcement')
+                connection.execute('INSERT OR IGNORE INTO notice_state(login_id, notice_id) VALUES (?, ?)', (login_id, notice_id))
+                if action == 'seen':
+                    connection.execute('UPDATE notice_state SET seen=1 WHERE login_id=? AND notice_id=?', (login_id, notice_id))
+                elif action == 'read':
+                    connection.execute('UPDATE notice_state SET seen=1, is_read=1 WHERE login_id=? AND notice_id=?', (login_id, notice_id))
+            rows = {row[0]: row[1:] for row in connection.execute('SELECT notice_id, seen, is_read FROM notice_state WHERE login_id=?', (login_id,))}
     items = [dict(item,
                   seen=bool(item.get('read_by_default') or rows.get(item['id'], (0, 0))[0]),
                   read=bool(item.get('read_by_default') or rows.get(item['id'], (0, 0))[1]))

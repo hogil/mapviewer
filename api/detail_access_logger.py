@@ -10,6 +10,7 @@ import os
 from datetime import datetime
 from typing import Dict, Any, Optional
 import logging
+from . import database as metadata_db
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,8 @@ class DetailAccessLogger:
     
     def _ensure_csv_exists(self):
         """CSV 파일이 존재하지 않으면 헤더만 있는 파일 생성"""
+        if metadata_db.enabled():
+            return
         os.makedirs('logs', exist_ok=True)
 
         if not os.path.exists(self.csv_file):
@@ -48,6 +51,11 @@ class DetailAccessLogger:
         logged_today = {}
         today_date = datetime.now().strftime('%Y-%m-%d')
 
+        if metadata_db.enabled():
+            from psycopg import sql
+            with metadata_db.pool().connection() as conn:
+                rows = conn.execute(sql.SQL('SELECT DISTINCT login_id FROM {} WHERE occurred_at >= %s::date').format(metadata_db.table('access_events')), (today_date,))
+                return {row[0]: today_date for row in rows}
         if not os.path.exists(self.csv_file):
             return logged_today
 
@@ -105,10 +113,14 @@ class DetailAccessLogger:
                 GrdName                         # GrdName(담당업무)
             ]
 
-            # CSV 파일에 추가 기록
-            with open(self.csv_file, 'a', newline='', encoding='utf-8-sig') as f:
-                writer = csv.writer(f)
-                writer.writerow(access_record)
+            if metadata_db.enabled():
+                metadata_db.insert_access(f'saml:{LoginId}:{today_date}', LoginId,
+                                          datetime.now().astimezone(), access_record)
+            else:
+                # CSV 파일에 추가 기록
+                with open(self.csv_file, 'a', newline='', encoding='utf-8-sig') as f:
+                    writer = csv.writer(f)
+                    writer.writerow(access_record)
 
             # 🔥 캐시에 오늘 기록했다고 저장
             self._logged_today[LoginId] = today_date
@@ -123,6 +135,8 @@ class DetailAccessLogger:
     
     def get_recent_records(self, limit: int = 10) -> list:
         """최근 기록 조회 (테스트용)"""
+        if metadata_db.enabled():
+            return list(reversed(metadata_db.recent_access(limit)))
         if not os.path.exists(self.csv_file):
             return []
         

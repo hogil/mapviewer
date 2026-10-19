@@ -1102,6 +1102,8 @@ async def lifespan(app: Starlette):
         bootlog.info("🚀 [BOOTSTRAP] full app idle import scheduled")
     yield
     await _FULL_APP.shutdown()
+    from . import database as metadata_db
+    await asyncio.to_thread(metadata_db.close)
     try:
         SEARCH_EXECUTOR.shutdown(wait=False, cancel_futures=False)
     except Exception:
@@ -1779,6 +1781,10 @@ async def api_search(request: Request):
 
 
 async def serve_color_legends(request: Request):
+    from . import database as metadata_db
+    if metadata_db.enabled():
+        from .personal_colors import load_color_legends
+        return JSONResponse(await asyncio.to_thread(load_color_legends), headers={"Cache-Control": "no-store"})
     path = Path(__file__).parent.parent / "logs" / "color-legends.json"
     if not path.is_file():
         return JSONResponse({})

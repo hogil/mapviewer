@@ -8,6 +8,8 @@ import json
 import logging
 import struct
 import zlib
+import time
+from . import database as metadata_db
 from pathlib import Path
 from threading import RLock
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -25,6 +27,8 @@ COLOR_LEGENDS_LOCK = RLock()
 
 _color_legends_cache: Optional[Dict[str, Any]] = None
 _color_legends_mtime: float = 0.0
+_db_color_baseline = {}
+_db_color_cache_time = 0.0
 _PALETTE_CACHE: Dict[str, bytes] = {}
 
 TOP_KEYS = ['Grade0', 'Grade1', 'Grade2', 'Grade3', 'Grade4', 'Grade5', 'Grade6', 'Grade7']
@@ -177,9 +181,19 @@ def _ensure_anonymous_entries(legends: Dict[str, Any]) -> bool:
 
 def load_color_legends() -> Dict[str, Any]:
     """Load color legend data with simple caching."""
-    global _color_legends_cache, _color_legends_mtime
+    global _color_legends_cache, _color_legends_mtime, _db_color_baseline, _db_color_cache_time
 
     with COLOR_LEGENDS_LOCK:
+        if metadata_db.enabled():
+            if _color_legends_cache is not None and time.monotonic() - _db_color_cache_time < 1.0:
+                return _color_legends_cache
+            loaded = metadata_db.load_colors()
+            _db_color_baseline = copy.deepcopy(metadata_db.flatten_colors(loaded))
+            _color_legends_cache = loaded
+            if _ensure_anonymous_entries(loaded):
+                save_color_legends(loaded)
+            _db_color_cache_time = time.monotonic()
+            return loaded
         try:
             if not COLOR_LEGENDS_PATH.exists():
                 initial = {
@@ -237,9 +251,25 @@ def save_color_legends(legends: Dict[str, Any], updated_scheme_name: Optional[st
         legends: 저장할 color legends 데이터
         updated_scheme_name: 업데이트된 scheme 이름 (마지막 수정 시간 추가용)
     """
-    global _color_legends_cache, _color_legends_mtime
+    global _color_legends_cache, _color_legends_mtime, _db_color_baseline, _db_color_cache_time
 
     with COLOR_LEGENDS_LOCK:
+        if metadata_db.enabled():
+            if updated_scheme_name and updated_scheme_name in legends:
+                from datetime import datetime
+                legends[updated_scheme_name]['lastModified'] = datetime.now().strftime('%y%m%d_%H%M%S')
+            flattened = metadata_db.flatten_colors(legends)
+            with metadata_db.pool().connection() as conn:
+                for key, value in flattened.items():
+                    if key not in _db_color_baseline or _db_color_baseline[key] != value:
+                        metadata_db.put_document('colors', key, value, conn)
+                for key in _db_color_baseline.keys() - flattened.keys():
+                    metadata_db.delete_document('colors', key, conn)
+            _db_color_baseline = copy.deepcopy(flattened)
+            _color_legends_cache = legends
+            _db_color_cache_time = time.monotonic()
+            _PALETTE_CACHE.clear()
+            return True
         try:
             COLOR_LEGENDS_PATH.parent.mkdir(parents=True, exist_ok=True)
             

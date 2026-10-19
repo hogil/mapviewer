@@ -3,6 +3,8 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 import sys
+import os
+os.environ["APP_STORAGE"] = "files"
 import tempfile
 from unittest.mock import patch
 
