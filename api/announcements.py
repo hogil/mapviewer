@@ -32,7 +32,10 @@ def announcement_state(login_id, action=None, ids=(), database=DATABASE):
             elif action == 'read':
                 connection.execute('UPDATE notice_state SET seen=1, is_read=1 WHERE login_id=? AND notice_id=?', (login_id, notice_id))
         rows = {row[0]: row[1:] for row in connection.execute('SELECT notice_id, seen, is_read FROM notice_state WHERE login_id=?', (login_id,))}
-    items = [dict(item, seen=bool(rows.get(item['id'], (0, 0))[0]), read=bool(rows.get(item['id'], (0, 0))[1])) for item in notices]
+    items = [dict(item,
+                  seen=bool(item.get('read_by_default') or rows.get(item['id'], (0, 0))[0]),
+                  read=bool(item.get('read_by_default') or rows.get(item['id'], (0, 0))[1]))
+             for item in notices]
     return {'items': items, 'new_count': sum(not item['seen'] for item in items)}
 
 

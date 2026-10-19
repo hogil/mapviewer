@@ -16,7 +16,14 @@ with tempfile.TemporaryDirectory() as td:
     state = notices.announcement_state
     def isolated(login_id, action=None, ids=()):
         return state(login_id, action, ids, database=db)
-    with patch.object(notices, 'announcement_state', isolated):
+    catalogue = notices.load_announcements()
+    assert isolated('new-user')['new_count'] == 0
+    assert all(item['read'] and item['seen'] for item in isolated('new-user')['items'])
+    isolated('existing-user', 'seen', [catalogue[0]['id']])
+    assert isolated('existing-user')['items'][0]['read']
+    # Exercise real new-notice behavior independently of the read-by-default dummy.
+    fixture = [dict(item, read_by_default=False) for item in catalogue]
+    with patch.object(notices, 'load_announcements', return_value=fixture), patch.object(notices, 'announcement_state', isolated):
         app = Starlette(routes=notices.announcement_routes(lambda request: request.query_params.get('LoginId')))
         with TestClient(app) as client:
             first = client.get('/api/announcements?LoginId=alice')
@@ -38,7 +45,7 @@ with tempfile.TemporaryDirectory() as td:
             assert isolated('parallel')['items'][0]['read']
     # Reopen the database via fresh connections, simulating a restart.
     assert state('alice',database=db)['items'][0]['read']
-    with patch.object(notices, 'load_announcements', return_value=notices.load_announcements()+[{'id':'new-after-seen','date':'2026-10-20','title':'New'}]):
+    with patch.object(notices, 'load_announcements', return_value=fixture+[{'id':'new-after-seen','date':'2026-10-20','title':'New'}]):
         assert state('alice',database=db)['new_count'] == 1
         assert state('alice','seen',ids,database=db)['new_count'] == 1
 print(json.dumps({'status':'PASS','checks':['badge vs read distinction','LoginId isolation','persistent reopen','new publication','snapshot seen IDs','concurrent read writes','invalid input API 400','no-store']},ensure_ascii=False))
