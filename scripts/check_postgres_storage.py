@@ -12,7 +12,7 @@ import uuid
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from api import database as db
-from scripts.manage_db import bootstrap,migrate,sources
+from scripts.manage_db import bootstrap,migrate,sources,upload
 import psycopg
 from psycopg import sql
 
@@ -41,7 +41,7 @@ def main():
             migrate(root)
             for namespace,key,value in sources(root):assert db.get_document(namespace,key)==value
             db.patch_document('prefs','alice',{'gridCols':9})
-            migrate(root)
+            upload(root)
             assert db.get_document('prefs','alice')['gridCols']==9
             with ThreadPoolExecutor(max_workers=8) as executor:
                 list(executor.map(lambda i:db.patch_document('prefs','alice',{f'field{i}':i}),range(24)))

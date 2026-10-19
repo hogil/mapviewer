@@ -32,6 +32,14 @@ storage location: bootstrap and migrate before switching an existing deployment.
 The runtime role has SELECT/INSERT/UPDATE/DELETE, without superuser/schema-creation
 rights. Only the bootstrap command uses administrator credentials.
 
+With the default configuration, the database and schema are both `l3tracker`:
+
+| Fully qualified table | Stored data |
+|---|---|
+| l3tracker.user_settings | Colours, preferences, announcement catalogue, statistics (separate namespace/key rows) |
+| l3tracker.notice_state | LoginId + notice ID, list-seen flag, detail-read flag |
+| l3tracker.access_events | SAML access timestamp, LoginId and original record fields |
+
 ## Linux with PostgreSQL 16
 
 On Ubuntu 24.04 with the PostgreSQL 16 packages available:
@@ -77,6 +85,15 @@ python scripts/manage_db.py check
 ```
 
 ## Migration and preservation
+
+From the project folder, double-click `upload_json_to_db.cmd` on Windows. It loads
+`.env.postgres`, creates any missing DB objects, imports the JSON/CSV/SQLite sources,
+checks that all JSON keys exist and prints the connection result. Its window stays
+open so success or errors can be read. For automation use `--no-pause`.
+On Linux use executable `upload_json_to_db.sh` (or `bash upload_json_to_db.sh`).
+Whether a desktop double-click opens a terminal depends on the file manager settings.
+Both launchers preserve original files and newer existing DB settings. Different
+values from an old source snapshot are reported rather than overwritten.
 
 Stop the app before the final migration to obtain a stable source snapshot. Keep
 PostgreSQL running. Bootstrap is repeatable and does not change existing role passwords.

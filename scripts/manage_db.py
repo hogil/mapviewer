@@ -78,7 +78,7 @@ def migrate(root, dry_run=False, replace_catalogue=False):
 
 
 
-def verify(root):
+def verify(root, allow_newer=False):
     entries=sources(root)
     missing,different=0,0
     with db.pool().connection() as conn:
@@ -88,8 +88,20 @@ def verify(root):
         if key not in stored:missing+=1
         elif stored[key]!=value:different+=1
     print(json.dumps({'compared':len(entries),'missing':missing,'different':different}))
-    if missing or different:
+    if missing or (different and not allow_newer):
         raise SystemExit('Verification differs from source. Existing DB values may be newer; no values were overwritten.')
+
+
+def upload(root):
+    if not sources(root):
+        raise SystemExit('No JSON migration sources found in the selected project folder.')
+    print('Preparing database and importing legacy files. Existing DB settings are preserved.', flush=True)
+    bootstrap()
+    migrate(root)
+    # Existing users may have newer preferences than the preserved JSON snapshot.
+    verify(root, allow_newer=True)
+    check()
+    print('Upload complete. Original files were preserved. Existing DB values were not overwritten.', flush=True)
 
 
 def check():
@@ -103,7 +115,7 @@ def check():
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command',choices=['bootstrap','migrate','verify','check'])
+    parser.add_argument('command',choices=['bootstrap','migrate','verify','check','upload'])
     parser.add_argument('--source-root',type=Path,default=db.ROOT)
     parser.add_argument('--dry-run',action='store_true')
     parser.add_argument('--replace-catalogue',action='store_true',help='Update notice content only; preserve user settings')
@@ -111,6 +123,7 @@ def main():
     if args.command=='bootstrap':bootstrap()
     elif args.command=='migrate':migrate(args.source_root.resolve(),args.dry_run,args.replace_catalogue)
     elif args.command=='verify':verify(args.source_root.resolve())
+    elif args.command=='upload':upload(args.source_root.resolve())
     else:check()
 
 if __name__=='__main__':
