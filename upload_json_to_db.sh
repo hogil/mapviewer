@@ -2,7 +2,7 @@
 set -u
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")" || exit 1
 printf '%s\n' 'JSON to PostgreSQL upload' 'Settings: start.sh' 'Existing DB settings will be preserved.' ''
-bash ./start.sh upload
+python3 -u ./upload_json_to_db.py
 upload_status=$?
 if [[ "$upload_status" -ne 0 ]]; then
     printf '\n%s\n' 'Upload failed. Read the error above before trying again.' >&2

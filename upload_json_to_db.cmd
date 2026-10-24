@@ -6,7 +6,7 @@ echo JSON to PostgreSQL upload
 echo Settings: start.ps1
 echo Existing DB settings will be preserved.
 echo.
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0start.ps1" -Action upload
+python -u "%~dp0upload_json_to_db.py"
 set "UPLOAD_EXIT_CODE=%ERRORLEVEL%"
 echo.
 if not "%UPLOAD_EXIT_CODE%"=="0" echo Upload failed. Read the error above before trying again.

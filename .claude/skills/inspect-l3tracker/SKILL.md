@@ -210,5 +210,5 @@ argument-hint: [점검-범위]
 - The extracted colour legend route test supplies its package context and isolated file-mode database stub; it must not import the server or depend on local DB configuration.
 
 ### 2026-10-24 Start-script DB configuration
-- DB settings belong to start.ps1 (Windows) and start.sh (Linux); api/database.py must not load .env files. Upload wrappers delegate to the matching start script so migration and app startup use identical settings.
-- Verify start.ps1 -Action check/upload and bash start.sh check/upload, including nonzero failure propagation. DB actions must exit before app launch or cache cleanup.
+- DB settings belong to start.ps1 (Windows) and start.sh (Linux); api/database.py must not load .env files. The standalone upload_json_to_db.py reads literal DB assignments from the matching start script without executing it. Upload wrappers run that Python file.
+- Start scripts only configure and launch the app; do not add migration/action dispatch. Verify python upload_json_to_db.py (Windows) and python3 upload_json_to_db.py (Linux), including nonzero failure propagation. Importing must not launch the app or clean caches.

@@ -17,16 +17,6 @@ export DB_TABLE_SETTINGS="user_settings"
 export DB_TABLE_NOTICE_STATE="notice_state"
 export DB_TABLE_ACCESS_EVENTS="access_events"
 
-# bash start.sh upload imports legacy data; no argument starts the app.
-action="${1:-start}"
-case "$action" in
-    upload|bootstrap|migrate|verify|check)
-        shift
-        exec python3 scripts/manage_db.py "$action" "$@"
-        ;;
-    start) ;;
-    *) echo "Usage: bash start.sh [start|upload|bootstrap|migrate|verify|check]" >&2; exit 2 ;;
-esac
 if [[ "$APP_STORAGE" == postgres ]]; then
     python3 scripts/manage_db.py check || exit 1
 fi

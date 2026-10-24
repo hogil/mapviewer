@@ -9,9 +9,11 @@ mode never silently falls back to stale legacy files when the DB is unavailable.
 
 Edit DB environment variables directly in `start.sh` on Linux or `start.ps1` on
 Windows. No `.env` file is created or loaded. Both start scripts explicitly set the
-connection settings, including passwords, before launching the app or DB command.
-The upload launchers delegate to the matching start script, so they use the same
-settings. Settings in these tracked scripts are visible to repository readers.
+connection settings, including passwords, before launching the app.
+The separate `upload_json_to_db.py` reads literal DB assignments from the matching
+start script without executing it. Use single-quoted values in start.ps1 and literal
+quoted values without variable interpolation in start.sh. The upload wrappers run
+this Python file. Settings in these tracked scripts are visible to repository readers.
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -69,7 +71,7 @@ Using the existing PostgreSQL superuser, create `l3tracker_app` once with LOGIN,
 CREATEDB and CREATEROLE. Set the same password in the start script. Then:
 
 ```bash
-bash start.sh upload
+python3 upload_json_to_db.py
 bash start.sh
 ```
 
@@ -85,7 +87,7 @@ is not ready; otherwise it checks the configured database service. On a differen
 install PostgreSQL 16 first. Binaries/data are not repository files; DB credentials are configured in start.ps1.
 
 ```powershell
-.\start.ps1 -Action upload
+python upload_json_to_db.py
 .\start.ps1
 ```
 
@@ -95,7 +97,7 @@ From the project folder, double-click `upload_json_to_db.cmd` on Windows. It use
 the DB settings in `start.ps1`, creates any missing DB objects, imports the JSON/CSV/SQLite sources,
 checks that all JSON keys exist and prints the connection result. Its window stays
 open so success or errors can be read. For automation use `--no-pause`.
-On Linux use `bash start.sh upload` or `bash upload_json_to_db.sh`; both use the settings in `start.sh`.
+On Linux use `python3 upload_json_to_db.py` or `bash upload_json_to_db.sh`; both use the settings in `start.sh`.
 Whether a desktop double-click opens a terminal depends on the file manager settings.
 Both launchers preserve original files and newer existing DB settings. Different
 values from an old source snapshot are reported rather than overwritten.
@@ -118,11 +120,11 @@ notice flags and deduplicates legacy login events. `verify` compares catalogue/s
 JSON rows with sources immediately after initial migration. A later user edit may
 legitimately differ from the old JSON snapshot; verification does not overwrite it.
 
-Use `--source-root` to import a different snapshot directory. For deliberate notice
-publication, edit the catalogue and run:
+Use `python3 upload_json_to_db.py --source-root /absolute/snapshot` to import a different snapshot directory. For deliberate notice
+publication, export the DB_* settings in the calling shell, edit the catalogue and run:
 
 ```bash
-bash start.sh migrate --replace-catalogue
+python3 scripts/manage_db.py migrate --replace-catalogue
 ```
 
 Only catalogue content is overwritten by this option. Real new notices are unread;

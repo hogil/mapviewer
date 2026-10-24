@@ -1,9 +1,4 @@
-﻿param(
-    [ValidateSet('start','upload','bootstrap','migrate','verify','check')]
-    [string]$Action = 'start'
-)
-
-# Windows 11 개발 서버 시작 스크립트
+﻿# Windows 11 개발 서버 시작 스크립트
 # PowerShell에서 실행: .\start.ps1
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
@@ -41,12 +36,8 @@ if ($env:APP_STORAGE -eq 'postgres') {
             if ($LASTEXITCODE -ne 0) { throw 'Local PostgreSQL startup failed.' }
         }
     }
-    if ($Action -ne 'start') {
-        & python (Join-Path $PSScriptRoot 'scripts/manage_db.py') $Action @args
-        exit $LASTEXITCODE
-    }
     & python (Join-Path $PSScriptRoot 'scripts/manage_db.py') check
-    if ($LASTEXITCODE -ne 0) { throw 'Run start.ps1 -Action upload before starting the app.' }
+    if ($LASTEXITCODE -ne 0) { throw 'Run python upload_json_to_db.py before starting the app.' }
 }
 
 # 환경변수 설정
