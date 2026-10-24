@@ -212,3 +212,32 @@ argument-hint: [점검-범위]
 ### 2026-10-24 Start-script DB configuration
 - DB settings belong to start.ps1 (Windows) and start.sh (Linux); api/database.py must not load .env files. The standalone upload_json_to_db.py reads literal DB assignments from the matching start script without executing it. Upload wrappers run that Python file.
 - Start scripts only configure and launch the app; do not add migration/action dispatch. Verify python upload_json_to_db.py (Windows) and python3 upload_json_to_db.py (Linux), including nonzero failure propagation. Importing must not launch the app or clean caches.
+
+### Cross-feature interaction coverage (2026-10-24)
+- A full inspection includes Class Manager and Label Explorer CRUD, then live multi-tab interaction rather than testing each module in isolation.
+- e2e_chunk3.js record tab-state-preserve-10-tabs repeats real tab/thumbnail/viewer clicks across wafer, label, composite, measure and MY LOT five times each; compare image order, selection state and highlight, explorer scope, overlay, scroll, loaded thumbnails and rendered pixels. Browser errors and HTTP5xx fail the interaction.
+- e2e_extended_linked.js adds search/sort/LOT, class rename/collision, label membership, MY LOT groups, colour cancel, navigator/minimap, multi-search, scratch-tab lifecycle and actual DOM-cache eviction after opening more live tabs than the cache limit. Run via extended-linked or the complete extended lane only with explicit E2E consent.
+
+### 2026-10-24 Measure single-view return state leaking between tabs
+- Root cause: js/main.js::enterSingleImageMode stored multi-Measure return items in _singleImageMeasureRestoreItems, but captureActivePageState/applyPageState did not preserve or clear that field per tab. Leaving a Measure detail and later returning from a wafer detail could apply stale Measure items, replacing a 5000-image grid with a 1000-entry duplicated Measure grid.
+- Fix: serialize/restore the pending Measure return items with each page state, and clear them before opening a new single image. Keep the existing empty-selection double-click auto-highlight behavior.
+- Guard: extended-cross-role reuses chunk3 ten-tab fixtures and performs 25 real cross-role double-click/tab roundtrips with exact image order/count, selection/highlight, scroll, visible-image and pixel assertions. It is a separate lane so the unchanged per-chunk timeout is retained. Browser E2E requires explicit consent.
+
+### 2026-10-24 Class selection lost after grid detail roundtrip
+- Root cause: js/main.js::loadImage cleared labelSelection.selectedClasses for grid-derived single images as well as direct Explorer image selection. Re-entering a Label grid after cross-tab detail viewing lost its selected class.
+- Fix: keep class selection when singleImageFromGrid is true; retain the existing clear for direct Explorer image selection. The extended-cross-role lane compares selected classes as well as grid selection through repeated actual double-click/tab interactions.
+
+### 2026-10-24 Modified selection overwritten by a stale double-click snapshot
+- Root cause: toggleGridImageSelect retained the earlier plain-click snapshot after Ctrl/Shift selection. A double-click on that earlier image within 900ms could restore stale indices, dropping the new multi-selection.
+- Fix: invalidate the plain-click snapshot when Ctrl/Shift modifies selection, and restore it only while the clicked image is still the sole selection. This also protects Ctrl+A from the same stale snapshot. Keep uninterrupted plain-click/double-click restoration behavior.
+- Guards: check-audit-frontend.mjs exercises original methods for Ctrl, Shift, Ctrl+A and the normal double-click case. extended-linked navigator/zoom/minimap returns to the original grid and strictly compares selection and highlight without timing/selection-order workarounds.
+
+### 2026-10-24 Colour cancellation racing with background pyramid generation
+- Root cause: colour preview/cancel invalidated a user cache tree while _generate_pyramid_pipeline wrote a temporary JPEG inside it. Retry recovered the UI, but the server logged an encoder ENOENT error. File stat/read could also race deletion.
+- Fix: full_app.py::_thumbnail_cache_guard permits concurrent generation/read per cache owner and excludes invalidation until active users finish. Reentrant reads and distinct-owner parallelism are preserved. Pipeline uses the existing per-output-path lock; API cache waits run off the event loop. Pyramid responses snapshot stat+bytes under the same ownership guard. Use lexical absolute cache keys so Windows path resolution does not open files during replacement.
+- Guards: check_pyramid_regressions.py blocks a real native JPEG encoder while queueing deletion, tests same-owner/different-owner concurrency and reentrant reads, then verifies deletion and regeneration. check_thumbnail_publication.py checks reader/deletion ordering and encoder-failure release. extended-linked colour cancellation plus server-log-guards must pass together; keep original failure artifacts.
+
+### 2026-10-24 Delayed LOT scroll restoration touching another tab
+- Root cause: flat showGrid scroll callbacks had no render/page guard; showGridByLot callbacks checked a render generation but not page ownership. Switching to a cached tab did not necessarily start a new render generation, so a previous tab could move the new tab from scroll0 to62.
+- Fix: guard both flat and LOT callbacks by render generation and originating page ID. Release the old restoration flag when its page has changed, without moving or refreshing the new page. Preserve strict pixel scroll assertions and existing global grid-column preferences.
+- Guards: check-audit-frontend.mjs executes both original flat/LOT callbacks against another active page and a newer render (failed62!=0 before the fix). extended-linked close/recreate keeps strict scroll comparison and adds real cache eviction with more tabs than the DOM cache limit.

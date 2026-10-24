@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("all", "1", "2", "3", "extended", "extended-navigation", "extended-storage", "extended-composite", "extended-edges")]
+    [ValidateSet("all", "1", "2", "3", "extended", "extended-navigation", "extended-storage", "extended-composite", "extended-edges", "extended-linked", "extended-cross-role")]
     [string]$Chunk = "all",
     [switch]$WithSmoke,
     [switch]$Headless,
@@ -443,11 +443,13 @@ if ($WithSmoke) {
 }
 
 $scripts = switch ($Chunk) {
-    "extended" { @("scripts/e2e_extended_navigation.js", "scripts/e2e_extended_storage.js", "scripts/e2e_extended_composite.js", "scripts/e2e_extended_edges.js") }
+    "extended" { @("scripts/e2e_extended_navigation.js", "scripts/e2e_extended_storage.js", "scripts/e2e_extended_composite.js", "scripts/e2e_extended_edges.js", "scripts/e2e_extended_linked.js", "scripts/e2e_extended_cross_role.js") }
     "extended-navigation" { @("scripts/e2e_extended_navigation.js") }
     "extended-storage" { @("scripts/e2e_extended_storage.js") }
     "extended-composite" { @("scripts/e2e_extended_composite.js") }
     "extended-edges" { @("scripts/e2e_extended_edges.js") }
+    "extended-linked" { @("scripts/e2e_extended_linked.js") }
+    "extended-cross-role" { @("scripts/e2e_extended_cross_role.js") }
     "1" { @("scripts/e2e_chunk1.js") }
     "2" { @("scripts/e2e_chunk2.js") }
     "3" { @("scripts/e2e_chunk3.js") }
@@ -1149,7 +1151,7 @@ function Stop-E2ETrackedPidProcesses {
 }
 
 function Get-E2EResidualProcesses {
-    $e2eNodePattern = 'scripts[\\/](e2e_chunk[123]|e2e_extended_(navigation|storage|composite|edges)|e2e_saml_bootstrap_smoke|e2e_fresh_boot_smoke|e2e_visible_smoke)\.js'
+    $e2eNodePattern = 'scripts[\\/](e2e_chunk[123]|e2e_extended_(navigation|storage|composite|edges|linked|cross_role)|e2e_saml_bootstrap_smoke|e2e_fresh_boot_smoke|e2e_visible_smoke)\.js'
     $tracked = @(Get-E2ETrackedPidProcesses -PidFilters @("e2e-node-*.pid", "e2e-browser-*.pid"))
     $patternMatches = @(Get-CimInstance Win32_Process | Where-Object {
         ($_.Name -eq "node.exe" -and $_.CommandLine -match $e2eNodePattern) -or

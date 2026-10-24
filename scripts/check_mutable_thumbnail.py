@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import threading
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 import unittest
@@ -18,7 +18,7 @@ from check_audit_api import FULL, load_functions as _load_functions
 
 
 def load_functions(source, names, **bindings):
-    namespace = dict(os=os, uuid=uuid, _thumbnail_publish_lock=threading.Lock(), contextmanager=contextmanager, RLock=threading.RLock,
+    namespace = dict(_thumbnail_cache_guard=lambda *args, **kwargs: nullcontext(), os=os, uuid=uuid, _thumbnail_publish_lock=threading.Lock(), contextmanager=contextmanager, RLock=threading.RLock,
                      MY_LOT_STORAGE_LOCK=threading.RLock(),
                      _classification_image_locks={}, _classification_image_locks_guard=threading.Lock())
     if "_generate_thumbnail_sync" in names:

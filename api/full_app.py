@@ -2957,6 +2957,61 @@ def _collect_related_preview_scheme_names(scheme_name: str) -> Tuple[Set[str], O
     return {item for item in names if item}, base_scheme
 
 
+_thumbnail_cache_condition = threading.Condition()
+_thumbnail_cache_states: Dict[str, Any] = {}
+
+
+@contextmanager
+def _thumbnail_cache_guard(path: Path, *, invalidating: bool = False):
+    """Allow concurrent cache users, but exclude deletion of their owner tree."""
+    root = config.THUMBNAIL_DIR.absolute()
+    try:
+        # Lexical paths avoid opening a cache file while another writer publishes.
+        parts = path.absolute().relative_to(root).parts
+        owner_parts = parts[:2] if parts and parts[0] == 'composite_map' else parts[:1]
+        owner = str(root.joinpath(*owner_parts)).casefold()
+    except ValueError:
+        owner = str(path.parent.absolute()).casefold()
+    identity = threading.get_ident()
+    with _thumbnail_cache_condition:
+        state = _thumbnail_cache_states.setdefault(owner, {'readers': {}, 'writer': False, 'waiting': 0})
+        if invalidating:
+            state['waiting'] += 1
+            try:
+                while state['writer'] or state['readers']:
+                    _thumbnail_cache_condition.wait()
+                state['writer'] = True
+            finally:
+                state['waiting'] -= 1
+        else:
+            # A renderer can read its own base cache while deletion is waiting.
+            while state['writer'] or (state['waiting'] and identity not in state['readers']):
+                _thumbnail_cache_condition.wait()
+            state['readers'][identity] = state['readers'].get(identity, 0) + 1
+    try:
+        yield
+    finally:
+        with _thumbnail_cache_condition:
+            if invalidating:
+                state['writer'] = False
+            else:
+                state['readers'][identity] -= 1
+                if not state['readers'][identity]:
+                    del state['readers'][identity]
+            _thumbnail_cache_condition.notify_all()
+
+
+def _remove_thumbnail_cache_path(path: Path) -> int:
+    with _thumbnail_cache_guard(path, invalidating=True):
+        if path.is_dir():
+            shutil.rmtree(path)
+            return 1
+        if path.exists():
+            path.unlink()
+            return 1
+    return 0
+
+
 def _invalidate_single_scheme_thumbnail_cache(scheme_name: str) -> int:
     """특정 scheme 관련 썸네일/피라미드 캐시를 디스크에서 제거한다."""
     name = str(scheme_name or "").strip()
@@ -2968,9 +3023,7 @@ def _invalidate_single_scheme_thumbnail_cache(scheme_name: str) -> int:
 
     try:
         scheme_dir = THUMBNAIL_DIR / name
-        if scheme_dir.exists() and scheme_dir.is_dir():
-            shutil.rmtree(scheme_dir)
-            deleted_count += 1
+        deleted_count += _remove_thumbnail_cache_path(scheme_dir)
     except Exception as e:
         logger.warning(f"scheme 폴더 삭제 실패: {name}, 오류: {e}")
 
@@ -2986,8 +3039,7 @@ def _invalidate_single_scheme_thumbnail_cache(scheme_name: str) -> int:
                         or lower_entry_name.startswith(f"pyramid_filter_{lower_name}_")
                     ):
                         try:
-                            shutil.rmtree(entry)
-                            deleted_count += 1
+                            deleted_count += _remove_thumbnail_cache_path(entry)
                         except Exception as e:
                             logger.warning(f"캐시 디렉토리 삭제 실패: {entry}, 오류: {e}")
                     continue
@@ -2999,8 +3051,7 @@ def _invalidate_single_scheme_thumbnail_cache(scheme_name: str) -> int:
                     or lower_entry_name.startswith(f"pyramid_filter_{lower_name}_")
                 ):
                     try:
-                        entry.unlink()
-                        deleted_count += 1
+                        deleted_count += _remove_thumbnail_cache_path(entry)
                     except Exception as e:
                         logger.warning(f"캐시 파일 삭제 실패: {entry}, 오류: {e}")
     except Exception as e:
@@ -3059,12 +3110,7 @@ def _invalidate_composite_thumbnail_caches(
     deleted_count = 0
     for target in targets:
         try:
-            if target.exists() and target.is_dir():
-                shutil.rmtree(target)
-                deleted_count += 1
-            elif target.exists():
-                target.unlink()
-                deleted_count += 1
+            deleted_count += _remove_thumbnail_cache_path(target)
         except Exception as exc:
             logger.warning(f"Composite thumbnail cache 삭제 실패: {target}, 오류: {exc}")
 
@@ -3197,7 +3243,7 @@ async def save_color_scheme(request: Request):
         
         # 파일에 저장 (마지막 수정 시간 추가)
         if await asyncio.to_thread(save_color_legends, legends, updated_scheme_name=scheme_name):
-            _invalidate_scheme_thumbnail_caches([scheme_name])
+            await asyncio.to_thread(_invalidate_scheme_thumbnail_caches, [scheme_name])
             return {"success": True, "schemeName": scheme_name}
         else:
             raise HTTPException(status_code=500, detail="색상 스킴 저장 실패")
@@ -3236,7 +3282,7 @@ async def delete_color_scheme(request: Request):
         cache_targets = set(related_names)
         if base_scheme:
             cache_targets.add(base_scheme)
-        deleted_cache_entries = _invalidate_scheme_thumbnail_caches(cache_targets)
+        deleted_cache_entries = await asyncio.to_thread(_invalidate_scheme_thumbnail_caches, cache_targets)
 
         return {
             "success": True,
@@ -3271,7 +3317,7 @@ async def save_color_scheme_ratio(request: Request):
         legends[scheme_name]['ratio'] = ratio_data
 
         if await asyncio.to_thread(save_color_legends, legends, updated_scheme_name=scheme_name):
-            _invalidate_scheme_thumbnail_caches([scheme_name])
+            await asyncio.to_thread(_invalidate_scheme_thumbnail_caches, [scheme_name])
             return {"success": True, "schemeName": scheme_name}
         else:
             raise HTTPException(status_code=500, detail="Ratio 색상 저장 실패")
@@ -3310,7 +3356,7 @@ async def save_composite_colors_endpoint(request: Request):
         scheme = get_user_color_scheme(login_id)
         settings = save_composite_color_settings(colors, scheme, background=background)
         # 🔥 composite 썸네일 캐시 무효화 — PLTE 패치가 새 색상을 반영하도록
-        _invalidate_composite_thumbnail_caches(login_id=login_id or ANONYMOUS_LOGIN_ID)
+        await asyncio.to_thread(_invalidate_composite_thumbnail_caches, login_id=login_id or ANONYMOUS_LOGIN_ID)
         # 🔥 measure-thumb도 composite fallback 사용할 수 있으므로 인메모리 캐시 클리어
         keys_to_del = [k for k in _measure_thumb_cache if f":{scheme}:" in k]
         for k in keys_to_del:
@@ -5601,8 +5647,25 @@ _thumbnail_publish_lock = Lock()
 
 def _read_thumbnail_bytes(path: Path) -> bytes:
     # Windows cannot replace a file while an unshared reader holds it open.
-    with _thumbnail_publish_lock:
+    with _thumbnail_cache_guard(path), _thumbnail_publish_lock:
         return path.read_bytes()
+
+
+def _read_pyramid_cache(path: Path, source_mtime: Optional[float] = None):
+    with _thumbnail_cache_guard(path), _pyramid_path_lock(path):
+        try:
+            info = path.stat()
+            if info.st_size <= 0 or (source_mtime is not None and info.st_mtime < source_mtime):
+                return None
+            return info, _read_thumbnail_bytes(path)
+        except FileNotFoundError:
+            return None
+
+
+def _generate_and_read_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, **kwargs):
+    with _thumbnail_cache_guard(pyramid_path):
+        _generate_pyramid_sync(image_path, pyramid_path, level, **kwargs)
+        return _read_pyramid_cache(pyramid_path)
 
 
 def _generate_thumbnail_sync(
@@ -5619,39 +5682,40 @@ def _generate_thumbnail_sync(
     bin_overlay: bool = False,
     gradient_filter: Optional[str] = None,
 ):
-    # Publish only complete images; every encoder and deferred overlay uses this path.
-    for attempt in range(2):
-        temporary = thumbnail_path.with_name(f".thumb-{uuid.uuid4().hex}{thumbnail_path.suffix}")
-        try:
-            _render_thumbnail_sync(
-                image_path, temporary, size, personalized, scheme, force_jpeg_encoder,
-                grade_filter, bottom_filter, border_normalize, measure_overlay,
-                bin_overlay, gradient_filter,
-            )
-            if not temporary.exists():
-                if not image_path.exists():
-                    return
-                raise FileNotFoundError(f"Thumbnail output disappeared: {temporary}")
-            if temporary.stat().st_size == 0:
-                raise RuntimeError("Thumbnail encoder produced an empty file")
-            with _thumbnail_publish_lock:
-                os.replace(temporary, thumbnail_path)
-            return
-        except Exception as exc:
-            # libvips wraps ENOENT in its own Error; only retry a vanished output
-            # directory or a missing temporary file at publication, not encoder errors.
-            if attempt == 0 and image_path.exists() and (
-                not thumbnail_path.parent.exists()
-                or (not temporary.exists() and (
-                    isinstance(exc, FileNotFoundError)
-                    or 'No such file or directory' in str(exc)
-                ))
-            ):
-                continue
-            logger.error(f"[THUMBNAIL_GENERATION_ERROR] 썸네일 생성 중 오류: {image_path} -> {thumbnail_path}, 오류: {exc}")
-            raise
-        finally:
-            temporary.unlink(missing_ok=True)
+    with _thumbnail_cache_guard(thumbnail_path):
+        # Publish only complete images; every encoder and deferred overlay uses this path.
+        for attempt in range(2):
+            temporary = thumbnail_path.with_name(f".thumb-{uuid.uuid4().hex}{thumbnail_path.suffix}")
+            try:
+                _render_thumbnail_sync(
+                    image_path, temporary, size, personalized, scheme, force_jpeg_encoder,
+                    grade_filter, bottom_filter, border_normalize, measure_overlay,
+                    bin_overlay, gradient_filter,
+                )
+                if not temporary.exists():
+                    if not image_path.exists():
+                        return
+                    raise FileNotFoundError(f"Thumbnail output disappeared: {temporary}")
+                if temporary.stat().st_size == 0:
+                    raise RuntimeError("Thumbnail encoder produced an empty file")
+                with _thumbnail_publish_lock:
+                    os.replace(temporary, thumbnail_path)
+                return
+            except Exception as exc:
+                # libvips wraps ENOENT in its own Error; only retry a vanished output
+                # directory or a missing temporary file at publication, not encoder errors.
+                if attempt == 0 and image_path.exists() and (
+                    not thumbnail_path.parent.exists()
+                    or (not temporary.exists() and (
+                        isinstance(exc, FileNotFoundError)
+                        or 'No such file or directory' in str(exc)
+                    ))
+                ):
+                    continue
+                logger.error(f"[THUMBNAIL_GENERATION_ERROR] 썸네일 생성 중 오류: {image_path} -> {thumbnail_path}, 오류: {exc}")
+                raise
+            finally:
+                temporary.unlink(missing_ok=True)
 
 
 def _thumbnail_cache_stat(path: Path):
@@ -6569,7 +6633,7 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
 
     source_bytes = _mutable_image_snapshot(image_path)
 
-    with _pyramid_path_lock(pyramid_path):
+    with _thumbnail_cache_guard(pyramid_path), _pyramid_path_lock(pyramid_path):
         # 🔥 디렉토리 생성 안전성 강화
         try:
             pyramid_path.parent.mkdir(parents=True, exist_ok=True)
@@ -7042,7 +7106,7 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
                 logger.error(f"❌ [PIPELINE] 개인색 적용 실패: scheme={scheme}, levels={levels}, error={e}", exc_info=True)
                 # 개인색 적용 실패 시 원본 로드 (fallback)
                 original_image = None
-        
+
         # 개인색 적용 실패 시 또는 개인색 설정이 없는 경우 원본 로드
         if original_image is None:
             if personalized and scheme:
@@ -7054,9 +7118,9 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
                 memory=True,
                 unlimited=True
             )
-        
+
         results = []
-        
+
         for level in levels:
             temp_path = None
             try:
@@ -7078,164 +7142,165 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
                     bottom_filter,
                     border_normalize,
                 )
-                
-                # 🔥 디렉토리 생성 안전성 강화
-                try:
-                    pyramid_dir.mkdir(parents=True, exist_ok=True)
-                    if not pyramid_dir.exists():
-                        raise OSError(f"디렉토리 생성 실패: {pyramid_dir}")
-                except OSError as dir_err:
-                    logger.error(f"❌ [PIPELINE] 디렉토리 생성 실패: {pyramid_dir}, 오류: {dir_err}")
-                    results.append((level, False, f"DIR_ERROR: {dir_err}"))
-                    continue
-                
+
                 pyramid_path = pyramid_dir / f"{stem}_L{int(level*100)}.{format_ext}"
-                
-                # 🔥 개인색 설정이 있으면 캐시 무시하고 항상 재생성
-                # (개인색 설정이 바뀌었을 수 있으므로 캐시된 파일을 사용하지 않음)
-                if personalized and scheme:
-                    # 🔥 개인색 설정이 있으면 비개인색 경로의 캐시 파일 확인 및 삭제
-                    non_personalized_dir = config.THUMBNAIL_DIR / f"pyramid_{int(level*100)}"
-                    non_personalized_path = non_personalized_dir / f"{stem}_L{int(level*100)}.{format_ext}"
-                    if non_personalized_path.exists():
-                        try:
-                            non_personalized_path.unlink()
-                            logger.debug(f"🗑️ [PIPELINE] 비개인색 캐시 파일 삭제: level={level}, path={non_personalized_path}")
-                        except Exception as e:
-                            logger.warning(f"⚠️ [PIPELINE] 비개인색 캐시 파일 삭제 실패: {e}")
-                    
-                    # 🔥 개인색 경로의 파일이 있더라도 확인 후 재생성 여부 결정
-                    # (타임스탬프가 최신이고 파일이 유효하면 사용, 아니면 재생성)
-                    if pyramid_path.exists():
-                        try:
-                            image_mtime = image_path.stat().st_mtime
-                            if pyramid_path.stat().st_mtime >= image_mtime and pyramid_path.stat().st_size > 0:
-                                logger.info(f"✅ [PIPELINE] 개인색 캐시 사용: level={level}, scheme={scheme}")
-                                results.append((level, True, "EXISTS"))
-                                continue
-                            else:
-                                # 캐시가 오래되었거나 손상된 경우 재생성
-                                logger.debug(f"🔄 [PIPELINE] 개인색 캐시 무효 - 재생성: level={level}, scheme={scheme}")
-                                try:
-                                    pyramid_path.unlink()
-                                except Exception:
-                                    pass
-                        except Exception as e:
-                            logger.debug(f"🔄 [PIPELINE] 개인색 캐시 확인 실패 - 재생성: {e}")
-                    else:
-                        logger.debug(f"🔄 [PIPELINE] 개인색 캐시 없음 - 재생성: level={level}, scheme={scheme}")
-                else:
-                    # 개인색 설정이 없을 때만 캐시 확인
-                    if pyramid_path.exists():
-                        try:
-                            image_mtime = image_path.stat().st_mtime
-                            if pyramid_path.stat().st_mtime >= image_mtime:
-                                logger.info(f"⏭️ [PIPELINE SKIP] 이미 존재: level={level}")
-                                results.append((level, True, "EXISTS"))
-                                continue
-                        except Exception:
-                            pass
-                
-                # 레벨 생성
-                work_image = original_image
-                
-                # 레벨에 따른 리사이즈
-                if level < 1.0:
-                    scale = level
-                    new_width = int(original_image.width * scale)
-                    new_height = int(original_image.height * scale)
-                    
-                    # 리사이즈 커널 선택 (BICUBIC 고품질 강제)
-                    kernel = pyvips.enums.Kernel.CUBIC
-                    
-                    work_image = work_image.resize(scale, kernel=kernel)
-                
-                # 저장
-                temp_path = pyramid_path.with_name(pyramid_path.name + f".{uuid.uuid4().hex}.tmp")
-                
-                # 포맷별 저장
-                if format_ext == "png":
-                    work_image.pngsave(
-                        str(temp_path),
-                        compression=6,
-                        interlace=False,
-                        strip=True,
-                        effort=1,
-                        keep=pyvips.enums.ForeignKeep.NONE,
-                    )
-                elif format_ext == "webp":
-                    work_image.webpsave(
-                        str(temp_path),
-                        Q=quality,
-                        lossless=False,
-                        effort=4,
-                        strip=True,
-                        smart_subsample=False,
-                    )
-                else:  # jpeg
-                    # pyvips만 사용 (TurboJPEG 제거)
+                with _thumbnail_cache_guard(pyramid_path), _pyramid_path_lock(pyramid_path):
+                    # 🔥 디렉토리 생성 안전성 강화
                     try:
-                        work_image.jpegsave(
+                        pyramid_dir.mkdir(parents=True, exist_ok=True)
+                        if not pyramid_dir.exists():
+                            raise OSError(f"디렉토리 생성 실패: {pyramid_dir}")
+                    except OSError as dir_err:
+                        logger.error(f"❌ [PIPELINE] 디렉토리 생성 실패: {pyramid_dir}, 오류: {dir_err}")
+                        results.append((level, False, f"DIR_ERROR: {dir_err}"))
+                        continue
+
+
+                    # 🔥 개인색 설정이 있으면 캐시 무시하고 항상 재생성
+                    # (개인색 설정이 바뀌었을 수 있으므로 캐시된 파일을 사용하지 않음)
+                    if personalized and scheme:
+                        # 🔥 개인색 설정이 있으면 비개인색 경로의 캐시 파일 확인 및 삭제
+                        non_personalized_dir = config.THUMBNAIL_DIR / f"pyramid_{int(level*100)}"
+                        non_personalized_path = non_personalized_dir / f"{stem}_L{int(level*100)}.{format_ext}"
+                        if non_personalized_path.exists():
+                            try:
+                                _remove_thumbnail_cache_path(non_personalized_path)
+                                logger.debug(f"🗑️ [PIPELINE] 비개인색 캐시 파일 삭제: level={level}, path={non_personalized_path}")
+                            except Exception as e:
+                                logger.warning(f"⚠️ [PIPELINE] 비개인색 캐시 파일 삭제 실패: {e}")
+
+                        # 🔥 개인색 경로의 파일이 있더라도 확인 후 재생성 여부 결정
+                        # (타임스탬프가 최신이고 파일이 유효하면 사용, 아니면 재생성)
+                        if pyramid_path.exists():
+                            try:
+                                image_mtime = image_path.stat().st_mtime
+                                if pyramid_path.stat().st_mtime >= image_mtime and pyramid_path.stat().st_size > 0:
+                                    logger.info(f"✅ [PIPELINE] 개인색 캐시 사용: level={level}, scheme={scheme}")
+                                    results.append((level, True, "EXISTS"))
+                                    continue
+                                else:
+                                    # 캐시가 오래되었거나 손상된 경우 재생성
+                                    logger.debug(f"🔄 [PIPELINE] 개인색 캐시 무효 - 재생성: level={level}, scheme={scheme}")
+                                    try:
+                                        pyramid_path.unlink()
+                                    except Exception:
+                                        pass
+                            except Exception as e:
+                                logger.debug(f"🔄 [PIPELINE] 개인색 캐시 확인 실패 - 재생성: {e}")
+                        else:
+                            logger.debug(f"🔄 [PIPELINE] 개인색 캐시 없음 - 재생성: level={level}, scheme={scheme}")
+                    else:
+                        # 개인색 설정이 없을 때만 캐시 확인
+                        if pyramid_path.exists():
+                            try:
+                                image_mtime = image_path.stat().st_mtime
+                                if pyramid_path.stat().st_mtime >= image_mtime:
+                                    logger.info(f"⏭️ [PIPELINE SKIP] 이미 존재: level={level}")
+                                    results.append((level, True, "EXISTS"))
+                                    continue
+                            except Exception:
+                                pass
+
+                    # 레벨 생성
+                    work_image = original_image
+
+                    # 레벨에 따른 리사이즈
+                    if level < 1.0:
+                        scale = level
+                        new_width = int(original_image.width * scale)
+                        new_height = int(original_image.height * scale)
+
+                        # 리사이즈 커널 선택 (BICUBIC 고품질 강제)
+                        kernel = pyvips.enums.Kernel.CUBIC
+
+                        work_image = work_image.resize(scale, kernel=kernel)
+
+                    # 저장
+                    temp_path = pyramid_path.with_name(pyramid_path.name + f".{uuid.uuid4().hex}.tmp")
+
+                    # 포맷별 저장
+                    if format_ext == "png":
+                        work_image.pngsave(
+                            str(temp_path),
+                            compression=6,
+                            interlace=False,
+                            strip=True,
+                            effort=1,
+                            keep=pyvips.enums.ForeignKeep.NONE,
+                        )
+                    elif format_ext == "webp":
+                        work_image.webpsave(
                             str(temp_path),
                             Q=quality,
+                            lossless=False,
+                            effort=4,
                             strip=True,
-                            optimize_coding=False,     # 속도 우선
-                            subsample_mode=1,          # 4:2:0 (가장 빠름)
-                            interlace=False,           # 인터레이스 비활성화
-                            trellis_quant=False        # 트렐리스 양자화 비활성화
+                            smart_subsample=False,
                         )
-                    except pyvips.Error as jpeg_err:
-                        logger.error(f"❌ [PIPELINE JPEG] 저장 실패: {temp_path}, 오류: {jpeg_err}")
-                        # 디렉토리 다시 확인
-                        if not temp_path.parent.exists():
-                            logger.error(f"❌ [PIPELINE JPEG] 디렉토리 없음: {temp_path.parent}")
-                            try:
-                                temp_path.parent.mkdir(parents=True, exist_ok=True)
-                                work_image.jpegsave(
-                                    str(temp_path),
-                                    Q=quality,
-                                    strip=True,
-                                    optimize_coding=False,
-                                    subsample_mode=1,
-                                    interlace=False,
-                                    trellis_quant=False
-                                )
-                            except Exception as retry_err:
-                                logger.error(f"❌ [PIPELINE JPEG] 재시도 실패: {retry_err}")
-                                results.append((level, False, f"JPEG_SAVE_ERROR: {retry_err}"))
+                    else:  # jpeg
+                        # pyvips만 사용 (TurboJPEG 제거)
+                        try:
+                            work_image.jpegsave(
+                                str(temp_path),
+                                Q=quality,
+                                strip=True,
+                                optimize_coding=False,     # 속도 우선
+                                subsample_mode=1,          # 4:2:0 (가장 빠름)
+                                interlace=False,           # 인터레이스 비활성화
+                                trellis_quant=False        # 트렐리스 양자화 비활성화
+                            )
+                        except pyvips.Error as jpeg_err:
+                            logger.error(f"❌ [PIPELINE JPEG] 저장 실패: {temp_path}, 오류: {jpeg_err}")
+                            # 디렉토리 다시 확인
+                            if not temp_path.parent.exists():
+                                logger.error(f"❌ [PIPELINE JPEG] 디렉토리 없음: {temp_path.parent}")
+                                try:
+                                    temp_path.parent.mkdir(parents=True, exist_ok=True)
+                                    work_image.jpegsave(
+                                        str(temp_path),
+                                        Q=quality,
+                                        strip=True,
+                                        optimize_coding=False,
+                                        subsample_mode=1,
+                                        interlace=False,
+                                        trellis_quant=False
+                                    )
+                                except Exception as retry_err:
+                                    logger.error(f"❌ [PIPELINE JPEG] 재시도 실패: {retry_err}")
+                                    results.append((level, False, f"JPEG_SAVE_ERROR: {retry_err}"))
+                                    continue
+                            else:
+                                results.append((level, False, f"JPEG_SAVE_ERROR: {jpeg_err}"))
                                 continue
-                        else:
-                            results.append((level, False, f"JPEG_SAVE_ERROR: {jpeg_err}"))
-                            continue
-                
-                # 임시 파일을 최종 파일로 안전하게 이동
-                # 이미 파일이 존재하면 스킵 (백그라운드에서 동시 생성 방지)
-                if pyramid_path.exists():
-                    # 임시 파일만 삭제
-                    try:
-                        temp_path.unlink()
-                    except:
-                        pass
-                    results.append((level, True, "EXISTS_OTHER"))
-                    continue
-                
-                # 안전한 파일 이동 (원자적 교체)
-                try:
-                    temp_path.replace(pyramid_path)
-                except (PermissionError, OSError) as err:
-                    # 권한 오류 시 임시 파일 삭제만 (다른 프로세스가 사용 중일 수 있음)
-                    try:
-                        temp_path.unlink()
-                    except:
-                        pass
-                    # 파일이 생성 중이거나 사용 중이면 스킵
+
+                    # 임시 파일을 최종 파일로 안전하게 이동
+                    # 이미 파일이 존재하면 스킵 (백그라운드에서 동시 생성 방지)
                     if pyramid_path.exists():
-                        results.append((level, True, "EXISTS_LOCKED"))
+                        # 임시 파일만 삭제
+                        try:
+                            temp_path.unlink()
+                        except:
+                            pass
+                        results.append((level, True, "EXISTS_OTHER"))
+                        continue
+
+                    # 안전한 파일 이동 (원자적 교체)
+                    try:
+                        temp_path.replace(pyramid_path)
+                    except (PermissionError, OSError) as err:
+                        # 권한 오류 시 임시 파일 삭제만 (다른 프로세스가 사용 중일 수 있음)
+                        try:
+                            temp_path.unlink()
+                        except:
+                            pass
+                        # 파일이 생성 중이거나 사용 중이면 스킵
+                        if pyramid_path.exists():
+                            results.append((level, True, "EXISTS_LOCKED"))
+                        else:
+                            raise Exception(f"파일 이동 실패: {err}")
                     else:
-                        raise Exception(f"파일 이동 실패: {err}")
-                else:
-                    results.append((level, True, "SUCCESS"))
-                
+                        results.append((level, True, "SUCCESS"))
+
             except Exception as e:
                 # temp 파일이 남아있으면 정리
                 if temp_path is not None and temp_path.exists():
@@ -7245,9 +7310,9 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
                         pass
                 logger.warning(f"⚠️ [PIPELINE ERROR] Level {level} 생성 실패: {e}")
                 results.append((level, False, str(e)))
-        
+
         return results
-        
+
     except Exception as e:
         if isinstance(e, FileNotFoundError) and e.filename and Path(e.filename) == image_path:
             return [(level, False, "SOURCE_DELETED") for level in levels]
@@ -7584,7 +7649,7 @@ async def get_image(
                     logger.debug(f"🔍 [CACHE] 비개인색 피라미드 존재하지만 무시: {non_personalized_path}")
                     # 🔥 비개인색 캐시 파일 삭제 (혼동 방지)
                     try:
-                        non_personalized_path.unlink()
+                        await asyncio.to_thread(_remove_thumbnail_cache_path, non_personalized_path)
                         logger.debug(f"🗑️ [CACHE] 비개인색 캐시 파일 삭제: {non_personalized_path}")
                     except Exception as e:
                         logger.warning(f"⚠️ [CACHE] 비개인색 캐시 파일 삭제 실패: {e}")
@@ -7595,58 +7660,24 @@ async def get_image(
                 if not is_head:
                     logger.debug(f"🎨 [NON-PERSONALIZED] 개인색 설정 비활성화 - 기본 피라미드 사용")
             
-            # 🔥 개인색 설정이 활성화된 경우, 반드시 개인색 경로의 파일만 확인
-            # 비개인색 경로의 파일이 있어도 절대 사용하지 않음
-            if personalized and scheme:
-                # 개인색 경로의 파일만 확인
-                if not pyramid_path.exists():
-                    # 🔥 개인색 경로에 파일이 없으면 강제로 재생성 (비개인색 캐시 사용 안 함)
-                    if not is_head:
-                        logger.info(f"🔄 [CACHE] 개인색 경로에 캐시 없음 - 재생성: level={level}, scheme={scheme}")
-                elif pyramid_path.stat().st_size > 0 and pyramid_path.stat().st_mtime >= image_mtime:
-                    st = pyramid_path.stat()
-                    # 🔥 캐시 히트는 debug 레벨로 (대량 요청 시 로그 폭주 방지)
-                    if not is_head:
-                        logger.debug(f"✅ [CACHE HIT] 파일: {st.st_size/(1024*1024):.1f}MB (personalized={personalized}, scheme={scheme})")
-
-                    headers = {
-                        "Cache-Control": "no-cache",
-                        "Content-Type": content_type,
-                        "ETag": compute_etag(st),
-                        "X-Pyramid-Level": str(level),
-                        "X-Cache-Status": "HIT",
-                        "X-File-Size": str(st.st_size)
-                    }
-                    # 🔥 메모리 기반 응답 — FileResponse stat/read 경합 방지
-                    return Response(content=pyramid_path.read_bytes(), media_type=content_type, headers=headers)
-            else:
-                # 비개인색 설정인 경우: 기존 로직 유지
-                if pyramid_path.exists() and pyramid_path.stat().st_size > 0:
-                    if pyramid_path.stat().st_mtime >= image_mtime:
-                        st = pyramid_path.stat()
-                        # 🔥 캐시 히트는 debug 레벨로 (대량 요청 시 로그 폭주 방지)
-                        if not is_head:
-                            logger.debug(f"✅ [CACHE HIT] 파일: {st.st_size/(1024*1024):.1f}MB (personalized={personalized}, scheme={scheme})")
-
-                        headers = {
-                            "Cache-Control": "no-cache",
-                            "Content-Type": content_type,
-                            "ETag": compute_etag(st),
-                            "X-Pyramid-Level": str(level),
-                            "X-Cache-Status": "HIT",
-                            "X-File-Size": str(st.st_size)
-                        }
-                        # 🔥 메모리 기반 응답 — FileResponse stat/read 경합 방지
-                        return Response(content=pyramid_path.read_bytes(), media_type=content_type, headers=headers)
+            cached = await asyncio.to_thread(_read_pyramid_cache, pyramid_path, image_mtime)
+            if cached is not None:
+                st, content = cached
+                headers = {
+                    "Cache-Control": "no-cache", "Content-Type": content_type,
+                    "ETag": compute_etag(st), "X-Pyramid-Level": str(level),
+                    "X-Cache-Status": "HIT", "X-File-Size": str(st.st_size),
+                }
+                return Response(content=content, media_type=content_type, headers=headers)
 
             # 캐시 미스: 피라미드 이미지 생성
             # 🔥 executor로 오프로드하여 이벤트 루프 블로킹 방지
             if not is_head:
                 logger.info(f"🎯 [CACHE MISS] 피라미드 생성 시작: level={level}, path={pyramid_path}, personalized={personalized}, scheme={scheme}, grade_filter={grade_filter}, bottom_filter={bottom_filter}")
             _pyr_loop = asyncio.get_running_loop()
-            await _pyr_loop.run_in_executor(
+            generated = await _pyr_loop.run_in_executor(
                 IO_POOL,
-                lambda: _generate_pyramid_sync(
+                lambda: _generate_and_read_pyramid_sync(
                     image_path, pyramid_path, level,
                     personalized=personalized, scheme=scheme,
                     grade_filter=grade_filter, bottom_filter=bottom_filter,
@@ -7659,27 +7690,15 @@ async def get_image(
             # 개인별 설정 또는 필터가 활성화된 경우 background에서도 동일한 설정으로 생성
             asyncio.create_task(_generate_other_levels_background(image_path, level, stem, personalized=personalized, scheme=scheme, grade_filter=grade_filter, bottom_filter=bottom_filter, border_normalize=border_normalize, gradient_filter=gradient_filter))
 
-            # 생성된 파일 확인 및 반환
-            if pyramid_path.exists():
-                st = pyramid_path.stat()
-                file_size_mb = st.st_size / (1024*1024)
-                if not is_head:
-                    logger.info(f"✅ [PYRAMID SUCCESS] 파일: {file_size_mb:.1f}MB ({st.st_size:,} bytes)")
-
-                headers = {
-                    "Cache-Control": "no-cache",
-                    "Content-Type": content_type,
-                    "ETag": compute_etag(st),
-                    "X-Pyramid-Level": str(level),
-                    "X-Cache-Status": "MISS",
-                    "X-File-Size": str(st.st_size)
-                }
-                # 🔥 메모리 기반 응답 — FileResponse stat/read 경합 방지
-                return Response(content=pyramid_path.read_bytes(), media_type=content_type, headers=headers)
-            else:
-                if not is_head:
-                    logger.error(f"❌ [GENERATION FAILED] {pyramid_path}")
+            if generated is None:
                 raise HTTPException(status_code=500, detail="Pyramid generation failed")
+            st, content = generated
+            headers = {
+                "Cache-Control": "no-cache", "Content-Type": content_type,
+                "ETag": compute_etag(st), "X-Pyramid-Level": str(level),
+                "X-Cache-Status": "MISS", "X-File-Size": str(st.st_size),
+            }
+            return Response(content=content, media_type=content_type, headers=headers)
         else:
             # 원본 이미지 반환 (개인색 설정 적용 또는 필터링)
             if not is_head:
@@ -8520,7 +8539,7 @@ async def get_thumbnail(
                 # 🔥 메모리 기반 응답 — FileResponse는 stat()→read() 사이 파일 변경 시
                 # "Response content longer than Content-Length" 에러 발생 (색 변경 시 캐시 무효화 경합)
                 try:
-                    content = _read_thumbnail_bytes(thumb)
+                    content = await asyncio.to_thread(_read_thumbnail_bytes, thumb)
                     return Response(content=content, media_type=content_type, headers=headers)
                 except Exception as read_error:
                     logger.warning(f"썸네일 읽기 실패, 원본 제공 폴백: {read_error}")

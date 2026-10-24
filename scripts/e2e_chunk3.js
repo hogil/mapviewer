@@ -14,7 +14,8 @@ const { createRunner } = require('./e2e_playwright_session');
     append,
     focusWindow,
     close,
-  } = await createRunner(__filename);
+  } = await createRunner(process.env.E2E_CROSS_ROLE_ROUNDS === '1'
+    ? path.join(__dirname, 'e2e_extended_cross_role.js') : __filename);
 
   const imagesRoot = path.resolve(
     process.env.IMAGES_ROOT || (process.platform === 'win32' ? 'E:/data/images' : '/appdata/appuser/images')
@@ -2688,7 +2689,132 @@ const { createRunner } = require('./e2e_playwright_session');
     expectGridPreserved(mylotGridAfter, { selectedIdxs: [0, 2] });
     expectSinglePreserved(mylotSingleAfter, { path: mylotSingleBefore.selectedImagePath });
 
+    const repeatedRoundTrips = [];
+    if (process.env.E2E_CROSS_ROLE_ROUNDS === '1') {
+      const roles = [
+        { role: 'wafer', id: waferGridPageId },
+        { role: 'label', id: labelGridPageId },
+        { role: 'composite', id: compositeGridPageId },
+        { role: 'measure', id: measureGridPageId },
+        { role: 'mylot', id: mylotGridPageId },
+      ];
+      const gridIdentity = () => page.evaluate(() => ({
+        paths: [...window.viewer.currentGridImages],
+        selected: [...window.viewer.gridSelectedIdxs].sort((a, b) => a - b),
+        selectedUi: [...document.querySelectorAll('#image-grid .grid-thumb-wrap.selected')]
+          .map(wrap => Number(wrap.dataset.index)).sort((a, b) => a - b),
+        folders: [...window.viewer.selectedFolders].sort(),
+        classes: [...window.viewer.labelSelection.selectedClasses].sort(),
+        overlayMode: window.viewer.overlayMode,
+        measures: window.viewer._measureCheckedItems || [],
+        scroll: document.querySelector('.grid-scroll-wrapper').scrollTop,
+      }));
+      const assertGridIdentity = (actual, expected, label) => {
+        for (const key of ['paths', 'selected', 'selectedUi', 'folders', 'classes', 'overlayMode', 'measures']) {
+          if (JSON.stringify(actual[key]) !== JSON.stringify(expected[key])) {
+            const firstDifference = Array.isArray(actual[key]) && Array.isArray(expected[key])
+              ? expected[key].findIndex((value, i) => value !== actual[key][i]) : -1;
+            throw new Error(`${label}: ${key} changed ${JSON.stringify({
+              actualCount: actual[key]?.length, expectedCount: expected[key]?.length, firstDifference,
+              actual: key === 'paths' ? actual[key].slice(Math.max(0, firstDifference), Math.max(0, firstDifference) + 4) : actual[key],
+              expected: key === 'paths' ? expected[key].slice(Math.max(0, firstDifference), Math.max(0, firstDifference) + 4) : expected[key],
+            })}`);
+          }
+        }
+        expect(Math.abs(actual.scroll - expected.scroll) <= 12,
+          `${label}: scroll changed ${expected.scroll} -> ${actual.scroll}`);
+        expect(JSON.stringify(actual.selected) === JSON.stringify(actual.selectedUi), `${label}: selection highlight differs from state`);
+      };
+      const loadedGrid = async () => {
+        const proof = await waitForVisibleGridThumbsLoaded(12000, 500);
+        expect(proof?.visibleCount > 0 && proof.badCount === 0, `Cross-role grid has missing images: ${JSON.stringify(proof)}`);
+        return proof;
+      };
+      const renderedPixels = async expectedPath => {
+        await page.waitForFunction(target => {
+          const v = window.viewer;
+          return !v.gridMode && v.selectedImagePath === target && v.dom.imageCanvas.width > 1;
+        }, expectedPath, { timeout: 30000 });
+        await sleep(1200);
+        return page.evaluate(() => {
+          const canvas = document.createElement('canvas');
+          canvas.width = canvas.height = 32;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(window.viewer.dom.imageCanvas, 0, 0, 32, 32);
+          const pixels = [...ctx.getImageData(0, 0, 32, 32).data];
+          const colors = new Set();
+          for (let i = 0; i < pixels.length; i += 4) colors.add(pixels.slice(i, i + 4).join(','));
+          return { pixels, colorCount: colors.size };
+        });
+      };
+      const interactionErrors = [];
+      const onPageError = error => interactionErrors.push({ type: 'pageerror', message: error.message });
+      const onServerError = response => {
+        if (response.status() >= 500) interactionErrors.push({ type: 'http5xx', status: response.status(), url: response.url() });
+      };
+      page.on('pageerror', onPageError);
+      page.on('response', onServerError);
+      try {
+        for (let round = 0; round < 5; round++) {
+          for (let index = 0; index < roles.length; index++) {
+            const item = roles[(index + round) % roles.length];
+            const other = roles[(index + round + 1) % roles.length];
+            await page.locator(`#page-tabs [data-page-id="${item.id}"]`).click();
+            await waitGridRole(item.role);
+            await loadedGrid();
+            let imageIndex = await getMiddleVisibleGridIndex();
+            const initial = await gridIdentity();
+            if (initial.selected.length === 0) {
+              // Empty selection intentionally auto-selects the opened image.
+              // Use explicit UI selection for the preservation assertion.
+              const first = initial.paths.length > 1 ? (imageIndex + 1) % initial.paths.length : imageIndex;
+              await page.locator('#image-grid .grid-thumb-wrap').nth(first).click();
+              await page.waitForFunction(index => window.viewer.gridSelectedIdxs.length === 1 &&
+                window.viewer.gridSelectedIdxs[0] === index && !window.viewer._pendingGridPlainClickSelection, first);
+              if (first !== imageIndex) {
+                await page.locator('#image-grid .grid-thumb-wrap').nth(imageIndex).click({ modifiers: ['Control'] });
+                await page.waitForFunction(() => window.viewer.gridSelectedIdxs.length === 2);
+              }
+              imageIndex = await getMiddleVisibleGridIndex();
+            }
+            const before = await gridIdentity();
+            const expectedPath = before.paths[imageIndex];
+            await openGridDetail(item.role, `round-${round}-${item.role}`, imageIndex);
+            const detailId = await page.evaluate(() => window.viewer.pageManager.activePageId);
+            const pixelsBefore = await renderedPixels(expectedPath);
+            expect(pixelsBefore.colorCount > 1, `${item.role}: blank single image`);
+            await page.locator(`#page-tabs [data-page-id="${other.id}"]`).click();
+            await waitGridRole(other.role);
+            await loadedGrid();
+            const otherBefore = await gridIdentity();
+            await page.locator(`#page-tabs [data-page-id="${detailId}"]`).click();
+            const pixelsAfter = await renderedPixels(expectedPath);
+            const meanError = pixelsAfter.pixels.reduce((sum, value, i) => sum + Math.abs(value - pixelsBefore.pixels[i]), 0) / pixelsAfter.pixels.length;
+            expect(meanError <= 2, `${item.role}: image changed after tab switch, pixel error=${meanError}`);
+            await page.locator('#viewer-container').dblclick();
+            await page.waitForFunction(() => window.viewer.gridMode && window.viewer.viewMode !== 'gridImage');
+            await page.locator(`#page-tabs [data-page-id="${item.id}"]`).click();
+            await waitGridRole(item.role);
+            const thumbs = await loadedGrid();
+            assertGridIdentity(await gridIdentity(), before, `round ${round} ${item.role}`);
+            await page.locator(`#page-tabs [data-page-id="${other.id}"]`).click();
+            await waitGridRole(other.role);
+            assertGridIdentity(await gridIdentity(), otherBefore, `round ${round} other ${other.role}`);
+            const proof = { round: round + 1, role: item.role, expectedPath, imageCount: before.paths.length,
+              selected: before.selected, scroll: before.scroll, pixelMeanError: meanError, thumbs };
+            repeatedRoundTrips.push(proof);
+            append(`[CROSS_ROLE_ROUNDTRIP] ${JSON.stringify(proof)}\n`);
+          }
+        }
+      } finally {
+        page.off('pageerror', onPageError);
+        page.off('response', onServerError);
+      }
+      expect(interactionErrors.length === 0, `Cross-role browser/server errors: ${JSON.stringify(interactionErrors)}`);
+    }
+
     return {
+      repeatedRoundTrips,
       tabCount: tabCountState.pages.length,
       wafer: { before: waferGridExpected, after: waferGridAfter, single: waferSingleAfter.selectedImagePath },
       composite: { grid: compositeGridAfter.role, single: compositeSingleAfter.selectedImagePath },

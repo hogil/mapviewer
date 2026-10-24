@@ -5,9 +5,12 @@ import os
 import shutil
 import tempfile
 import threading
+import time
 import uuid
 import unittest
 from pathlib import Path
+from contextlib import contextmanager
+from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -17,10 +20,15 @@ from check_audit_api import FULL, load_functions
 
 
 class ThumbnailPublicationTests(unittest.TestCase):
-    def namespace(self, render):
-        return load_functions(FULL, ['_generate_thumbnail_sync', '_thumbnail_cache_stat', '_read_thumbnail_bytes'],
-                              os=os, uuid=uuid, _thumbnail_publish_lock=threading.Lock(),
-                              _render_thumbnail_sync=render)
+    def namespace(self, render, root=None):
+        ns = load_functions(FULL, ['_generate_thumbnail_sync', '_thumbnail_cache_stat', '_read_thumbnail_bytes',
+                                  '_thumbnail_cache_guard', '_remove_thumbnail_cache_path'],
+                            os=os, uuid=uuid, _thumbnail_publish_lock=threading.Lock(),
+                            _render_thumbnail_sync=render, threading=threading, shutil=shutil,
+                            config=SimpleNamespace(THUMBNAIL_DIR=root or Path(tempfile.gettempdir())),
+                            _thumbnail_cache_condition=threading.Condition(), _thumbnail_cache_states={})
+        ns['_thumbnail_cache_guard'] = contextmanager(ns['_thumbnail_cache_guard'])
+        return ns
 
     def test_real_encoders_retry_deleted_output_parent(self):
         for fmt in ('JPEG', 'WEBP', 'PNG'):
@@ -166,6 +174,64 @@ class ThumbnailPublicationTests(unittest.TestCase):
                 self.assertEqual(reader.result(timeout=5), b'old complete image')
                 writer.result(timeout=5)
             self.assertEqual(target.read_bytes(), b'new complete image')
+
+    def test_invalidation_waits_for_cache_reader(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / 'alice' / 'v1' / 'thumb.jpg'
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b'complete cache')
+            entered, release = threading.Event(), threading.Event()
+            ns = self.namespace(Mock(), root)
+            original_read = Path.read_bytes
+            def blocked_read(path):
+                if path == target:
+                    entered.set()
+                    if not release.wait(5):
+                        raise AssertionError('Cache reader was not released')
+                return original_read(path)
+            with patch.object(Path, 'read_bytes', blocked_read), ThreadPoolExecutor(max_workers=2) as pool:
+                reader = pool.submit(ns['_read_thumbnail_bytes'], target)
+                try:
+                    self.assertTrue(entered.wait(5))
+                    remover = pool.submit(ns['_remove_thumbnail_cache_path'], root / 'alice')
+                    deadline = time.monotonic() + 5
+                    while True:
+                        with ns['_thumbnail_cache_condition']:
+                            queued = any(state['waiting'] for state in ns['_thumbnail_cache_states'].values())
+                        if queued:
+                            break
+                        self.assertLess(time.monotonic(), deadline, 'Invalidation was not queued')
+                        time.sleep(.005)
+                    self.assertFalse(remover.done())
+                finally:
+                    release.set()
+                self.assertEqual(reader.result(timeout=5), b'complete cache')
+                self.assertEqual(remover.result(timeout=5), 1)
+            self.assertFalse(target.exists())
+
+    def test_encoder_failure_releases_cache_owner_for_invalidation_and_rebuild(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'source'
+            source.write_bytes(b'fixture')
+            target = root / 'alice' / 'v1' / 'thumb.jpg'
+            def failed_render(image, output, *args):
+                output.parent.mkdir(parents=True, exist_ok=True)
+                raise ValueError('injected encoder failure')
+            ns = self.namespace(failed_render, root)
+            with self.assertRaisesRegex(ValueError, 'injected encoder failure'):
+                ns['_generate_thumbnail_sync'](source, target, (8, 6))
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                self.assertEqual(pool.submit(ns['_remove_thumbnail_cache_path'], root / 'alice').result(timeout=5), 1)
+            def valid_render(image, output, *args):
+                output.parent.mkdir(parents=True, exist_ok=True)
+                Image.new('RGB', (8, 6), 'blue').save(output, 'JPEG')
+            ns['_render_thumbnail_sync'] = valid_render
+            ns['_generate_thumbnail_sync'](source, target, (8, 6))
+            with Image.open(target) as image:
+                image.load()
+                self.assertEqual(image.size, (8, 6))
 
     def test_all_original_image_fallbacks_preserve_gradient_filter(self):
         tree = ast.parse(FULL.read_text(encoding='utf-8-sig'))

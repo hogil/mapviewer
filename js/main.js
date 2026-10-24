@@ -2432,6 +2432,8 @@ class WaferMapViewer {
             _ratioActiveItemKey: this._ratioActiveItemKey || null,
             _ratioGradientCache: this._ratioGradientCache ? [...this._ratioGradientCache] : null,
             _measureCheckedItems: this._measureCheckedItems ? [...this._measureCheckedItems] : [],
+            _singleImageMeasureRestoreItems: Array.isArray(this._singleImageMeasureRestoreItems)
+                ? this.deepCloneSimple(this._singleImageMeasureRestoreItems) : null,
             _gridMeasureMap: canCompactGridArrays && !hasMeasureItems
                 ? null
                 : (Array.isArray(this._gridMeasureMap) ? this.deepCloneSimple(this._gridMeasureMap) : null),
@@ -3064,6 +3066,8 @@ class WaferMapViewer {
         // 🔥 Measure overlay 상태 복원 (탭 전환 시 유지)
         if ('overlayMode' in state) {
             this._measureCheckedItems = Array.isArray(state._measureCheckedItems) ? [...state._measureCheckedItems] : [];
+            this._singleImageMeasureRestoreItems = Array.isArray(state._singleImageMeasureRestoreItems)
+                ? this.deepCloneSimple(state._singleImageMeasureRestoreItems) : null;
             this._gridMeasureMap = Array.isArray(state._gridMeasureMap) ? this.deepCloneSimple(state._gridMeasureMap) : null;
             this._measureBaseImages = Array.isArray(state._measureBaseImages) ? [...state._measureBaseImages] : null;
             this.overlayMode = state.overlayMode || null;
@@ -19971,8 +19975,8 @@ class WaferMapViewer {
                 }
             }
 
-            // Label Explorer 클래스 선택 초기화 (이미지 선택 시 클래스 선택 해제)
-            if (this.labelSelection) {
+            // Grid detail keeps its source class selection; direct Explorer image selection clears it.
+            if (this.labelSelection && !this.singleImageFromGrid) {
                 this.labelSelection.selectedClasses = [];
                 this.updateLabelExplorerSelection();
             }
@@ -25613,6 +25617,10 @@ class WaferMapViewer {
             }, 50);
         }
 
+        const restoreId = (this._scrollRestoreId || 0) + 1;
+        this._scrollRestoreId = restoreId;
+        const restorePageId = this.pageManager?.activePageId || null;
+        this._restoringScroll = false;
         // 🔥 스크롤 위치 복원 (skipSaveState=true일 때만)
         if (skipSaveState && scrollTopToRestore !== null && scrollTopToRestore > 0 && scrollWrapper) {
             console.log(`📍 [SHOW_GRID] 스크롤 복원 대기: ${scrollTopToRestore}px`);
@@ -25622,6 +25630,8 @@ class WaferMapViewer {
 
             // 🔥 모든 DOM 조작이 끝난 후 스크롤 복원 (여러 번 강제 복원)
             const doRestore = () => {
+                if (this._scrollRestoreId !== restoreId) return;
+                if (restorePageId && this.pageManager?.activePageId !== restorePageId) return;
                 const currentScrollWrapper = this.getGridScrollWrapper();
                 if (currentScrollWrapper) {
                     const beforeScroll = currentScrollWrapper.scrollTop;
@@ -25639,6 +25649,11 @@ class WaferMapViewer {
             setTimeout(doRestore, 200);
             setTimeout(doRestore, 300);
             setTimeout(() => {
+                if (this._scrollRestoreId !== restoreId) return;
+                if (restorePageId && this.pageManager?.activePageId !== restorePageId) {
+                    this._restoringScroll = false;
+                    return;
+                }
                 doRestore();
                 this._restoringScroll = false;
                 this._forceRestartVisibleGridThumbs();
@@ -28575,6 +28590,9 @@ class WaferMapViewer {
             !snapshot ||
             snapshot.idx !== idx ||
             performance.now() - snapshot.timestamp >= 900 ||
+            !Array.isArray(this.gridSelectedIdxs) ||
+            this.gridSelectedIdxs.length !== 1 ||
+            this.gridSelectedIdxs[0] !== idx ||
             !Array.isArray(snapshot.indices)
         ) {
             return false;
@@ -28603,6 +28621,7 @@ class WaferMapViewer {
         const isCtrl = e && (e.ctrlKey || e.metaKey);
         const isShift = e && e.shiftKey;
         const previousSelection = Array.isArray(this.gridSelectedIdxs) ? [...this.gridSelectedIdxs] : [];
+        if (isCtrl || isShift) this._gridSelectionBeforeLastPrimaryClick = null;
 
         if (isShift && this.gridLastClickedIdx !== undefined) {
             // Shift+클릭: 범위 선택
@@ -29219,6 +29238,7 @@ class WaferMapViewer {
 
         // 🔥 Measure 모드: 더블클릭한 셀의 measure item에 맞게 overlay 적용
         // _gridMeasureMap 우선, 없으면 _measureCheckedItems fallback (그리드 표시 후 Measure 적용 시)
+        this._singleImageMeasureRestoreItems = null;
         let measureItem = this._gridMeasureMap ? this._gridMeasureMap[idx] : null;
         if (!measureItem && this._measureCheckedItems?.length > 0) {
             measureItem = this._measureCheckedItems[0];
@@ -38468,6 +38488,7 @@ class WaferMapViewer {
         // 🔥 이전 스크롤 복원 타이머 취소 (새 폴더 진입 시 이전 복원이 덮어쓰는 것 방지)
         const restoreId = (this._scrollRestoreId || 0) + 1;
         this._scrollRestoreId = restoreId;
+        const restorePageId = this.pageManager?.activePageId || null;
 
         // 🔥 0보다 큰 값만 복원 (0이면 이미 맨 위이므로 복원 불필요)
         if (scrollWrapper && scrollTopToRestore !== undefined && scrollTopToRestore !== null && scrollTopToRestore > 0) {
@@ -38480,6 +38501,7 @@ class WaferMapViewer {
             const doRestore = () => {
                 // 🔥 새 호출이 들어왔으면 이전 복원 중단
                 if (this._scrollRestoreId !== restoreId) return;
+                if (restorePageId && this.pageManager?.activePageId !== restorePageId) return;
                 const currentScrollWrapper = grid?.parentElement;
                 if (currentScrollWrapper) {
                     const beforeScroll = currentScrollWrapper.scrollTop;
@@ -38498,6 +38520,10 @@ class WaferMapViewer {
             setTimeout(doRestore, 300);
             setTimeout(() => {
                 if (this._scrollRestoreId !== restoreId) return;
+                if (restorePageId && this.pageManager?.activePageId !== restorePageId) {
+                    this._restoringScroll = false;
+                    return;
+                }
                 doRestore();
                 this._restoringScroll = false;
                 this._forceRestartVisibleGridThumbs();

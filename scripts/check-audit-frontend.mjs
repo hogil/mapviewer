@@ -75,6 +75,36 @@ try {
         await loading;
     });
 
+    await check('Ctrl/Shift selection cannot be undone by an earlier plain-click double-click snapshot', () => {
+        const toggle = method('toggleGridImageSelect', 'enterSingleViewMode');
+        const restore = method('_restoreGridSelectionBeforeLastPrimaryClick', 'toggleGridImageSelect');
+        for (const [event, expected] of [[{ ctrlKey: true }, [0, 2]], [{ shiftKey: true }, [0, 1, 2]]]) {
+            const viewer = { currentGridImages: ['a', 'b', 'c', 'd'], gridSelectedIdxs: [],
+                gridSelectedSet: new Set(), updateGridSelection: noop };
+            toggle.call(viewer, 0, {});
+            toggle.call(viewer, 2, event);
+            assert.deepEqual(viewer.gridSelectedIdxs, expected);
+            assert.equal(restore.call(viewer, 0), false);
+            assert.deepEqual(viewer.gridSelectedIdxs, expected);
+        }
+        const all = { currentGridImages: ['a', 'b', 'c', 'd'], selectedImages: ['a', 'b', 'c', 'd'],
+            gridSelectedIdxs: [], gridSelectedSet: new Set(), updateGridSelection: noop,
+            _clearPendingGridPlainClickSelection: noop, updateSelectedGridImagesList: noop };
+        toggle.call(all, 0, {});
+        const priorDocument = globalThis.document;
+        try {
+            globalThis.document = { getElementById: () => null };
+            method('selectAllGridImages', '_clearPendingGridPlainClickSelection').call(all);
+        } finally { globalThis.document = priorDocument; }
+        assert.equal(restore.call(all, 0), false);
+        assert.deepEqual(all.gridSelectedIdxs, [0, 1, 2, 3], 'Ctrl+A selection must survive a double-click on the earlier image');
+        const viewer = { currentGridImages: ['a', 'b', 'c', 'd'], gridSelectedIdxs: [1, 3],
+            gridSelectedSet: new Set([1, 3]), updateGridSelection: noop };
+        toggle.call(viewer, 0, {});
+        assert.equal(restore.call(viewer, 0), true);
+        assert.deepEqual(viewer.gridSelectedIdxs, [1, 3], 'An uninterrupted double-click still restores the previous selection');
+    });
+
     await check('MY LOT group response ownership and stale failure', async () => {
         deferFetch();
         const modal = Object.assign(Object.create(MyLotModal.prototype), {
@@ -262,6 +292,31 @@ try {
         scroll.scrollTop = 700;
         callback();
         assert.equal(scroll.scrollTop, 700, 'A new user scroll must cancel delayed restoration');
+    });
+
+    await check('Flat and LOT grid delayed scroll restoration belongs to its originating tab', () => {
+        for (const name of ['showGrid', 'showGridByLot']) {
+            const methodStart = main.indexOf(`    ${name}(`);
+            const start = main.indexOf('            const doRestore = () => {', methodStart);
+            const end = main.indexOf('            // 🔥 여러 번 복원 시도', start);
+            assert.ok(methodStart >= 0 && end > start);
+            const make = Function('grid', 'restoreId', 'scrollTopToRestore', 'restorePageId',
+                main.slice(start, end) + 'return doRestore;');
+            const scroll = { scrollTop: 0 };
+            const viewer = { _scrollRestoreId: 1, pageManager: { activePageId: 'B' },
+                getGridScrollWrapper: () => scroll,
+                invalidateGridOffsetCache: noop, loadVisibleGridThumbnails: noop, _scheduleVisibleGridRetry: noop };
+            const restore = make.call(viewer, { parentElement: scroll }, 1, 62, 'A');
+            restore();
+            assert.equal(scroll.scrollTop, 0, `${name}: a delayed restore must not move another tab`);
+            viewer.pageManager.activePageId = 'A';
+            restore();
+            assert.equal(scroll.scrollTop, 62, `${name}: the originating tab still restores its own scroll`);
+            viewer._scrollRestoreId = 2;
+            scroll.scrollTop = 0;
+            restore();
+            assert.equal(scroll.scrollTop, 0, `${name}: an obsolete render must not move the current grid`);
+        }
     });
 
     await check('Cached scroll restoration respects page ownership and newer scroll', async () => {

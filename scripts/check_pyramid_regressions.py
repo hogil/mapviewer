@@ -30,14 +30,16 @@ def main():
     config = SimpleNamespace(PYRAMID_FORMAT="WEBP", PYRAMID_Q=100,
                              PYRAMID_PNG_COMPRESSION=6, PYRAMID_PNG_EFFORT=1,
                              PYRAMID_LOADER_MODE="random", THUMBNAIL_DIR=output)
-    selected = {"_mutable_image_guard", "_mutable_image_snapshot", "_pyramid_path_lock", "_generate_pyramid_sync", "_generate_pyramid_pipeline"}
+    selected = {"_mutable_image_guard", "_mutable_image_snapshot", "_pyramid_path_lock", "_generate_pyramid_sync", "_generate_pyramid_pipeline", "_thumbnail_cache_guard", "_remove_thumbnail_cache_path", "_read_thumbnail_bytes", "_read_pyramid_cache", "_generate_and_read_pyramid_sync"}
     tree = ast.parse((repo / "api/full_app.py").read_text(encoding="utf-8-sig"))
     scope = dict(ROOT_DIR=args.source.resolve().parent, Path=Path, Optional=Optional, Dict=Dict, Any=Any,
                  contextmanager=contextmanager, Lock=threading.Lock, RLock=threading.RLock,
                  MY_LOT_STORAGE_LOCK=threading.RLock(), _classification_image_locks={},
                  _classification_image_locks_guard=threading.Lock(),
                  _pyramid_lock_guard=threading.Lock(), _pyramid_generation_locks={},
-                 config=config, uuid=uuid, shutil=shutil,
+                 config=config, uuid=uuid, shutil=shutil, threading=threading,
+                 _thumbnail_cache_condition=threading.Condition(), _thumbnail_cache_states={},
+                 _thumbnail_publish_lock=threading.Lock(),
                  logger=logging.getLogger("pyramid-regression"),
                  _resolve_pyramid_dir=lambda level, **kwargs: output / f"pipeline-{int(level * 100)}")
     exec(compile(ast.Module(body=[node for node in tree.body
@@ -116,6 +118,56 @@ def main():
     verify(target, "JPEG", (448, 448))
     assert not list(output.rglob("*.tmp")), "temporary files leaked"
     results.append(dict(test="concurrent-demand-background", passed=True, states=states))
+    snapshot_path = output / 'snapshot' / 'image.jpeg'
+    snapshot = scope['_generate_and_read_pyramid_sync'](fixture, snapshot_path, .7)
+    assert snapshot is not None and snapshot[0].st_size == len(snapshot[1])
+    assert scope['_read_pyramid_cache'](output / 'missing.jpeg') is None
+    assert scope['_read_pyramid_cache'](snapshot_path, snapshot[0].st_mtime + 1) is None
+    results.append(dict(test='pyramid-response-snapshot', passed=True))
+
+    # Coordinate an actual native encoder with deletion of its owner directory.
+    scope['_resolve_pyramid_dir'] = lambda level, scheme=None, **kwargs: output / (scheme or 'plain') / f'pipeline-{int(level * 100)}'
+    entered, release = threading.Event(), threading.Event()
+    native_save = pyvips.Image.jpegsave
+    base = output / 'alice' / 'base.jpg'
+    base.parent.mkdir(parents=True, exist_ok=True)
+    base.write_bytes(b'base bytes')
+
+    def blocked_save(image, filename, *values, **kwargs):
+        if 'slow_L70' in str(filename):
+            entered.set()
+            if not release.wait(5):
+                raise AssertionError('Encoder was not released')
+            # Reentrant cache reads must remain possible with invalidation queued.
+            assert scope['_read_thumbnail_bytes'](base) == b'base bytes'
+        return native_save(image, filename, *values, **kwargs)
+
+    with mock.patch.object(pyvips.Image, 'jpegsave', blocked_save), ThreadPoolExecutor(max_workers=4) as executor:
+        slow = executor.submit(pipeline, fixture, [.7], 'slow', 'jpeg', scheme='alice')
+        try:
+            assert entered.wait(5), 'Native encoding never started'
+            same_owner = executor.submit(pipeline, fixture, [.7], 'parallel', 'jpeg', scheme='alice')
+            assert all(item[1] for item in same_owner.result(timeout=5)), 'Same-owner generation was serialized'
+            invalidation = executor.submit(scope['_remove_thumbnail_cache_path'], output / 'alice')
+            deadline = time.monotonic() + 5
+            while not any(state['waiting'] for state in scope['_thumbnail_cache_states'].values()):
+                assert time.monotonic() < deadline, 'Invalidation was not queued'
+                time.sleep(.005)
+            assert not invalidation.done(), 'Invalidation deleted an encoding directory'
+            other_owner = executor.submit(pipeline, fixture, [.7], 'parallel', 'jpeg', scheme='bob')
+            assert all(item[1] for item in other_owner.result(timeout=5)), 'Other owner was blocked'
+            after = executor.submit(pipeline, fixture, [.7], 'after', 'jpeg', scheme='alice')
+            assert not after.done(), 'New generation passed a queued invalidator'
+        finally:
+            release.set()
+        assert all(item[1] for item in slow.result(timeout=5))
+        assert invalidation.result(timeout=5) == 1
+        assert all(item[1] for item in after.result(timeout=5))
+    assert not (output / 'alice' / 'pipeline-70' / 'slow_L70.jpeg').exists()
+    verify(output / 'alice' / 'pipeline-70' / 'after_L70.jpeg', 'JPEG', (448, 448))
+    results.append(dict(test='native-encoding-owner-invalidation', passed=True,
+                        sameOwnerParallel=True, otherOwnerParallel=True, reentrantRead=True))
+
     (output / "regression-results.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
     print(json.dumps(results, indent=2))
 
