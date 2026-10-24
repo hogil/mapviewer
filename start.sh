@@ -1,32 +1,33 @@
 #!/bin/bash
 # Ubuntu 24 계열 운영 서버용 스크립트 (SAML Auto Login + 운영값) - 32C / 198GB RAM
 
-# PostgreSQL 16: inherited environment overrides the local, untracked env file.
+# PostgreSQL 16: manage all DB settings here (no .env file).
 project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$project_dir" || exit 1
-db_env_file="${DB_ENV_FILE:-$project_dir/.env.postgres}"
-if [[ -f "$db_env_file" ]]; then
-    while IFS='=' read -r setting_name setting_value || [[ -n "$setting_name" ]]; do
-        if [[ "$setting_name" =~ ^(APP_STORAGE|DB_[A-Z_]+)$ && ! -v "$setting_name" ]]; then
-            setting_value="${setting_value%$'\r'}"
-            setting_value="${setting_value%\"}"; setting_value="${setting_value#\"}"
-            setting_value="${setting_value%\'}"; setting_value="${setting_value#\'}"
-            export "$setting_name=$setting_value"
-        fi
-    done < "$db_env_file"
-fi
-export APP_STORAGE="${APP_STORAGE:-postgres}"
-export DB_HOST="${DB_HOST:-127.0.0.1}"
-export DB_PORT="${DB_PORT:-5432}"
-export DB_NAME="${DB_NAME:-l3tracker}"
-export DB_USER="${DB_USER:-fbm}"
-export DB_SCHEMA="${DB_SCHEMA:-fbm}"
-export DB_ADMIN_USER="${DB_ADMIN_USER:-l3tracker_app}"
-export DB_TABLE_SETTINGS="${DB_TABLE_SETTINGS:-user_settings}"
-export DB_TABLE_NOTICE_STATE="${DB_TABLE_NOTICE_STATE:-notice_state}"
-export DB_TABLE_ACCESS_EVENTS="${DB_TABLE_ACCESS_EVENTS:-access_events}"
+export APP_STORAGE="postgres"
+export DB_HOST="127.0.0.1"
+export DB_PORT="5432"
+export DB_NAME="l3tracker"
+export DB_USER="fbm"
+export DB_PASSWORD="fbm"
+export DB_ADMIN_USER="l3tracker_app"
+export DB_ADMIN_PASSWORD="qie"
+export DB_SCHEMA="fbm"
+export DB_TABLE_SETTINGS="user_settings"
+export DB_TABLE_NOTICE_STATE="notice_state"
+export DB_TABLE_ACCESS_EVENTS="access_events"
+
+# bash start.sh upload imports legacy data; no argument starts the app.
+action="${1:-start}"
+case "$action" in
+    upload|bootstrap|migrate|verify|check)
+        shift
+        exec python3 scripts/manage_db.py "$action" "$@"
+        ;;
+    start) ;;
+    *) echo "Usage: bash start.sh [start|upload|bootstrap|migrate|verify|check]" >&2; exit 2 ;;
+esac
 if [[ "$APP_STORAGE" == postgres ]]; then
-    : "${DB_PASSWORD:?Set DB_PASSWORD in .env.postgres or the environment}"
     python3 scripts/manage_db.py check || exit 1
 fi
 

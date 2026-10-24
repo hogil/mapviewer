@@ -3,10 +3,10 @@ setlocal
 chcp 65001 >nul
 cd /d "%~dp0"
 echo JSON to PostgreSQL upload
-echo Settings: .env.postgres
+echo Settings: start.ps1
 echo Existing DB settings will be preserved.
 echo.
-python -u scripts\manage_db.py upload
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0start.ps1" -Action upload
 set "UPLOAD_EXIT_CODE=%ERRORLEVEL%"
 echo.
 if not "%UPLOAD_EXIT_CODE%"=="0" echo Upload failed. Read the error above before trying again.

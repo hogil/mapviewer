@@ -8,19 +8,6 @@ import threading
 
 ROOT = Path(__file__).resolve().parents[1]
 
-def load_environment():
-    path = Path(os.environ.get('DB_ENV_FILE', ROOT / '.env.postgres'))
-    if path.is_file():
-        for line in path.read_text(encoding='utf-8-sig').splitlines():
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-            key, separator, value = line.partition('=')
-            if separator and (key.startswith('DB_') or key == 'APP_STORAGE'):
-                os.environ.setdefault(key, value.strip().strip('\"\''))
-
-load_environment()
-
 def enabled():
     mode = os.environ.get('APP_STORAGE', 'files')
     if mode not in ('files', 'postgres'):

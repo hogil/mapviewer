@@ -1,7 +1,13 @@
+﻿param(
+    [ValidateSet('start','upload','bootstrap','migrate','verify','check')]
+    [string]$Action = 'start'
+)
+
 # Windows 11 개발 서버 시작 스크립트
 # PowerShell에서 실행: .\start.ps1
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+Set-Location -LiteralPath $PSScriptRoot
 
 # UTF-8 인코딩 설정 (한글 로그 깨짐 방지)
 $OutputEncoding = [System.Text.Encoding]::UTF8
@@ -12,30 +18,20 @@ $env:UVICORN_LIFESPAN = "on"   # FastAPI lifespan 강제 (인덱스 초기화/�
 $env:UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN = "15" # restart 시 종료 대기 상한(초)
 chcp 65001 | Out-Null
 
-# PostgreSQL 16: local credentials live outside Git; inherited env takes priority.
-$dbEnvironmentPath = if ($env:DB_ENV_FILE) { $env:DB_ENV_FILE } else { Join-Path $PSScriptRoot '.env.postgres' }
-if (Test-Path -LiteralPath $dbEnvironmentPath) {
-    foreach ($line in Get-Content -LiteralPath $dbEnvironmentPath -Encoding UTF8) {
-        if ($line -match '^(APP_STORAGE|DB_[A-Z_]+)=(.*)$') {
-            $settingName, $settingValue = $Matches[1], $Matches[2].Trim().Trim('"').Trim("'")
-            if ($null -eq [Environment]::GetEnvironmentVariable($settingName)) {
-                [Environment]::SetEnvironmentVariable($settingName, $settingValue)
-            }
-        }
-    }
-}
-$dbDefaults = @{
-    APP_STORAGE='postgres'; DB_HOST='127.0.0.1'; DB_PORT='5432'; DB_NAME='l3tracker';
-    DB_USER='fbm'; DB_SCHEMA='fbm'; DB_ADMIN_USER='l3tracker_app';
-    DB_TABLE_SETTINGS='user_settings'; DB_TABLE_NOTICE_STATE='notice_state'; DB_TABLE_ACCESS_EVENTS='access_events'
-}
-foreach ($settingName in $dbDefaults.Keys) {
-    if (-not [Environment]::GetEnvironmentVariable($settingName)) {
-        [Environment]::SetEnvironmentVariable($settingName, $dbDefaults[$settingName])
-    }
-}
+# PostgreSQL 16: manage all DB settings here (no .env file).
+$env:APP_STORAGE = 'postgres'
+$env:DB_HOST = '127.0.0.1'
+$env:DB_PORT = '5432'
+$env:DB_NAME = 'l3tracker'
+$env:DB_USER = 'fbm'
+$env:DB_PASSWORD = 'fbm'
+$env:DB_ADMIN_USER = 'l3tracker_app'
+$env:DB_ADMIN_PASSWORD = 'qie'
+$env:DB_SCHEMA = 'fbm'
+$env:DB_TABLE_SETTINGS = 'user_settings'
+$env:DB_TABLE_NOTICE_STATE = 'notice_state'
+$env:DB_TABLE_ACCESS_EVENTS = 'access_events'
 if ($env:APP_STORAGE -eq 'postgres') {
-    if (-not $env:DB_PASSWORD) { throw 'Set DB_PASSWORD in .env.postgres or the environment.' }
     $localPgBin = Join-Path $PSScriptRoot '.local/postgresql16-win/pgsql/bin'
     $localPgData = Join-Path $PSScriptRoot '.local/postgresql16-win/data'
     if ($env:DB_HOST -eq '127.0.0.1' -and (Test-Path -LiteralPath "$localPgBin/pg_isready.exe")) {
@@ -45,8 +41,12 @@ if ($env:APP_STORAGE -eq 'postgres') {
             if ($LASTEXITCODE -ne 0) { throw 'Local PostgreSQL startup failed.' }
         }
     }
+    if ($Action -ne 'start') {
+        & python (Join-Path $PSScriptRoot 'scripts/manage_db.py') $Action @args
+        exit $LASTEXITCODE
+    }
     & python (Join-Path $PSScriptRoot 'scripts/manage_db.py') check
-    if ($LASTEXITCODE -ne 0) { throw 'Run scripts/manage_db.py bootstrap and migrate before starting the app.' }
+    if ($LASTEXITCODE -ne 0) { throw 'Run start.ps1 -Action upload before starting the app.' }
 }
 
 # 환경변수 설정

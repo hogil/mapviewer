@@ -7,10 +7,11 @@ mode never silently falls back to stale legacy files when the DB is unavailable.
 
 ## Environment
 
-Copy `.env.postgres.example` to `.env.postgres` and enter passwords locally. The real
-file and `.local/` database binaries/data are excluded from Git. Both start scripts and
-the management command read this file; inherited environment variables take priority.
-Use literal KEY=value entries, without shell commands or variable interpolation.
+Edit DB environment variables directly in `start.sh` on Linux or `start.ps1` on
+Windows. No `.env` file is created or loaded. Both start scripts explicitly set the
+connection settings, including passwords, before launching the app or DB command.
+The upload launchers delegate to the matching start script, so they use the same
+settings. Settings in these tracked scripts are visible to repository readers.
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -19,9 +20,9 @@ Use literal KEY=value entries, without shell commands or variable interpolation.
 | DB_PORT | 5432 | PostgreSQL port |
 | DB_NAME | l3tracker | Database name |
 | DB_USER | fbm | Runtime data-only account |
-| DB_PASSWORD | supplied locally | Runtime password |
+| DB_PASSWORD | configured in start script | Runtime password |
 | DB_ADMIN_USER | l3tracker_app | Bootstrap administrator |
-| DB_ADMIN_PASSWORD | supplied locally | Administrator password |
+| DB_ADMIN_PASSWORD | configured in start script | Administrator password |
 | DB_SCHEMA | fbm | SQL schema, distinct from colour schemes |
 | DB_TABLE_SETTINGS | user_settings | JSONB settings, colours, catalogue and aggregates |
 | DB_TABLE_NOTICE_STATE | notice_state | Per-user seen/read flags |
@@ -61,19 +62,14 @@ On Ubuntu 24.04 with the PostgreSQL 16 packages available:
 sudo apt-get install postgresql-16 postgresql-client-16
 sudo systemctl enable --now postgresql
 python3 -m pip install -r requirements.txt
-cp .env.postgres.example .env.postgres
-# Edit the local env file with the agreed passwords.
+# Edit the DB settings in start.sh.
 ```
 
 Using the existing PostgreSQL superuser, create `l3tracker_app` once with LOGIN,
-CREATEDB and CREATEROLE. Supply its password locally. Then:
+CREATEDB and CREATEROLE. Set the same password in the start script. Then:
 
 ```bash
-python3 scripts/manage_db.py bootstrap
-python3 scripts/manage_db.py migrate --dry-run
-python3 scripts/manage_db.py migrate
-python3 scripts/manage_db.py verify
-python3 scripts/manage_db.py check
+bash start.sh upload
 bash start.sh
 ```
 
@@ -86,24 +82,20 @@ Linux, but PostgreSQL authentication must permit the configured application role
 The prepared PostgreSQL 16 cluster is in `.local/postgresql16-win/` and listens on
 loopback port 5432. `start.ps1` starts this cluster when its binaries exist and the port
 is not ready; otherwise it checks the configured database service. On a different PC,
-install PostgreSQL 16 first. Binaries/data and credentials are not repository files.
+install PostgreSQL 16 first. Binaries/data are not repository files; DB credentials are configured in start.ps1.
 
 ```powershell
-python scripts/manage_db.py bootstrap
-python scripts/manage_db.py migrate --dry-run
-python scripts/manage_db.py migrate
-python scripts/manage_db.py verify
-python scripts/manage_db.py check
+.\start.ps1 -Action upload
 .\start.ps1
 ```
 
 ## Migration and preservation
 
-From the project folder, double-click `upload_json_to_db.cmd` on Windows. It loads
-`.env.postgres`, creates any missing DB objects, imports the JSON/CSV/SQLite sources,
+From the project folder, double-click `upload_json_to_db.cmd` on Windows. It uses
+the DB settings in `start.ps1`, creates any missing DB objects, imports the JSON/CSV/SQLite sources,
 checks that all JSON keys exist and prints the connection result. Its window stays
 open so success or errors can be read. For automation use `--no-pause`.
-On Linux use executable `upload_json_to_db.sh` (or `bash upload_json_to_db.sh`).
+On Linux use `bash start.sh upload` or `bash upload_json_to_db.sh`; both use the settings in `start.sh`.
 Whether a desktop double-click opens a terminal depends on the file manager settings.
 Both launchers preserve original files and newer existing DB settings. Different
 values from an old source snapshot are reported rather than overwritten.
@@ -130,7 +122,7 @@ Use `--source-root` to import a different snapshot directory. For deliberate not
 publication, edit the catalogue and run:
 
 ```bash
-python3 scripts/manage_db.py migrate --replace-catalogue
+bash start.sh migrate --replace-catalogue
 ```
 
 Only catalogue content is overwritten by this option. Real new notices are unread;
@@ -146,6 +138,8 @@ python3 scripts/check_postgres_storage.py
 python3 scripts/check_postgres_api.py https://127.0.0.1
 ```
 
+Direct Python management/test commands require the DB_* variables to be exported
+in the calling shell. Unlike the start scripts, they do not supply passwords.
 The first uses an owned disposable schema and needs the administrator credentials.
 The API check creates uniquely named records and removes only its own records. Neither
 uses browser automation. Existing file-backend announcement checks explicitly select

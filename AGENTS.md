@@ -532,3 +532,7 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
 - Colour mutation routes in api/full_app.py must run synchronous legend load/save through asyncio.to_thread so DB waits do not block other requests. scripts/check_audit_api.py checks event-loop progress during delayed DB loads for all three routes.
 - scripts/manage_db.py::verify must load each distinct namespace once, rather than once per source row. scripts/check_postgres_storage.py checks namespace query counts and preservation of newer DB values.
 - The extracted colour legend route test supplies its package context and isolated file-mode database stub; it must not import the server or depend on local DB configuration.
+
+### 2026-10-24 Start-script DB configuration
+- DB settings belong to start.ps1 (Windows) and start.sh (Linux); api/database.py must not load .env files. Upload wrappers delegate to the matching start script so migration and app startup use identical settings.
+- Verify start.ps1 -Action check/upload and bash start.sh check/upload, including nonzero failure propagation. DB actions must exit before app launch or cache cleanup.
