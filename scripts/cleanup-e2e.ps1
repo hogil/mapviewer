@@ -68,7 +68,7 @@ if (Test-Path $tmpRoot) {
     }
 }
 
-$e2eNodePattern = 'scripts[\\/](e2e_chunk[123]|e2e_fresh_boot_smoke|e2e_visible_smoke)\.js'
+$e2eNodePattern = 'scripts[\\/](e2e_chunk[123]|e2e_extended_(navigation|storage|composite|edges|linked|cross_role)|e2e_announcements|e2e_saml_bootstrap_smoke|e2e_fresh_boot_smoke|e2e_visible_smoke)\.js'
 Get-CimInstance Win32_Process | Where-Object {
     $_.Name -eq "node.exe" -and $_.CommandLine -match $e2eNodePattern
 } | ForEach-Object {

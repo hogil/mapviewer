@@ -25,7 +25,7 @@ argument-hint: [Phase 번호 또는 범위]
 | P1 | Layout `layout.txt` chip 매칭, Chip Coord/Radious/Shot 순서, Shot 토글/선택 및 shot_id 경계 표시 | `scripts/e2e_chunk2.js` `layout-chip-coordinates` |
 | P1 | 선택 Chip/Shot 영역 Composite Map 및 결과 positions 정합성, Shot chip 수/선택영역 crop, 좌표/grid 선택 Good/Bad/Yield summary, 필터된 chip 선택 차단/export, 선택 crop MY LOT/Label 연결 메뉴 | `scripts/e2e_chunk2.js` `coordinate-selection-cells`, `selected-region-composite`, `selected-region-export` |
 | P1 | 기존 Measure 다중선택/탭 복귀/썸네일 무결성 | `30,33,34,35,39`, `41,42,45,47,48,56` |
-| P2 | 전체 63개 Phase와 성능/프로세스 정리 | `run-e2e-playwright.ps1 -Chunk all` |
+| P2 | 전체 63개 Phase, Smoke, 공지, 확장/연계 6개 lane과 성능/프로세스 정리 | `run-e2e-playwright.ps1 -Chunk all` |
 
 각 P0/P1 수정 사이클은 코드 정적 검사 → 새 Playwright 세션의 해당 chunk → 실패 로그 원인 수정 → 같은 chunk 재실행 순서로 반복한다. 상태 플래그만 확인하지 말고 실제 bitmap/canvas, visible thumbnail, navigator index를 함께 확인한다.
 
@@ -33,7 +33,7 @@ argument-hint: [Phase 번호 또는 범위]
 
 ## E2E 역할 구성과 실행 게이트
 
-- **결정론적 browser lane**: `scripts/run-e2e-playwright.ps1 -Chunk all -Headless`가 실제 Playwright UI, bitmap, request body, 다운로드, 성능, 프로세스 정리를 수행한다. LLM이 브라우저를 임의로 클릭해 PASS를 만드는 구조가 아니다.
+- **결정론적 browser lane**: `scripts/run-e2e-playwright.ps1 -Chunk all -Headless`가 기본 chunk1~3, SAML 재시작 10회와 SAML/Fresh Boot Smoke, 공지, 확장 navigation/storage/composite/edges/linked/cross-role을 한 세션에서 실행한다. 실제 Playwright UI, bitmap, request body, 다운로드, 성능, 프로세스 정리를 수행하며, LLM이 브라우저를 임의로 클릭해 PASS를 만드는 구조가 아니다.
 - **Scout**: 저비용 read-only agent 1개가 evidence/log/diff를 읽고 사실, 첫 실패, 누락 검증을 추출한다.
 - **Planner**: 상위 모델 3개가 독립적으로 P0/P1 재현·수정 계획을 작성한다.
 - **Reviewer/Judge**: 상위 모델 3개가 실제 E2E 결과, output image dimensions, positions, export TSV, UI request body를 각각 점수화하고 토론용 근거를 남긴다.
@@ -177,7 +177,9 @@ E2E 실행이 끝나면 최종 답변에 반드시 "무엇을 어떻게 실행�
 
 ## 절대규칙: 기본 전체 실행
 
-- **인자 없이 `/e2e-test` 실행 시 Phase 1~63 전체를 실행한다.**
+- **인자 없이 `/e2e-test` 실행 시 `run-e2e-playwright.ps1 -Chunk all`을 사용해 Phase 1~63, Smoke, 공지, 확장/연계 6개 lane을 모두 실행한다.**
+- `-Chunk all`은 Smoke를 자동 포함한다. `-WithSmoke`나 별도의 `-Chunk extended` 실행은 필요하지 않다. stats-save-race와 server-log-guards도 마지막에 실행한다.
+- 범위 누락 회귀(2026-10-24): 기존 `all`은 chunk1~3만 선택하고 Smoke·확장 검사는 별도 옵션에 의존했다. 전체 실행 목록은 Smoke 2개 + 기본 3개 + 공지 1개 + 확장 6개로 중복 없이 12개여야 하며, SAML 재시작 10회와 마지막 통계/서버 로그 검사도 포함해야 한다. 부분 chunk 선택은 해당 범위를 유지한다.
 - 특정 Phase만 실행하려면 `/e2e-test 3,9,12` 또는 `/e2e-test 33-50`처럼 명시적으로 지정해야 한다.
 - "전체 테스트", "E2E 테스트" 등 범위 미지정 요청은 전체 실행으로 간주한다.
 - Phase를 건너뛰거나 일부만 실행하는 것은 사용자가 명시적으로 요청한 경우에만 허용된다.
@@ -6629,7 +6631,7 @@ return {
 - Composite 완료 이후 1500ms 지연 NPZ writer와 다음 cleanup 사이 경합은 기존 UI PASS 뒤에도 서버 `[NPZ] save failed`로 남았다. 완료는 필요한 NPZ/positions/gradient 저장 완료를 뜻해야 한다. selected-region-composite는 UI 완료 직후 재시도 없이 Subset200/2개와 positions1개를 확인하고 NPZ save/rename 로그도 실패 처리한다. 저장을 완료 경로에 포함한 후 Composite 생성 시간을 다시 측정한다.
 
 ### 2026-09-11 확장 복합 동작 lane
-- `-Chunk extended -Headless`는 navigation/storage/composite/edges를 실행하며 개별 `extended-<lane>`도 가능하다. 입력 seed17/53/101, 화면1280×720/1440×900/1920×1080, 실제 응답 역전과 오류 후 복구, 사용자별 저장, 소스1/2/5×영역3종을 교차한다. 기존 all 검사와 별도 범위이며 둘의 결과를 합쳐 실행했다고 보고하지 않는다.
+- `-Chunk all`은 navigation/storage/composite/edges/linked/cross-role 여섯 확장 lane을 기본 검사·Smoke·공지와 함께 실행한다. `-Chunk extended -Headless` 또는 개별 `extended-<lane>`은 해당 확장 범위만 실행한다. 입력 seed17/53/101, 화면1280×720/1440×900/1920×1080, 실제 응답 역전과 오류 후 복구, 사용자별 저장, 소스1/2/5×영역3종을 교차한다. linked는 연계 9종, cross-role은 5개 역할·10개 탭에서 실제 더블클릭 25회 왕복을 검증한다. 부분 실행을 전체 실행으로 보고하지 않는다.
 - `restoreCachedPageView/applyPageState` 지연 scroll은 활성 탭·grid·새 사용자 scroll을 검사한다. 이전 cached callback이 사용자700을0으로 덮은 회귀는 `extended-tabs-viewport`가 저장값과 복원값으로 잡는다.
 - 열 입력 Enter가 blur 후 grid Enter 단축키까지 전파되어 이미지를 여는 회귀는 gridColsInput에서 stopPropagation하고 seed 혼합 동작에서 columns 직후 실제 visible grid를 검사한다.
 - MY LOT batch는 없는 paths를 errors/error_count에 합친다. `storage-partial-accounting`은 duplicate1/valid1/missing1의 저장1·중복1·실패1와 toast를 확인한다. `check_extended_batch.py`는 전부누락과 기존복사실패+누락도 검사한다.

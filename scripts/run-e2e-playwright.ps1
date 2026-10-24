@@ -435,15 +435,17 @@ function Invoke-StatsSaveRaceGuard {
     return 2
 }
 
-if ($WithSmoke) {
+$runSmoke = $Chunk -eq "all" -or $WithSmoke
+if ($runSmoke) {
     $samlRestartExit = Invoke-SamlBootstrapRestartSmoke -OutputDir $outputDir -Headless ([bool]$Headless)
     if ($samlRestartExit -ne 0 -and $overallExit -eq 0) {
         $overallExit = $samlRestartExit
     }
 }
 
+$extendedScripts = @("scripts/e2e_extended_navigation.js", "scripts/e2e_extended_storage.js", "scripts/e2e_extended_composite.js", "scripts/e2e_extended_edges.js", "scripts/e2e_extended_linked.js", "scripts/e2e_extended_cross_role.js")
 $scripts = switch ($Chunk) {
-    "extended" { @("scripts/e2e_extended_navigation.js", "scripts/e2e_extended_storage.js", "scripts/e2e_extended_composite.js", "scripts/e2e_extended_edges.js", "scripts/e2e_extended_linked.js", "scripts/e2e_extended_cross_role.js") }
+    "extended" { $extendedScripts }
     "extended-navigation" { @("scripts/e2e_extended_navigation.js") }
     "extended-storage" { @("scripts/e2e_extended_storage.js") }
     "extended-composite" { @("scripts/e2e_extended_composite.js") }
@@ -453,9 +455,9 @@ $scripts = switch ($Chunk) {
     "1" { @("scripts/e2e_chunk1.js") }
     "2" { @("scripts/e2e_chunk2.js") }
     "3" { @("scripts/e2e_chunk3.js") }
-    default { @("scripts/e2e_chunk1.js", "scripts/e2e_chunk2.js", "scripts/e2e_chunk3.js") }
+    default { @("scripts/e2e_chunk1.js", "scripts/e2e_chunk2.js", "scripts/e2e_chunk3.js", "scripts/e2e_announcements.js") + $extendedScripts }
 }
-if ($WithSmoke) {
+if ($runSmoke) {
     $scripts = @("scripts/e2e_saml_bootstrap_smoke.js", "scripts/e2e_fresh_boot_smoke.js") + $scripts
 }
 
@@ -1151,7 +1153,7 @@ function Stop-E2ETrackedPidProcesses {
 }
 
 function Get-E2EResidualProcesses {
-    $e2eNodePattern = 'scripts[\\/](e2e_chunk[123]|e2e_extended_(navigation|storage|composite|edges|linked|cross_role)|e2e_saml_bootstrap_smoke|e2e_fresh_boot_smoke|e2e_visible_smoke)\.js'
+    $e2eNodePattern = 'scripts[\\/](e2e_chunk[123]|e2e_extended_(navigation|storage|composite|edges|linked|cross_role)|e2e_announcements|e2e_saml_bootstrap_smoke|e2e_fresh_boot_smoke|e2e_visible_smoke)\.js'
     $tracked = @(Get-E2ETrackedPidProcesses -PidFilters @("e2e-node-*.pid", "e2e-browser-*.pid"))
     $patternMatches = @(Get-CimInstance Win32_Process | Where-Object {
         ($_.Name -eq "node.exe" -and $_.CommandLine -match $e2eNodePattern) -or

@@ -9,7 +9,7 @@ The E2E result is produced by deterministic Playwright lanes first. LLM agents o
 - `reviewer`: three independent high-tier judge agents score the implementation and check the data, UI request body, image dimensions, positions, and export fields.
 - `master`: three high-tier master slots rotate one per cycle and issue the final PASS/FAIL decision. A cycle is clean only when the browser runner exits 0 and the master reports PASS.
 
-The browser lane is `scripts/run-e2e-playwright.ps1 -Chunk all -Headless`. It remains deterministic because a language model should not be responsible for clicking arbitrary UI controls or deciding whether a bitmap is blank.
+The browser lane is `scripts/run-e2e-playwright.ps1 -Chunk all -Headless`. The default `all` includes chunks 1–3, ten SAML restart checks, SAML/Fresh Boot smoke, announcements, and all six extended lanes (navigation, storage, composite, edges, linked, cross-role), followed by stats-save-race and server-log guards. No separate `-WithSmoke` or `-Chunk extended` invocation is needed. Explicit chunk/lane selections remain available for focused runs. It remains deterministic because a language model should not be responsible for clicking arbitrary UI controls or deciding whether a bitmap is blank.
 
 ## Run
 
