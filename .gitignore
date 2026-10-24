@@ -84,7 +84,19 @@ mcp.json.example
 # Per-user announcement read state
 logs/announcements.sqlite3*
 
-# Local PostgreSQL instance and credentials
+# Local PostgreSQL instance
 .local/
-.env.postgres
-!.env.postgres.example
+
+# One-off browser/benchmark response captures (not runtime configuration)
+/benchmark_limit.json
+/folder-dom.json
+/grid-before-scroll.json
+/grid-cancel-retry-check.json
+/grid-scroll-check.json
+/grid-visible-now.json
+/palette3k-desc.json
+/palette3k-meta.json
+/viewer-grid-methods.json
+
+# Unused generated JS duplicates; the app imports source modules directly
+/js/*.min.js
