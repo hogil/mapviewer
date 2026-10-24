@@ -13,7 +13,8 @@ from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from api import database as db
-from scripts.manage_db import bootstrap,migrate,sources,upload,verify
+from scripts.manage_db import bootstrap,migrate,sources,verify
+import upload_json_to_db as uploader
 import psycopg
 from psycopg import sql
 
@@ -65,6 +66,7 @@ def main():
         from starlette.applications import Starlette
         from starlette.testclient import TestClient
         with db.pool().connection() as conn:
+            conn.execute(sql.SQL("UPDATE {} SET published_on=CURRENT_DATE, created_at='2000-01-01' WHERE id=%s").format(db.table('announcements')),(legacy['id'],))
             inserted=conn.execute(sql.SQL('INSERT INTO {} (title,summary,content) VALUES (%s,%s,%s) RETURNING id,published_on,category,read_by_default').format(db.table('announcements')),('새 공지','요약','첫 문단\r\n\r\n둘째 문단')).fetchone()
             assert inserted[1]==conn.execute('SELECT CURRENT_DATE').fetchone()[0]
         new_id=inserted[0]
@@ -73,6 +75,7 @@ def main():
         app=Starlette(routes=notices.announcement_routes(lambda request:request.query_params.get('LoginId')))
         with TestClient(app) as client:
             result=client.get('/api/announcements?LoginId=catalogue-user').json()
+            assert result['items'][0]['id']==new_id,'Same-day notices are ordered by arbitrary IDs instead of creation time'
             item=next(item for item in result['items'] if item['id']==new_id)
             assert item['paragraphs']==['첫 문단','둘째 문단'] and not item['read'] and not item['seen']
             client.post('/api/announcements?LoginId=catalogue-user',json={'action':'seen','ids':[new_id]}).raise_for_status()
@@ -91,13 +94,20 @@ def main():
                 conn.execute(sql.SQL('DELETE FROM {} WHERE login_id IN (%s,%s)').format(db.table('notice_state')),('upgrade-user','catalogue-user'))
                 db.delete_document('prefs','upgrade-user',conn)
             assert client.get('/api/announcements?LoginId=catalogue-user').json()['items']==[]
+        original_loader=uploader.load_start_settings
+        def run_uploader(root):
+            def isolated_settings():
+                original_loader()
+                os.environ['DB_SCHEMA']=test_schema
+            with patch.object(uploader,'load_start_settings',isolated_settings), patch.object(sys,'argv',['upload_json_to_db.py','--source-root',str(root)]):
+                uploader.main()
         with tempfile.TemporaryDirectory() as td:
             root=Path(td);(root/'logs').mkdir();(root/'docs').mkdir()
             (root/'logs'/'color-legends.json').write_text(json.dumps({'default':{'top':{'Grade0':'#FFFFFF'}},'alice':{'top':{'Grade0':'#123456'}},'composite':{'alice':{'quantile0':'#111111'}},'measure':{'alice':{'quantile0':'#222222'}}}))
             (root/'logs'/'ui-prefs.json').write_text(json.dumps({'alice':{'gridCols':7}}))
             (root/'logs'/'stats.json').write_text(json.dumps({'users':{},'daily_stats':{},'monthly_stats':{},'department_stats':{}}))
             (root/'docs'/'announcements.json').write_text(json.dumps([{'id':'notice','date':'2026-10-19','title':'Notice'}]))
-            migrate(root)
+            run_uploader(root)
             with patch.object(db, "get_namespace", wraps=db.get_namespace) as queried:
                 verify(root)
                 assert queried.call_count == len({entry[0] for entry in sources(root)}-{'announcements'})
@@ -107,7 +117,7 @@ def main():
             db.patch_document('prefs','alice',{'gridCols':9})
             with db.pool().connection() as conn:
                 conn.execute(sql.SQL('UPDATE {} SET title=%s WHERE id=%s').format(db.table('announcements')),('Newer DB title','notice'))
-            upload(root)
+            run_uploader(root)
             assert db.get_document('prefs','alice')['gridCols']==9
             assert db.get_announcements()['notice']['title']=='Newer DB title'
             migrate(root,replace_catalogue=True)
@@ -150,7 +160,7 @@ def main():
             assert db.recent_access()[0][2]=='alice'
         after={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in source_paths if p.exists()}
         assert before==after,'Legacy source files changed'
-        print(json.dumps({'status':'PASS','version':version,'checks':['legacy notice move preserves IDs/read flags/settings','repeat bootstrap preserves newer dedicated notice','invalid legacy notice rolls back without data loss','direct notice column insert with UUID/date/defaults','notice DB insert/edit/delete reaches API','notice API seen/read and LoginId isolation','migration roundtrip','repeat import preserves newer DB values','24 concurrent preference patches','personal/composite/measure colors','notice seen/read and LoginId isolation','transaction rollback','4-process exact visit count32','login event deduplication','legacy files unchanged','non-superuser app role']},ensure_ascii=False))
+        print(json.dumps({'status':'PASS','version':version,'checks':['legacy notice move preserves IDs/read flags/settings','repeat bootstrap preserves newer dedicated notice','invalid legacy notice rolls back without data loss','direct notice column insert with UUID/date/defaults','notice DB insert/edit/delete reaches API','same-day notices ordered by creation time','notice API seen/read and LoginId isolation','uploader Python entrypoint with empty data','uploader rerun preserves newer DB values','explicit catalogue replacement preserves preferences','24 concurrent preference patches','personal/composite/measure colors','notice seen/read and LoginId isolation','transaction rollback','4-process exact visit count32','login event deduplication','legacy files unchanged','non-superuser app role']},ensure_ascii=False))
     finally:
         db.close()
         with psycopg.connect(**admin) as conn:conn.execute(sql.SQL('DROP SCHEMA IF EXISTS {} CASCADE').format(sql.Identifier(test_schema)))

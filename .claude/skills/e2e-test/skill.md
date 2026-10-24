@@ -178,6 +178,7 @@ E2E 실행이 끝나면 최종 답변에 반드시 "무엇을 어떻게 실행�
 ## 절대규칙: 기본 전체 실행
 
 - 공지 저장 계약(2026-10-24): 본문은 `fbm.announcements`의 제목/요약/본문 전용 컬럼에서 조회하고, 사용자별 확인/읽음은 `fbm.notice_state`에 저장한다. 개인설정 `user_settings`에 공지 namespace를 다시 만들지 않는다. 전체 runner의 `e2e_announcements.js`는 DB에 등록된 공지의 목록/상세/배지/읽음 상태를 검증한다. DB 업그레이드 및 직접 컬럼 변경 회귀는 `scripts/check_postgres_storage.py`가 별도 검증한다.
+- 공지 자동 ID는 사용자 입력 대상이 아니다. 새 행은 DB 기본값을 사용하고, 같은 날짜의 목록은 작성시각 내림차순을 유지한다. DB 정렬 결과를 UUID 문자열로 재정렬하면 최신 공지 순서가 깨진다. focused storage guard는 이 순서와 실제 업로더 진입점의 빈 데이터/재업로드 경로를 검증한다.
 
 - **인자 없이 `/e2e-test` 실행 시 `run-e2e-playwright.ps1 -Chunk all`을 사용해 Phase 1~63, Smoke, 공지, 확장/연계 6개 lane을 모두 실행한다.**
 - `-Chunk all`은 Smoke를 자동 포함한다. `-WithSmoke`나 별도의 `-Chunk extended` 실행은 필요하지 않다. stats-save-race와 server-log-guards도 마지막에 실행한다.

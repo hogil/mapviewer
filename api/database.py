@@ -82,7 +82,7 @@ def get_announcements(connection=None):
     if connection is None:
         with pool().connection() as conn:
             return get_announcements(conn)
-    rows = connection.execute(sql.SQL('SELECT id,published_on,category,title,summary,content,read_by_default FROM {} ORDER BY published_on DESC,id DESC').format(table('announcements')))
+    rows = connection.execute(sql.SQL('SELECT id,published_on,category,title,summary,content,read_by_default FROM {} ORDER BY published_on DESC,created_at DESC,id DESC').format(table('announcements')))
     return {row[0]:dict(id=row[0], date=row[1].isoformat(), category=row[2], title=row[3],
                        summary=row[4], paragraphs=row[5].replace('\r\n','\n').replace('\r','\n').split('\n\n') if row[5] else [],
                        read_by_default=row[6]) for row in rows}

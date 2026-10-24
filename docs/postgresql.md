@@ -66,6 +66,10 @@ and `content` as plain text. Leave `id`, `published_on`, `category`,
 needed. The ID is generated automatically, the date defaults to today, and new
 notices are unread by default. Separate body paragraphs with a blank line.
 Save the row and refresh the web page or reopen its announcement list.
+Do not invent an ID: leave its `DEFAULT` value when adding a row. The old
+`20261019-chip-context-view` ID is retained for the migrated notice and its read
+records. New rows receive their own IDs automatically. Notices are ordered by
+publication date and creation time; the API reuses the database order.
 
 ```sql
 INSERT INTO fbm.announcements (title, summary, content)

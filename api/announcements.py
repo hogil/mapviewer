@@ -15,7 +15,9 @@ DATABASE = ROOT / 'logs' / 'announcements.sqlite3'
 
 
 def load_announcements():
-    items = list(metadata_db.get_announcements().values()) if metadata_db.enabled() else json.loads(CATALOGUE.read_text(encoding='utf-8'))
+    if metadata_db.enabled():
+        return list(metadata_db.get_announcements().values())
+    items = json.loads(CATALOGUE.read_text(encoding='utf-8'))
     return sorted(items, key=lambda item: (item['date'], item['id']), reverse=True)
 
 

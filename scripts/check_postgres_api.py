@@ -39,6 +39,7 @@ try:
     notices=call('GET','/api/announcements?LoginId='+user).json()
     catalogue=db.get_announcements()
     assert {item['id']: {key:value for key,value in item.items() if key not in ('seen','read')} for item in notices['items']}==catalogue
+    assert [item['id'] for item in notices['items']]==list(catalogue)
     assert db.get_namespace('announcements')=={}
     assert notices['new_count']==sum(not item['seen'] for item in notices['items'])
     assert all(item['read'] and item['seen'] for item in notices['items'] if item.get('read_by_default'))
