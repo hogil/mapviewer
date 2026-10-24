@@ -25,7 +25,7 @@ def load_start_settings():
             settings[key] = value
     required = {'APP_STORAGE', 'DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER',
                 'DB_PASSWORD', 'DB_ADMIN_USER', 'DB_ADMIN_PASSWORD', 'DB_SCHEMA',
-                'DB_TABLE_SETTINGS', 'DB_TABLE_NOTICE_STATE', 'DB_TABLE_ACCESS_EVENTS'}
+                'DB_TABLE_SETTINGS', 'DB_TABLE_ANNOUNCEMENTS', 'DB_TABLE_NOTICE_STATE', 'DB_TABLE_ACCESS_EVENTS'}
     missing = required - settings.keys()
     if missing:
         raise SystemExit('Missing literal settings in ' + script.name + ': ' + ', '.join(sorted(missing)))

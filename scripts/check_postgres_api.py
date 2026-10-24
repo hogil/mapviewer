@@ -37,7 +37,11 @@ try:
     call('DELETE','/api/color-scheme?LoginId='+user,json={'schemeName':user})
     assert user not in db.load_colors()
     notices=call('GET','/api/announcements?LoginId='+user).json()
-    assert notices['new_count']==0 and notices['items'][0]['read']
+    catalogue=db.get_announcements()
+    assert {item['id']: {key:value for key,value in item.items() if key not in ('seen','read')} for item in notices['items']}==catalogue
+    assert db.get_namespace('announcements')=={}
+    assert notices['new_count']==sum(not item['seen'] for item in notices['items'])
+    assert all(item['read'] and item['seen'] for item in notices['items'] if item.get('read_by_default'))
     notice_id=notices['items'][0]['id']
     call('POST','/api/announcements?LoginId='+user,json={'action':'read','ids':[notice_id]})
     assert db.notice_rows(user)[notice_id]==(True,True)
@@ -45,7 +49,7 @@ try:
     exported=call('GET','/api/stats/export-csv').content.decode('utf-8-sig')
     assert user in exported
     assert before=={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in paths if p.exists()}
-    print(json.dumps({'status':'PASS','checks':['root HTTP200','16 parallel prefs API patches persisted in DB','color API saves and deletes DB rows','legend JSON URL reads DB','announcement API persists DB state','CSV download includes DB-only event','legacy files unchanged']}))
+    print(json.dumps({'status':'PASS','checks':['root HTTP200','16 parallel prefs API patches persisted in DB','color API saves and deletes DB rows','legend JSON URL reads DB','announcement catalogue reads dedicated table','announcement API persists DB state','CSV download includes DB-only event','legacy files unchanged']}))
 finally:
     with db.pool().connection() as conn:
         conn.execute(sql.SQL('DELETE FROM {} WHERE namespace=%s AND key=%s').format(db.table('settings')),('prefs',user))

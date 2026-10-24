@@ -177,6 +177,8 @@ E2E 실행이 끝나면 최종 답변에 반드시 "무엇을 어떻게 실행�
 
 ## 절대규칙: 기본 전체 실행
 
+- 공지 저장 계약(2026-10-24): 본문은 `fbm.announcements`의 제목/요약/본문 전용 컬럼에서 조회하고, 사용자별 확인/읽음은 `fbm.notice_state`에 저장한다. 개인설정 `user_settings`에 공지 namespace를 다시 만들지 않는다. 전체 runner의 `e2e_announcements.js`는 DB에 등록된 공지의 목록/상세/배지/읽음 상태를 검증한다. DB 업그레이드 및 직접 컬럼 변경 회귀는 `scripts/check_postgres_storage.py`가 별도 검증한다.
+
 - **인자 없이 `/e2e-test` 실행 시 `run-e2e-playwright.ps1 -Chunk all`을 사용해 Phase 1~63, Smoke, 공지, 확장/연계 6개 lane을 모두 실행한다.**
 - `-Chunk all`은 Smoke를 자동 포함한다. `-WithSmoke`나 별도의 `-Chunk extended` 실행은 필요하지 않다. stats-save-race와 server-log-guards도 마지막에 실행한다.
 - 범위 누락 회귀(2026-10-24): 기존 `all`은 chunk1~3만 선택하고 Smoke·확장 검사는 별도 옵션에 의존했다. 전체 실행 목록은 Smoke 2개 + 기본 3개 + 공지 1개 + 확장 6개로 중복 없이 12개여야 하며, SAML 재시작 10회와 마지막 통계/서버 로그 검사도 포함해야 한다. 부분 chunk 선택은 해당 범위를 유지한다.

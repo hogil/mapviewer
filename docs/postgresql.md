@@ -26,7 +26,8 @@ this Python file. Settings in these tracked scripts are visible to repository re
 | DB_ADMIN_USER | l3tracker_app | Bootstrap administrator |
 | DB_ADMIN_PASSWORD | configured in start script | Administrator password |
 | DB_SCHEMA | fbm | SQL schema, distinct from colour schemes |
-| DB_TABLE_SETTINGS | user_settings | JSONB settings, colours, catalogue and aggregates |
+| DB_TABLE_SETTINGS | user_settings | JSONB settings, colours and aggregates |
+| DB_TABLE_ANNOUNCEMENTS | announcements | Announcement content in dedicated columns |
 | DB_TABLE_NOTICE_STATE | notice_state | Per-user seen/read flags |
 | DB_TABLE_ACCESS_EVENTS | access_events | Timestamped login records |
 
@@ -39,7 +40,8 @@ With the default configuration, the database is `l3tracker` and the schema is `f
 
 | Fully qualified table | Stored data |
 |---|---|
-| fbm.user_settings | Colours, preferences, announcement catalogue, statistics (separate namespace/key rows) |
+| fbm.user_settings | Colours, preferences and statistics (separate namespace/key rows) |
+| fbm.announcements | Announcement ID, publication date, category, title, summary and content |
 | fbm.notice_state | LoginId + notice ID, list-seen flag, detail-read flag |
 | fbm.access_events | SAML access timestamp, LoginId and original record fields |
 
@@ -55,6 +57,30 @@ ALTER SCHEMA l3tracker RENAME TO fbm;
 This preserves the existing rows and permissions. Do not create a separate empty
 schema to replace an existing populated schema. The prepared local database has
 already been renamed.
+
+## Register and edit announcements in DBeaver
+
+Open `fbm.announcements` and its Data tab. Add a row and enter `title`, `summary`
+and `content` as plain text. Leave `id`, `published_on`, `category`,
+`read_by_default`, `created_at` and `updated_at` at their database defaults unless
+needed. The ID is generated automatically, the date defaults to today, and new
+notices are unread by default. Separate body paragraphs with a blank line.
+Save the row and refresh the web page or reopen its announcement list.
+
+```sql
+INSERT INTO fbm.announcements (title, summary, content)
+VALUES ('공지 제목', '목록 요약', E'첫 번째 문단\n\n두 번째 문단');
+```
+
+Edit or delete notice content directly in this table. Keep the ID when correcting
+an existing notice so each user's seen/read state is retained. Use a new row for a
+new publication. `fbm.notice_state` stores per-LoginId seen/read flags only.
+
+To upgrade an existing DB, run `python3 upload_json_to_db.py` (Linux) or
+`python upload_json_to_db.py` (Windows) before restarting the app. Bootstrap creates
+the dedicated table and moves the former `user_settings` announcement rows in one
+transaction, preserving notice IDs and leaving user preferences and read flags
+unchanged. Repeated bootstrap/import preserves newer dedicated-table edits.
 
 ## Linux with PostgreSQL 16
 

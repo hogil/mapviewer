@@ -534,6 +534,11 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
 - scripts/manage_db.py::verify must load each distinct namespace once, rather than once per source row. scripts/check_postgres_storage.py checks namespace query counts and preservation of newer DB values.
 - The extracted colour legend route test supplies its package context and isolated file-mode database stub; it must not import the server or depend on local DB configuration.
 
+### 2026-10-24 Dedicated announcement content table
+- Announcement content belongs in `fbm.announcements`, configured by `DB_TABLE_ANNOUNCEMENTS`, with plain title/summary/content columns, automatic text UUID IDs and publication dates. `fbm.notice_state` stores per-LoginId seen/read flags. Do not put catalogue rows back in the `user_settings` namespace.
+- `database.initialize()` atomically moves legacy namespace rows while retaining IDs and existing dedicated-table edits; failed migration must retain its sources. Both JSON upload and verification use the dedicated table. Start scripts remain configuration/startup only; run the separate uploader before restarting an older DB.
+- Focused guard: `check_postgres_storage.py` verifies upgrade/idempotence/rollback, preserved preferences/read flags, direct column insert/edit/delete reaching the actual announcement API, defaults and LoginId isolation. The announcement E2E remains in the full runner and requires an explicit execution request.
+
 ### 2026-10-24 Start-script DB configuration
 - DB settings belong to start.ps1 (Windows) and start.sh (Linux); api/database.py must not load .env files. The standalone upload_json_to_db.py reads literal DB assignments from the matching start script without executing it. Upload wrappers run that Python file.
 - Start scripts only configure and launch the app; do not add migration/action dispatch. Verify python upload_json_to_db.py (Windows) and python3 upload_json_to_db.py (Linux), including nonzero failure propagation. Importing must not launch the app or clean caches.

@@ -23,7 +23,9 @@ def sources(root):
         rows.extend((namespace,key,value) for key,value in entries.items() if '__preview_' not in key)
     catalogue = root/'docs'/'announcements.json'
     if catalogue.exists():
-        rows.extend(('announcements',notice['id'],notice) for notice in json.loads(catalogue.read_text(encoding='utf-8-sig')))
+        for notice in json.loads(catalogue.read_text(encoding='utf-8-sig')):
+            notice = dict(id=notice['id'], date=notice['date'], category=notice.get('category','공지'), title=notice['title'], summary=notice.get('summary',''), paragraphs=notice.get('paragraphs',[]), read_by_default=notice.get('read_by_default',False))
+            rows.append(('announcements',notice['id'],notice))
     return rows
 
 
@@ -41,7 +43,7 @@ def bootstrap():
         db.initialize(conn)
         conn.execute(sql.SQL('GRANT CONNECT ON DATABASE {} TO {}').format(sql.Identifier(config['dbname']),sql.Identifier(config['user'])))
         conn.execute(sql.SQL('GRANT USAGE ON SCHEMA {} TO {}').format(sql.Identifier(db.identifier('DB_SCHEMA','fbm')),sql.Identifier(config['user'])))
-        for name in ('settings','notice_state','access_events'):
+        for name in ('settings','announcements','notice_state','access_events'):
             conn.execute(sql.SQL('GRANT SELECT,INSERT,UPDATE,DELETE ON {} TO {}').format(db.table(name),sql.Identifier(config['user'])))
     print('Database, schema and tables ready; application role has data access only.')
 
@@ -68,7 +70,10 @@ def migrate(root, dry_run=False, replace_catalogue=False):
         print(json.dumps({'dry_run':True,'source_rows':counts},ensure_ascii=False));return
     with db.pool().connection() as conn:
         for namespace,key,value in entries:
-            db.put_document(namespace,key,value,conn,overwrite=replace_catalogue and namespace=='announcements')
+            if namespace == 'announcements':
+                db.put_announcement(value,conn,overwrite=replace_catalogue)
+            else:
+                db.put_document(namespace,key,value,conn,overwrite=False)
         for login_id,notice_id,seen,is_read in notice_rows:
             conn.execute(sql.SQL('INSERT INTO {} AS current (login_id,notice_id,seen,is_read) VALUES (%s,%s,%s,%s) ON CONFLICT(login_id,notice_id) DO UPDATE SET seen=current.seen OR EXCLUDED.seen,is_read=current.is_read OR EXCLUDED.is_read').format(db.table('notice_state')), (login_id,notice_id,bool(seen),bool(is_read)))
         for index,row in enumerate(access_rows):
@@ -82,7 +87,7 @@ def verify(root, allow_newer=False):
     entries=sources(root)
     missing,different=0,0
     with db.pool().connection() as conn:
-        namespaces={namespace:db.get_namespace(namespace,conn) for namespace in {entry[0] for entry in entries}}
+        namespaces={namespace:(db.get_announcements(conn) if namespace=='announcements' else db.get_namespace(namespace,conn)) for namespace in {entry[0] for entry in entries}}
     for namespace,key,value in entries:
         stored=namespaces[namespace]
         if key not in stored:missing+=1
@@ -107,7 +112,7 @@ def upload(root):
 def check():
     from psycopg import sql
     with db.pool().connection() as conn:
-        for kind in ('settings','notice_state','access_events'):
+        for kind in ('settings','announcements','notice_state','access_events'):
             conn.execute(sql.SQL('SELECT 1 FROM {} LIMIT 1').format(db.table(kind)))
         info=conn.execute("SELECT current_database(),current_user,inet_server_port(),current_setting('server_version')").fetchone()
     print(json.dumps({'database':info[0],'user':info[1],'port':info[2],'schema':db.identifier('DB_SCHEMA','fbm'),'version':info[3],'status':'OK'}))

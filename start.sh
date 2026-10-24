@@ -14,6 +14,7 @@ export DB_ADMIN_USER="l3tracker_app"
 export DB_ADMIN_PASSWORD="qie"
 export DB_SCHEMA="fbm"
 export DB_TABLE_SETTINGS="user_settings"
+export DB_TABLE_ANNOUNCEMENTS="announcements"
 export DB_TABLE_NOTICE_STATE="notice_state"
 export DB_TABLE_ACCESS_EVENTS="access_events"
 

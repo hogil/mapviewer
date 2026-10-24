@@ -24,6 +24,7 @@ $env:DB_ADMIN_USER = 'l3tracker_app'
 $env:DB_ADMIN_PASSWORD = 'qie'
 $env:DB_SCHEMA = 'fbm'
 $env:DB_TABLE_SETTINGS = 'user_settings'
+$env:DB_TABLE_ANNOUNCEMENTS = 'announcements'
 $env:DB_TABLE_NOTICE_STATE = 'notice_state'
 $env:DB_TABLE_ACCESS_EVENTS = 'access_events'
 if ($env:APP_STORAGE -eq 'postgres') {

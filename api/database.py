@@ -35,6 +35,7 @@ def identifier(name, default):
 def table(kind):
     from psycopg import sql
     names = {'settings': ('DB_TABLE_SETTINGS', 'user_settings'),
+             'announcements': ('DB_TABLE_ANNOUNCEMENTS', 'announcements'),
              'notice_state': ('DB_TABLE_NOTICE_STATE', 'notice_state'),
              'access_events': ('DB_TABLE_ACCESS_EVENTS', 'access_events')}
     return sql.Identifier(identifier('DB_SCHEMA', 'fbm'), identifier(*names[kind]))
@@ -58,6 +59,11 @@ def initialize(connection):
     schema = sql.Identifier(identifier('DB_SCHEMA', 'fbm'))
     connection.execute(sql.SQL('CREATE SCHEMA IF NOT EXISTS {}').format(schema))
     connection.execute(sql.SQL('CREATE TABLE IF NOT EXISTS {} (namespace TEXT NOT NULL, key TEXT NOT NULL, payload JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(), PRIMARY KEY(namespace,key))').format(table('settings')))
+    connection.execute(sql.SQL("CREATE TABLE IF NOT EXISTS {} (id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text, published_on DATE NOT NULL DEFAULT CURRENT_DATE, category TEXT NOT NULL DEFAULT '공지', title TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '', content TEXT NOT NULL DEFAULT '', read_by_default BOOLEAN NOT NULL DEFAULT FALSE, created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(), updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp())").format(table('announcements')))
+    legacy_notices = connection.execute(sql.SQL('SELECT key,payload FROM {} WHERE namespace=%s FOR UPDATE').format(table('settings')), ('announcements',)).fetchall()
+    for key, notice in legacy_notices:
+        put_announcement(notice, connection, overwrite=False)
+        connection.execute(sql.SQL('DELETE FROM {} WHERE namespace=%s AND key=%s').format(table('settings')), ('announcements', key))
     connection.execute(sql.SQL('CREATE TABLE IF NOT EXISTS {} (login_id TEXT NOT NULL, notice_id TEXT NOT NULL, seen BOOLEAN NOT NULL DEFAULT FALSE, is_read BOOLEAN NOT NULL DEFAULT FALSE, PRIMARY KEY(login_id,notice_id))').format(table('notice_state')))
     connection.execute(sql.SQL('CREATE TABLE IF NOT EXISTS {} (event_key TEXT PRIMARY KEY, login_id TEXT NOT NULL, occurred_at TIMESTAMPTZ NOT NULL, payload JSONB NOT NULL)').format(table('access_events')))
     connection.execute(sql.SQL('CREATE INDEX IF NOT EXISTS {} ON {} (login_id,occurred_at DESC)').format(sql.Identifier(identifier('DB_TABLE_ACCESS_EVENTS','access_events') + '_user_time'), table('access_events')))
@@ -69,6 +75,24 @@ def get_namespace(namespace, connection=None):
         with pool().connection() as conn:
             return get_namespace(namespace, conn)
     return dict(connection.execute(sql.SQL('SELECT key,payload FROM {} WHERE namespace=%s').format(table('settings')), (namespace,)))
+
+
+def get_announcements(connection=None):
+    from psycopg import sql
+    if connection is None:
+        with pool().connection() as conn:
+            return get_announcements(conn)
+    rows = connection.execute(sql.SQL('SELECT id,published_on,category,title,summary,content,read_by_default FROM {} ORDER BY published_on DESC,id DESC').format(table('announcements')))
+    return {row[0]:dict(id=row[0], date=row[1].isoformat(), category=row[2], title=row[3],
+                       summary=row[4], paragraphs=row[5].replace('\r\n','\n').replace('\r','\n').split('\n\n') if row[5] else [],
+                       read_by_default=row[6]) for row in rows}
+
+
+def put_announcement(notice, connection, overwrite=False):
+    from psycopg import sql
+    conflict = sql.SQL('DO UPDATE SET published_on=EXCLUDED.published_on, category=EXCLUDED.category, title=EXCLUDED.title, summary=EXCLUDED.summary, content=EXCLUDED.content, read_by_default=EXCLUDED.read_by_default, updated_at=clock_timestamp()') if overwrite else sql.SQL('DO NOTHING')
+    connection.execute(sql.SQL('INSERT INTO {} (id,published_on,category,title,summary,content,read_by_default) VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(id) {}').format(table('announcements'),conflict),
+                       (notice['id'], notice['date'], notice.get('category','공지'), notice['title'], notice.get('summary',''), '\n\n'.join(notice.get('paragraphs',[])), notice.get('read_by_default',False)))
 
 
 def get_document(namespace, key, default=None):
