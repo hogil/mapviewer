@@ -425,6 +425,32 @@ class AuditApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(len(matches), 2)
         self.assertEqual(matches[0].name, "search_users_from_stats")
 
+    async def test_color_mutations_do_not_block_other_requests(self):
+        for name in ("save_color_scheme", "delete_color_scheme", "save_color_scheme_ratio"):
+            with self.subTest(endpoint=name):
+                released = threading.Event()
+                def slow_load():
+                    if not released.wait(1):
+                        raise AssertionError("DB load blocked the event loop")
+                    raise HTTPException(status_code=503, detail="isolated DB delay")
+                ns = load_functions(
+                    FULL, [name], asyncio=asyncio, load_color_legends=slow_load,
+                    _current_login_id=lambda req: "owned",
+                    _collect_related_preview_scheme_names=lambda value: ({value}, value),
+                )
+                req = SimpleNamespace(json=AsyncMock(return_value={
+                    "schemeName": "owned", "schemeData": {"top": {}},
+                    "ratioData": {"quantile0": "#ffffff"},
+                }))
+                timer = asyncio.get_running_loop().call_later(.02, released.set)
+                try:
+                    with self.assertRaises(HTTPException) as caught:
+                        await ns[name](req)
+                    self.assertEqual(caught.exception.status_code, 503)
+                finally:
+                    timer.cancel()
+                    released.set()
+
     async def test_no_broad_static_mounts_and_color_legend_route_retained(self):
         for source in (BOOT, FULL):
             tree = SOURCE_TREES[source]
@@ -439,8 +465,10 @@ class AuditApiTests(unittest.IsolatedAsyncioTestCase):
                   and node.args[0].value == "/logs/color-legends.json"]
         self.assertEqual(len(routes), 1)
         self.assertEqual(ast.literal_eval(next(keyword.value for keyword in routes[0].keywords if keyword.arg == "methods")), ["GET", "HEAD"])
-        ns = load_functions(BOOT, ["serve_color_legends"])
-        with patch.object(Path, "is_file", return_value=False):
+        ns = load_functions(BOOT, ["serve_color_legends"], __name__="api.main", __package__="api")
+        package = ModuleType("api")
+        package.database = SimpleNamespace(enabled=lambda: False)
+        with patch.dict(sys.modules, {"api": package}), patch.object(Path, "is_file", return_value=False):
             result = await ns["serve_color_legends"](request())
         self.assertEqual(result.status_code, 200)
         self.assertEqual(result.body, b"{}")

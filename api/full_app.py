@@ -3101,7 +3101,7 @@ async def save_color_scheme(request: Request):
             scheme_name = real_login_id
         
         # 기존 legends 로드
-        legends = load_color_legends()
+        legends = await asyncio.to_thread(load_color_legends)
 
         # default 기반으로 누락 키를 채워 저장 (팔레트 인덱스 정합성 유지)
         default_scheme = legends.get('default', {})
@@ -3196,7 +3196,7 @@ async def save_color_scheme(request: Request):
         legends[scheme_name] = filtered_scheme_data
         
         # 파일에 저장 (마지막 수정 시간 추가)
-        if save_color_legends(legends, updated_scheme_name=scheme_name):
+        if await asyncio.to_thread(save_color_legends, legends, updated_scheme_name=scheme_name):
             _invalidate_scheme_thumbnail_caches([scheme_name])
             return {"success": True, "schemeName": scheme_name}
         else:
@@ -3222,7 +3222,7 @@ async def delete_color_scheme(request: Request):
         if not related_names:
             related_names = {str(scheme_name)}
 
-        legends = load_color_legends()
+        legends = await asyncio.to_thread(load_color_legends)
         removed_names: List[str] = []
         for name in sorted(related_names):
             if name in legends:
@@ -3230,7 +3230,7 @@ async def delete_color_scheme(request: Request):
                 removed_names.append(name)
 
         if removed_names:
-            save_color_legends(legends)
+            await asyncio.to_thread(save_color_legends, legends)
 
         # preview 삭제 시 원본 scheme 캐시도 함께 지워 취소/적용 직후 항상 새 썸네일을 생성한다.
         cache_targets = set(related_names)
@@ -3263,14 +3263,14 @@ async def save_color_scheme_ratio(request: Request):
         if not ratio_data:
             raise HTTPException(status_code=400, detail="ratioData가 필요합니다")
 
-        legends = load_color_legends()
+        legends = await asyncio.to_thread(load_color_legends)
 
         if scheme_name not in legends:
             legends[scheme_name] = {}
 
         legends[scheme_name]['ratio'] = ratio_data
 
-        if save_color_legends(legends, updated_scheme_name=scheme_name):
+        if await asyncio.to_thread(save_color_legends, legends, updated_scheme_name=scheme_name):
             _invalidate_scheme_thumbnail_caches([scheme_name])
             return {"success": True, "schemeName": scheme_name}
         else:

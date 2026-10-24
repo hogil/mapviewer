@@ -9,10 +9,11 @@ import subprocess
 import sys
 import tempfile
 import uuid
+from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from api import database as db
-from scripts.manage_db import bootstrap,migrate,sources,upload
+from scripts.manage_db import bootstrap,migrate,sources,upload,verify
 import psycopg
 from psycopg import sql
 
@@ -39,6 +40,9 @@ def main():
             (root/'logs'/'stats.json').write_text(json.dumps({'users':{},'daily_stats':{},'monthly_stats':{},'department_stats':{}}))
             (root/'docs'/'announcements.json').write_text(json.dumps([{'id':'notice','date':'2026-10-19','title':'Notice'}]))
             migrate(root)
+            with patch.object(db, "get_namespace", wraps=db.get_namespace) as queried:
+                verify(root)
+                assert queried.call_count == len({entry[0] for entry in sources(root)})
             for namespace,key,value in sources(root):assert db.get_document(namespace,key)==value
             db.patch_document('prefs','alice',{'gridCols':9})
             upload(root)

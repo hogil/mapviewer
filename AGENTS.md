@@ -527,3 +527,8 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
 - Regression guard: scripts/check_postgres_storage.py checks colour deletion persistence, atomic partial preference updates, transaction rollback, 4-process exact statistics counts, migration preservation and non-superuser runtime access. scripts/check_postgres_api.py checks running API writes and DB-backed CSV export.
 - File-only announcement and stats-publication guards explicitly select APP_STORAGE=files to avoid touching the active DB. Linux startup preflight uses python3, matching its app command.
 - Browser E2E remains subject to explicit execution consent; PostgreSQL focused checks are API/storage tests.
+
+### 2026-10-24 PostgreSQL colour and upload verification regressions
+- Colour mutation routes in api/full_app.py must run synchronous legend load/save through asyncio.to_thread so DB waits do not block other requests. scripts/check_audit_api.py checks event-loop progress during delayed DB loads for all three routes.
+- scripts/manage_db.py::verify must load each distinct namespace once, rather than once per source row. scripts/check_postgres_storage.py checks namespace query counts and preservation of newer DB values.
+- The extracted colour legend route test supplies its package context and isolated file-mode database stub; it must not import the server or depend on local DB configuration.

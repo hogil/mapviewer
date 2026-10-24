@@ -82,7 +82,7 @@ def verify(root, allow_newer=False):
     entries=sources(root)
     missing,different=0,0
     with db.pool().connection() as conn:
-        namespaces={namespace:db.get_namespace(namespace,conn) for namespace,_,_ in entries}
+        namespaces={namespace:db.get_namespace(namespace,conn) for namespace in {entry[0] for entry in entries}}
     for namespace,key,value in entries:
         stored=namespaces[namespace]
         if key not in stored:missing+=1

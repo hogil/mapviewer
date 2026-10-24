@@ -203,3 +203,8 @@ argument-hint: [점검-범위]
 ### 수정 필요 사항
 - 파일:라인 — 내용
 ```
+
+### 2026-10-24 PostgreSQL colour and upload verification regressions
+- Colour mutation routes in api/full_app.py must run synchronous legend load/save through asyncio.to_thread so DB waits do not block other requests. scripts/check_audit_api.py checks event-loop progress during delayed DB loads for all three routes.
+- scripts/manage_db.py::verify must load each distinct namespace once, rather than once per source row. scripts/check_postgres_storage.py checks namespace query counts and preservation of newer DB values.
+- The extracted colour legend route test supplies its package context and isolated file-mode database stub; it must not import the server or depend on local DB configuration.
