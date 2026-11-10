@@ -973,14 +973,7 @@ class IndexService:
 
     # ------------- 빌드 -------------
     def _walk_and_collect(self) -> Tuple[List[str], List[str], int, int]:
-        """루트 전체를 os.walk로 스캔하여 경로/파일명 리스트를 만든다.
-
-        최적화:
-        - os.walk 사용 (scandir 멀티스레드보다 오버헤드 적음)
-        - Lock 제거 (단일 스레드)
-        - 문자열 변환 최소화
-        - 정렬 생략 (검색은 순서 무관)
-        """
+        """Scan the root in os.walk order while prefetching directory entries."""
         base_root = str(self.root_dir.resolve()).replace("\\", "/")
         base_root_len = len(base_root) + 1  # +1 for trailing /
         skip_dirs = {d for d in self.skip_dirs if d}
@@ -990,32 +983,65 @@ class IndexService:
         names: List[str] = []
         total_dirs = 0
 
-        for dirpath, dirnames, filenames in os.walk(base_root):
-            # skip_dirs 필터 (in-place 수정으로 하위 탐색 방지)
-            dirnames[:] = [d for d in dirnames if d not in skip_dirs]
-            total_dirs += 1
+        def scan_dir(dirpath: str) -> Tuple[List[str], List[str], bool]:
+            dirnames: List[str] = []
+            filenames: List[str] = []
+            try:
+                with os.scandir(dirpath) as entries:
+                    for entry in entries:
+                        try:
+                            if entry.is_dir():
+                                if entry.name not in skip_dirs:
+                                    dirnames.append(entry.name)
+                            else:
+                                filenames.append(entry.name)
+                        except OSError:
+                            filenames.append(entry.name)
+            except OSError:
+                return [], [], False
+            return dirnames, filenames, True
 
-            # 🔥 매 10 디렉토리마다 GIL 해제 (10ms) — 다른 스레드(API 요청)가 실행 가능
-            if total_dirs % 10 == 0:
-                time.sleep(0.01)
-
-            if not filenames:
-                continue
-
-            # 디렉토리 경로를 한번만 변환
-            dir_rel = dirpath.replace("\\", "/")
-            if len(dir_rel) > base_root_len:
-                dir_prefix = dir_rel[base_root_len:] + "/"
-            elif len(dir_rel) == base_root_len - 1:
-                dir_prefix = ""
-            else:
-                dir_prefix = ""
-
-            for fname in filenames:
-                if fname in cache_names:
+        # os.walk is top-down DFS and emits each directory's entries in native
+        # scandir order. Keep that order for bisect-backed consumers while
+        # prefetching only a bounded number of directory listings.
+        workers = max(1, self.index_workers)
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            pending: Dict[str, Any] = {}
+            stack = [base_root]
+            while stack:
+                dirpath = stack.pop()
+                future = pending.pop(dirpath, None)
+                dirnames, filenames, scanned = future.result() if future else scan_dir(dirpath)
+                if not scanned:
                     continue
-                keys.append(dir_prefix + fname)
-                names.append(fname.lower())
+                total_dirs += 1
+                if total_dirs % 10 == 0:
+                    time.sleep(0.01)
+
+                dir_rel = dirpath.replace("\\", "/")
+                if len(dir_rel) > base_root_len:
+                    dir_prefix = dir_rel[base_root_len:] + "/"
+                else:
+                    dir_prefix = ""
+                for fname in filenames:
+                    if fname in cache_names:
+                        continue
+                    keys.append(dir_prefix + fname)
+                    names.append(fname.lower())
+
+                child_paths = [
+                    os.path.join(dirpath, name)
+                    for name in dirnames
+                    if not os.path.islink(os.path.join(dirpath, name))
+                ]
+                # Refill free slots in traversal order; all queued work is
+                # directory-entry metadata only, never complete subtrees.
+                for child_path in child_paths:
+                    if len(pending) >= workers:
+                        break
+                    if child_path not in pending:
+                        pending[child_path] = executor.submit(scan_dir, child_path)
+                stack.extend(reversed(child_paths))
 
         return keys, names, total_dirs, total_dirs
 

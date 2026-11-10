@@ -486,6 +486,7 @@ class SearchService:
         for lot, wafer in lot_wafer_pairs:
             pair_map.setdefault(lot, set()).add(wafer)
         lot_only = lot_filter - set(pair_map.keys()) if lot_filter else set()
+        missing_lot_lengths = {len(lot) for lot in missing_lots}
 
         for root, dirs, files in os.walk(scan_root):
             dirs[:] = [d for d in dirs if d not in skip_dirs and not d.startswith(".")]
@@ -494,13 +495,17 @@ class SearchService:
                 scanned_files += 1
                 if fn in index_file_names:
                     continue
-                ext = Path(fn).suffix.lower()
-                if self.supported_exts and ext not in self.supported_exts:
+                if self.supported_exts and os.path.splitext(fn)[1].lower() not in self.supported_exts:
                     continue
 
                 name_lower = fn.lower()
                 lot_token = name_lower.split("_", 1)[0]
-                if not self._lot_matches_filter(lot_token, missing_lots):
+                matching_missing = {
+                    lot_token[:length]
+                    for length in missing_lot_lengths
+                    if length <= len(lot_token) and lot_token[:length] in missing_lots
+                }
+                if not matching_missing:
                     continue
                 if query and not _evaluate_expression(name_lower, query):
                     continue
@@ -526,9 +531,7 @@ class SearchService:
                     continue
                 rel_key = str(rel).replace("\\", "/")
                 hits.append(rel_key)
-                for missing in missing_lots:
-                    if self._lot_matches_filter(lot_token, {missing}):
-                        found_lots.add(missing)
+                found_lots.update(matching_missing)
                 if found_lots >= missing_lots:
                     break
             if found_lots >= missing_lots:

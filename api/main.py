@@ -68,7 +68,7 @@ _THUMBNAIL_EXECUTOR_WORKERS = config.THUMBNAIL_EXECUTOR_WORKERS
 SUPPORTED_EXTS = {ext.lower() for ext in config.SUPPORTED_EXTS}
 SKIP_DIRS = set(config.SKIP_DIRS)
 DIRLIST_EXECUTOR = ThreadPoolExecutor(max_workers=max(4, min(16, (os.cpu_count() or 8))))
-SEARCH_EXECUTOR = ThreadPoolExecutor(max_workers=max(8, min(16, config.SEARCH_WORKERS)))
+SEARCH_EXECUTOR = ThreadPoolExecutor(max_workers=max(8, min(32, config.SEARCH_WORKERS)))
 SAML_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="l3-saml")
 _BOOT_HOT_FOLDER = (os.getenv("BOOTSTRAP_HOT_FOLDER", "unknown").strip() or "unknown")
 
