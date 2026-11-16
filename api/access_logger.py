@@ -125,7 +125,7 @@ class AccessLogger:
         파일을 우선 사용하고, 파일이 비어 있을 때만 메모리 캐시를 폴백으로 사용한다.
         """
         disk = self._normalize_stats_shape(self._load_stats())
-        if any(disk[k] for k in ("users", "daily_stats", "monthly_stats", "department_stats")):
+        if (sys.platform.startswith('linux') and metadata_db.enabled()) or any(disk[k] for k in ("users", "daily_stats", "monthly_stats", "department_stats")):
             self.stats_data = disk
             return disk
 

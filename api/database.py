@@ -4,12 +4,14 @@ from pathlib import Path
 import json
 import os
 import re
+import sys
 import threading
 
 ROOT = Path(__file__).resolve().parents[1]
 
 def enabled():
-    mode = os.environ.get('APP_STORAGE', 'files')
+    default_mode = 'postgres' if sys.platform.startswith('linux') else 'files'
+    mode = os.environ.get('APP_STORAGE', default_mode)
     if mode not in ('files', 'postgres'):
         raise ValueError('APP_STORAGE must be files or postgres')
     return mode == 'postgres'
