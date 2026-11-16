@@ -2,8 +2,6 @@
 # Ubuntu 24 계열 운영 서버용 스크립트 (SAML Auto Login + 운영값) - 32C / 198GB RAM
 
 # PostgreSQL 16: manage all DB settings here (no .env file).
-project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-cd "$project_dir" || exit 1
 export APP_STORAGE="postgres"
 export DB_HOST="127.0.0.1"
 export DB_PORT="5432"
