@@ -18,10 +18,6 @@ export DB_TABLE_ANNOUNCEMENTS="announcements"
 export DB_TABLE_NOTICE_STATE="notice_state"
 export DB_TABLE_ACCESS_EVENTS="access_events"
 
-if [[ "$APP_STORAGE" == postgres ]]; then
-    python3 scripts/manage_db.py check || exit 1
-fi
-
 # SAML 설정
 export AUTO_LOGIN="0"                      # 0=수동 로그인, 1=자동 SAML 리다이렉트
 
